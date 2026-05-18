@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Terrassen-Bewässerungsplaner</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Terrasse</p>
+        <h1>Bewässerungsplaner</h1>
+      </div>
+      <div class="tank" id="tankStatus">Tank</div>
+    </header>
+
+    <main>
+      <section class="panel decision-panel">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Heute</p>
+            <h2>Zusammenfassung</h2>
+          </div>
+          <span class="status-pill" id="runStatus">Heute</span>
+        </div>
+
+        <form id="evaluateForm" class="grid compact-grid">
+          <label class="check-label">
+            <input type="checkbox" name="auto_weather" checked>
+            Wetter automatisch
+          </label>
+          <label>
+            Temperatur
+            <input type="number" step="0.1" name="temperature_c" value="26">
+          </label>
+          <label>
+            Regen mm
+            <input type="number" step="0.1" name="rain_mm" value="0.5">
+          </label>
+          <label>
+            Wind km/h
+            <input type="number" step="1" name="wind_kmh" value="8">
+          </label>
+          <label>
+            Sonne h
+            <input type="number" step="0.1" name="sunshine_hours" value="7">
+          </label>
+          <input type="hidden" name="slot" value="morning">
+          <button type="submit" class="primary">Aktualisieren</button>
+        </form>
+
+        <div class="result" id="result">
+          <strong>Wird geladen</strong>
+          <span>Wetter und Tageszyklen werden zusammengefasst.</span>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Empfehlung</p>
+            <h2>Verschlauchung</h2>
+          </div>
+        </div>
+        <div class="routing" id="routing"></div>
+      </section>
+
+      <section class="panel plan-panel">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Draufsicht</p>
+            <h2>Balkonfläche</h2>
+          </div>
+        </div>
+        <div class="balcony-plan" id="balconyPlan"></div>
+      </section>
+
+      <section class="panel">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Bestand</p>
+            <h2>Pflanzen</h2>
+          </div>
+        </div>
+        <div class="plants" id="plants"></div>
+      </section>
+
+      <section class="panel">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Neu</p>
+            <h2>Pflanze anlegen</h2>
+          </div>
+        </div>
+        <form id="plantForm" class="grid">
+          <label>
+            Pflanzenart
+            <select name="catalog_id" id="catalogSelect"></select>
+          </label>
+          <label>
+            Name
+            <input name="custom_name" placeholder="z.B. Tomate links">
+          </label>
+          <label>
+            Größe
+            <select name="size">
+              <option value="small">Klein</option>
+              <option value="medium" selected>Mittel</option>
+              <option value="large">Groß</option>
+              <option value="tree">Baum/Strauch</option>
+            </select>
+          </label>
+          <label>
+            Topf Liter
+            <input type="number" name="pot_liters" min="1" step="1" value="12">
+          </label>
+          <label>
+            Topfart
+            <select name="pot_type">
+              <option value="reservoir">Mit Wasserdepot</option>
+              <option value="overflow" selected>Mit Überlaufschutz</option>
+              <option value="reservoir_overflow">Depot und Überlaufschutz</option>
+              <option value="closed">Geschlossener Topf</option>
+            </select>
+          </label>
+          <button type="submit" class="primary">Hinzufügen</button>
+        </form>
+      </section>
+
+      <section class="panel">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Setup</p>
+            <h2>Balkon und Pumpe</h2>
+          </div>
+          <button id="locateButton" class="secondary" type="button">Ortung</button>
+        </div>
+        <form id="balconyForm" class="grid">
+          <label>
+            Ausrichtung in Grad
+            <input type="number" name="orientation_deg" min="0" max="359" step="1">
+          </label>
+          <label>
+            Breite m
+            <input type="number" name="width_m" step="0.1">
+          </label>
+          <label>
+            Tiefe m
+            <input type="number" name="depth_m" step="0.1">
+          </label>
+          <label>
+            Breitengrad
+            <input type="number" name="latitude" step="0.000001">
+          </label>
+          <label>
+            Längengrad
+            <input type="number" name="longitude" step="0.000001">
+          </label>
+          <input type="hidden" name="timezone_name" value="Europe/Berlin">
+          <label>
+            Tank max ml
+            <input type="number" name="tank_capacity_ml" step="100">
+          </label>
+          <label>
+            Tank aktuell ml
+            <input type="number" name="tank_current_ml" step="100">
+          </label>
+          <div class="wall-editor" id="wallEditor"></div>
+          <div class="outlet-editor" id="outletEditor"></div>
+          <button type="submit" class="primary">Speichern</button>
+        </form>
+      </section>
+
+      <section class="panel shortcuts-panel">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">HomeKit</p>
+            <h2>iOS Kurzbefehle</h2>
+          </div>
+        </div>
+        <div class="shortcut-box" id="shortcutBox"></div>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
