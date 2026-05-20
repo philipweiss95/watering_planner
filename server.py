@@ -18,8 +18,8 @@ from urllib.parse import parse_qs, urlencode, urlparse
 
 ROOT = Path(__file__).parent
 PUBLIC_DIR = ROOT / "public"
-DATA_DIR = ROOT / "data"
-DB_PATH = DATA_DIR / "watering.sqlite3"
+DATA_DIR = Path(os.environ.get("DATA_DIR", ROOT / "data"))
+DB_PATH = Path(os.environ.get("DB_PATH", DATA_DIR / "watering.sqlite3"))
 
 
 PLANT_CATALOG = [

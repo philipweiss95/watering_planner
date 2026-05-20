@@ -16,6 +16,24 @@ http://127.0.0.1:8080
 
 Die SQLite-Datenbank wird beim ersten Start unter `data/watering.sqlite3` angelegt und mit gängigen Balkon- und Terrassenpflanzen befüllt.
 
+## Docker / Synology NAS
+
+Die App kann als Docker-Container laufen. Das Image nutzt Python ohne externe Abhängigkeiten, bindet im Container auf `0.0.0.0:8080` und speichert die SQLite-Datenbank persistent unter `/app/data`.
+
+Lokal oder auf der NAS:
+
+```bash
+docker compose up -d --build
+```
+
+Danach öffnen:
+
+```text
+http://NAS-IP:8080
+```
+
+Die Datenbank bleibt durch das Volume `./data:/app/data` erhalten. Die vollständige Synology-Anleitung steht unter [docs/synology-docker.md](docs/synology-docker.md).
+
 ## Uberspace
 
 Die App nutzt nur die Python-Standardbibliothek und SQLite. Auf Uberspace sollte sie daher mit Python 3.11+ laufen. Wichtig: Uberspace nutzt ohne explizite Version weiterhin Python 2.7 als Default, deshalb immer `python3.13`, `python3.14` oder eine andere Python-3-Version verwenden.
