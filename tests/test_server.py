@@ -32,6 +32,15 @@ class WateringPlannerTests(unittest.TestCase):
         self.assertEqual(len(result["routing_plan"]["assignments"]), len(result["plants"]))
         self.assertIn("water_model", result["plants"][0])
         self.assertGreater(result["plants"][0]["water_model"]["canopy_area_m2"], 0)
+        self.assertEqual(result["connection_plan"]["design_basis"]["cycles"], 4)
+        self.assertEqual(result["plants"][0]["water_model"]["calibration_factor"], server.WATER_MODEL_CALIBRATION)
+        self.assertIn("seasonal_factor", result["plants"][0]["water_model"])
+        self.assertLessEqual(result["plants"][0]["water_model"]["seasonal_factor"], 1.05)
+        self.assertLess(
+            result["plants"][0]["water_model"]["calibrated_daily_need_ml"],
+            result["plants"][0]["water_model"]["raw_daily_need_ml"],
+        )
+        self.assertLessEqual(result["recommended_cycles_today"], 10)
 
     def test_mark_run_counts_cycle_and_reduces_tank(self):
         before = server.evaluate(temperature_c=26, rain_mm=0.5)
@@ -80,6 +89,39 @@ class WateringPlannerTests(unittest.TestCase):
 
         self.assertEqual(plant["outlet_name"], "S")
 
+    def test_update_plant_edits_inventory_fields(self):
+        plant_id = server.add_plant(
+            {
+                "catalog_id": "basil",
+                "custom_name": "Basilikum",
+                "size": "small",
+                "pot_liters": 8,
+                "pot_type": "overflow",
+            }
+        )
+
+        server.update_plant(
+            plant_id,
+            {
+                "catalog_id": "rosemary",
+                "custom_name": "Rosmarin rechts",
+                "size": "medium",
+                "pot_liters": 12,
+                "pot_type": "reservoir_overflow",
+                "outlet_id": 2,
+                "hose_numbers": "14",
+                "target_ml_per_cycle": 30,
+            },
+        )
+
+        plant = next(item for item in server.get_state()["plants"] if item["id"] == plant_id)
+
+        self.assertEqual(plant["catalog_id"], "rosemary")
+        self.assertEqual(plant["custom_name"], "Rosmarin rechts")
+        self.assertEqual(plant["hose_numbers"], "14")
+        self.assertEqual(plant["target_ml_per_cycle"], 30)
+        self.assertEqual(plant["outlet_id"], 2)
+
     def test_catalog_contains_common_balcony_plants(self):
         catalog_ids = {plant["id"] for plant in server.get_state()["catalog"]}
 
@@ -87,6 +129,30 @@ class WateringPlannerTests(unittest.TestCase):
         self.assertIn("cucumber", catalog_ids)
         self.assertIn("citrus", catalog_ids)
         self.assertIn("thyme", catalog_ids)
+        self.assertIn("zucchini", catalog_ids)
+        self.assertIn("carnation", catalog_ids)
+        self.assertIn("pine", catalog_ids)
+
+    def test_table_xlsx_seeds_inventory_when_present(self):
+        source = server.ROOT / "data" / "table.xlsx"
+        if not source.exists():
+            self.skipTest("data/table.xlsx ist nicht vorhanden")
+
+        (server.DATA_DIR / "table.xlsx").write_bytes(source.read_bytes())
+        with server.connect() as conn:
+            conn.execute("DELETE FROM plants")
+        server.init_db()
+
+        state = server.get_state()
+        names = {plant["custom_name"] for plant in state["plants"]}
+        olive = next(plant for plant in state["plants"] if plant["custom_name"] == "Olive")
+
+        self.assertIn("Basilikum", names)
+        self.assertIn("Nelke, Korb", names)
+        self.assertEqual(olive["hose_numbers"], "6, 7")
+        self.assertEqual(olive["target_ml_per_cycle"], 120)
+        self.assertGreaterEqual(olive["pos_x"], 0.12)
+        self.assertLessEqual(olive["pos_x"], 0.88)
 
     def test_wind_increases_water_need(self):
         calm = server.evaluate(temperature_c=26, rain_mm=0, wind_kmh=2, sunshine_hours=7)
@@ -97,6 +163,69 @@ class WateringPlannerTests(unittest.TestCase):
             sum(plant["need_ml"] for plant in windy["plants"]),
             sum(plant["need_ml"] for plant in calm["plants"]),
         )
+
+    def test_weather_changes_cycles_not_fixed_connections(self):
+        mild = server.evaluate(temperature_c=20, rain_mm=0, wind_kmh=2, sunshine_hours=4)
+        hot = server.evaluate(temperature_c=32, rain_mm=0, wind_kmh=25, sunshine_hours=10)
+
+        mild_connections = {
+            assignment["plant_id"]: assignment["tube_label"]
+            for assignment in mild["routing_plan"]["assignments"]
+        }
+        hot_connections = {
+            assignment["plant_id"]: assignment["tube_label"]
+            for assignment in hot["routing_plan"]["assignments"]
+        }
+
+        self.assertEqual(mild_connections, hot_connections)
+        self.assertGreaterEqual(hot["recommended_cycles_today"], mild["recommended_cycles_today"])
+
+    def test_connection_plan_flags_wrong_current_outlet_amount(self):
+        plant_id = server.add_plant(
+            {
+                "catalog_id": "tomato",
+                "custom_name": "Tomate Test",
+                "size": "large",
+                "pot_liters": 27,
+                "pot_type": "overflow",
+                "outlet_id": 1,
+                "target_ml_per_cycle": 15,
+            }
+        )
+
+        result = server.evaluate(temperature_c=26, rain_mm=0, wind_kmh=8, sunshine_hours=7)
+        assignment = next(item for item in result["connection_plan"]["assignments"] if item["plant_id"] == plant_id)
+
+        self.assertIn(assignment["connection_status"], {"change", "urgent"})
+        self.assertTrue("Besser" in assignment["connection_note"] or "Unerlässlich" in assignment["connection_note"])
+
+    def test_connection_plan_marks_urgent_under_supply(self):
+        plant_id = server.add_plant(
+            {
+                "catalog_id": "tomato",
+                "custom_name": "Tomate trocken",
+                "size": "large",
+                "pot_liters": 27,
+                "pot_type": "overflow",
+                "outlet_id": 1,
+                "target_ml_per_cycle": 15,
+            }
+        )
+
+        result = server.evaluate(temperature_c=26, rain_mm=0, wind_kmh=8, sunshine_hours=7)
+        assignment = next(item for item in result["connection_plan"]["assignments"] if item["plant_id"] == plant_id)
+
+        self.assertEqual(assignment["connection_status"], "urgent")
+        self.assertIn("Unerlässlich", assignment["connection_note"])
+
+    def test_static_connection_plan_never_adds_more_tubes_than_existing(self):
+        result = server.evaluate(temperature_c=26, rain_mm=0, wind_kmh=8, sunshine_hours=7)
+
+        for assignment in result["connection_plan"]["assignments"]:
+            plant = next(item for item in result["plants"] if item["id"] == assignment["plant_id"])
+            recommended_tubes = sum(tube["count"] for tube in assignment["tubes"])
+
+            self.assertLessEqual(recommended_tubes, plant["current_tube_count"])
 
     def test_tube_optimizer_can_combine_30_and_15_ml(self):
         outlets = [

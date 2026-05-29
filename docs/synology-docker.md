@@ -16,6 +16,7 @@ Für Docker sind diese Dateien relevant:
 
 - `Dockerfile`: baut das Python-Image
 - `compose.yaml`: startet den Container mit persistenter Datenablage
+- `compose.synology.yaml`: Synology-Variante ohne Variablen, direkt für Container Manager
 - `.dockerignore`: hält lokale Datenbankdateien aus dem Image heraus
 - `data/watering.sqlite3`: persistente SQLite-Datenbank, wird beim ersten Start automatisch angelegt
 
@@ -92,10 +93,25 @@ http://NAS-IP:8090
 1. Öffne **Container Manager**.
 2. Erstelle ein neues Projekt.
 3. Wähle als Pfad den Ordner mit diesem Projekt, zum Beispiel `/volume1/docker/watering-planner`.
-4. Verwende die vorhandene `compose.yaml`.
+4. Verwende `compose.synology.yaml`, wenn du ohne `.env` und ohne variable Platzhalter arbeiten möchtest.
 5. Starte das Projekt.
 
-Falls Container Manager Umgebungsvariablen aus `.env` nicht übernimmt, trage `APP_PORT`, `PUID` und `PGID` direkt in der Projektkonfiguration ein oder passe `compose.yaml` entsprechend an.
+Die Synology-Datei verwendet absichtlich:
+
+```yaml
+user: "0:0"
+```
+
+Das ist für Container Manager am unkompliziertesten, weil gemountete NAS-Ordner dann sofort beschreibbar sind. Wenn du den Container restriktiver laufen lassen möchtest, ersetze `0:0` durch die numerische Benutzer- und Gruppen-ID deiner NAS, zum Beispiel `1026:100`, und setze die Rechte des `data`-Ordners passend.
+
+Wenn Port `8080` schon belegt ist, ändere in `compose.synology.yaml` die linke Portnummer:
+
+```yaml
+ports:
+  - "8090:8080"
+```
+
+Die App wäre dann unter `http://NAS-IP:8090` erreichbar.
 
 ## Persistenz und Backup
 

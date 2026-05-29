@@ -14,7 +14,7 @@ Danach im Browser öffnen:
 http://127.0.0.1:8080
 ```
 
-Die SQLite-Datenbank wird beim ersten Start unter `data/watering.sqlite3` angelegt und mit gängigen Balkon- und Terrassenpflanzen befüllt.
+Die SQLite-Datenbank wird beim ersten Start unter `data/watering.sqlite3` angelegt. Liegt `data/table.xlsx` daneben, wird dieser Bestand als Grundlage importiert: Pflanzenname, Schlauchnummern, Größe und ml pro Pumpzyklus werden übernommen, die Positionen werden zunächst verteilt und können danach in der Draufsicht verschoben werden. Ohne Excel-Datei startet die App mit Beispieldaten.
 
 ## Docker / Synology NAS
 
@@ -32,7 +32,9 @@ Danach öffnen:
 http://NAS-IP:8080
 ```
 
-Die Datenbank bleibt durch das Volume `./data:/app/data` erhalten. Die vollständige Synology-Anleitung steht unter [docs/synology-docker.md](docs/synology-docker.md).
+Die Datenbank bleibt durch das Volume `./data:/app/data` erhalten. Die vollständige Synology-Anleitung steht unter [docs/synology-docker.md](docs/synology-docker.md). Für den Synology Container Manager gibt es zusätzlich eine explizite Datei ohne Variablen: `compose.synology.yaml`.
+
+Für die lokale Pumpensteuerung mit Meross Matter empfiehlt sich Home Assistant OS als VM und der Planer als separater Container auf der NAS. Die Anleitung steht unter [docs/home-assistant-vm.md](docs/home-assistant-vm.md).
 
 ## Uberspace
 
@@ -79,13 +81,13 @@ Tagesbedarf ≈ ET₀ × Pflanzenkoeffizient × wirksame Kronenfläche
             - wirksam aufgefangener Niederschlag
 ```
 
-Die Kronenfläche wird aus Pflanzenart, Pflanzengröße und Topfvolumen abgeleitet. Topfarten mit Depot, Überlauf oder geschlossenem Topf verändern die nutzbare Wassermenge und das Überwässerungsrisiko.
+Der rohe ET0-Kübelwert wird anschließend mit einem Terrassen-Tropfbewässerungsfaktor von 3% kalibriert und zusätzlich saisonal gewichtet. Ende Mai liegt der Pflanzenbedarf dadurch unter dem Hochsommerwert; im Juli/August steigt er je nach Pflanzengruppe wieder an. Das bildet die beobachtete Praxis ab, dass die reale Anlage mit wenigen gemeinsamen Pumpzyklen auskommt und der unkalibrierte ET0-Ansatz deutlich zu hohe Tagesmengen liefert. Die Kronenfläche wird aus Pflanzenart, Pflanzengröße und Topfvolumen abgeleitet. Topfarten mit Depot, Überlauf oder geschlossenem Topf verändern die nutzbare Wassermenge und das Überwässerungsrisiko.
 
 Der Pflanzenkatalog enthält typische Balkonpflanzen aus Gemüse, Kräutern, Beerenobst, Blühpflanzen, mediterranen Gehölzen, Kletterpflanzen und Sukkulenten.
 
 ## Verschlauchung und Beschattung
 
-Alle Pflanzen werden bei jedem Pumpenzyklus gleichzeitig gegossen. Deshalb berechnet das Tool die ideale Verschlauchung jeder Pflanze und die dazu passende Anzahl gemeinsamer Zyklen. Eine Pflanze kann mehrere Schläuche bekommen, zum Beispiel `1x 30 ml + 1x 15 ml` statt `1x 60 ml`, wenn der Bedarf pro Zyklus näher bei 45 ml liegt. Jeder Ausgang hat maximal 12 Anschlüsse; diese Grenze wird beim Optimieren für die 15-, 30- und 60-ml-Ausgänge einzeln geprüft. Der Optimierer minimiert Unterversorgung stärker als Überversorgung und berücksichtigt Topfart, Topfvolumen und Pflanzentyp.
+Alle Pflanzen werden bei jedem Pumpenzyklus gleichzeitig gegossen. Deshalb berechnet das Tool zuerst einen festen Anschlussplan, der unabhängig vom aktuellen Wetter ist und nur einmal umgesetzt werden soll. Das Wetter verändert danach nur noch die Anzahl gemeinsamer Pumpzyklen, nicht die Verschlauchung. Der feste Plan ist auf einen mittelwarmen Auslegungstag mit 4 gemeinsamen Zyklen kalibriert. Eine Pflanze kann mehrere Schläuche bekommen, zum Beispiel `1x 30 ml + 1x 15 ml` statt `1x 60 ml`, wenn der feste Bedarf pro Zyklus näher bei 45 ml liegt. Der Vorschlag nutzt nie mehr Schläuche als im aktuellen Bestand der Pflanze hinterlegt sind; weniger Schläuche sind möglich. Jeder Ausgang hat maximal 12 Anschlüsse; diese Grenze wird beim Optimieren für die 15-, 30- und 60-ml-Ausgänge einzeln geprüft. Die Oberfläche weist darauf hin, wenn eine Pflanze dauerhaft besser an einem anderen Anschlusstyp oder mit einer anderen Schlauchkombination hängen sollte.
 
 Die Pflanzen können in der Draufsicht des Balkons platziert werden. Aus Position, Ausrichtung, Sonnenstand und Wandhöhen wird für jede Pflanze ein eigener Beschattungsfaktor berechnet.
 

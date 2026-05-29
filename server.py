@@ -3,8 +3,11 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import sqlite3
 import ssl
+from copy import deepcopy
+from hashlib import sha256
 from contextlib import contextmanager
 from datetime import date, datetime, timezone
 from http import HTTPStatus
@@ -14,6 +17,8 @@ from typing import Iterator
 from urllib.error import URLError
 from urllib.request import urlopen
 from urllib.parse import parse_qs, urlencode, urlparse
+from zipfile import ZipFile
+from xml.etree import ElementTree as ET
 
 
 ROOT = Path(__file__).parent
@@ -29,8 +34,10 @@ PLANT_CATALOG = [
     ("oleander", "Oleander", "Mediterrane Gehölze", 36, 1.2, 0.95, "Verträgt viel Sonne und braucht im Sommer reichlich Wasser."),
     ("bay", "Lorbeer", "Mediterrane Gehölze", 24, 1.0, 0.8, "Mag gleichmäßige Feuchte, aber keine dauerhafte Staunässe."),
     ("loquat", "Mispel", "Obstgehölze", 28, 1.05, 0.9, "Gleichmäßige Feuchte, bei Hitze deutlich durstiger."),
+    ("pine", "Kiefer", "Nadelgehölze", 18, 1.05, 0.72, "Sparsam, aber Kübelpflanzen sollten nicht komplett austrocknen."),
     ("tomato", "Tomatenpflanze", "Gemüse", 48, 1.25, 1.2, "Sehr hoher Bedarf, regelmäßige Wassergaben vermeiden Fruchtplatzen."),
     ("cucumber", "Gurke", "Gemüse", 58, 1.15, 1.25, "Sehr durstig, besonders bei Fruchtbildung und Wind."),
+    ("zucchini", "Zucchini", "Gemüse", 60, 1.12, 1.25, "Große Blätter und Früchte machen sie im Topf sehr durstig."),
     ("eggplant", "Aubergine", "Gemüse", 42, 1.15, 1.05, "Wärmeliebend, gleichmäßige Wasserversorgung fördert Fruchtansatz."),
     ("lettuce", "Pflücksalat", "Gemüse", 34, 0.9, 1.15, "Flach wurzelnd, trocknet im Topf schnell aus."),
     ("arugula", "Rucola", "Gemüse", 30, 0.9, 1.0, "Gleichmäßig feucht halten, Hitze fördert Schossen."),
@@ -47,6 +54,7 @@ PLANT_CATALOG = [
     ("chives", "Schnittlauch", "Kräuter", 34, 0.85, 1.0, "Mag gleichmäßige Feuchte und etwas weniger pralle Sonne."),
     ("cilantro", "Koriander", "Kräuter", 32, 0.85, 1.0, "Gleichmäßige Feuchte, Hitze und Trockenheit fördern Schossen."),
     ("hydrangea", "Hortensie", "Blühpflanzen", 55, 0.85, 1.25, "Sehr hoher Bedarf, Schatten reduziert Stress."),
+    ("carnation", "Nelke", "Blühpflanzen", 24, 1.0, 0.78, "Eher mäßiger Bedarf, im Topf bei Hitze gleichmäßig feucht halten."),
     ("geranium", "Geranie", "Blühpflanzen", 34, 1.05, 0.95, "Solider Bedarf, blüht stabil bei gleichmäßiger Feuchte."),
     ("petunia", "Petunie", "Blühpflanzen", 40, 1.1, 1.0, "Blühstark und durstig, bei Sonne regelmäßig versorgen."),
     ("calibrachoa", "Zauberglöckchen", "Blühpflanzen", 38, 1.1, 1.0, "Kleine Töpfe trocknen schnell, gleichmäßige Feuchte wichtig."),
@@ -69,12 +77,15 @@ PLANT_CATALOG = [
 PLANT_WATER_PROFILES = {
     "olive": {"crop_coefficient": 0.62, "canopy_m2_medium": 0.42, "recommended_pot_liters": 35, "moisture_preference": 0.72},
     "loquat": {"crop_coefficient": 0.82, "canopy_m2_medium": 0.5, "recommended_pot_liters": 35, "moisture_preference": 0.9},
+    "pine": {"crop_coefficient": 0.48, "canopy_m2_medium": 0.32, "recommended_pot_liters": 25, "moisture_preference": 0.68},
     "tomato": {"crop_coefficient": 1.15, "canopy_m2_medium": 0.45, "recommended_pot_liters": 20, "moisture_preference": 1.12},
+    "zucchini": {"crop_coefficient": 1.18, "canopy_m2_medium": 0.58, "recommended_pot_liters": 25, "moisture_preference": 1.22},
     "raspberry": {"crop_coefficient": 0.98, "canopy_m2_medium": 0.42, "recommended_pot_liters": 25, "moisture_preference": 1.08},
     "lavender": {"crop_coefficient": 0.45, "canopy_m2_medium": 0.2, "recommended_pot_liters": 10, "moisture_preference": 0.62},
     "basil": {"crop_coefficient": 0.96, "canopy_m2_medium": 0.16, "recommended_pot_liters": 7, "moisture_preference": 1.08},
     "rosemary": {"crop_coefficient": 0.5, "canopy_m2_medium": 0.22, "recommended_pot_liters": 12, "moisture_preference": 0.66},
     "hydrangea": {"crop_coefficient": 1.1, "canopy_m2_medium": 0.48, "recommended_pot_liters": 20, "moisture_preference": 1.25},
+    "carnation": {"crop_coefficient": 0.62, "canopy_m2_medium": 0.16, "recommended_pot_liters": 8, "moisture_preference": 0.82},
     "geranium": {"crop_coefficient": 0.78, "canopy_m2_medium": 0.18, "recommended_pot_liters": 8, "moisture_preference": 0.92},
     "strawberry": {"crop_coefficient": 0.85, "canopy_m2_medium": 0.12, "recommended_pot_liters": 6, "moisture_preference": 1.0},
     "mint": {"crop_coefficient": 1.02, "canopy_m2_medium": 0.18, "recommended_pot_liters": 8, "moisture_preference": 1.12},
@@ -110,6 +121,22 @@ PLANT_WATER_PROFILES = {
     "aloe": {"crop_coefficient": 0.28, "canopy_m2_medium": 0.14, "recommended_pot_liters": 8, "moisture_preference": 0.48},
 }
 
+TABLE_PLANT_ALIASES = {
+    "basilikum": "basil",
+    "lavendel": "lavender",
+    "zucchini": "zucchini",
+    "nelke": "carnation",
+    "olive": "olive",
+    "tomate": "tomato",
+    "himbeere": "raspberry",
+    "paprika": "chili",
+    "chili": "chili",
+    "kiefer": "pine",
+    "mispel": "loquat",
+    "erdbeere": "strawberry",
+    "rosmarin": "rosemary",
+}
+
 
 DEFAULT_BALCONY = {
     "orientation": "south",
@@ -136,6 +163,26 @@ DEFAULT_WALLS = [
     ("south", 1.05),
     ("west", 0.0),
 ]
+
+CONNECTION_DESIGN = {
+    "temperature_c": 26,
+    "rain_mm": 0,
+    "wind_kmh": 8,
+    "sunshine_hours": 7,
+    "cycles": 4,
+}
+
+# The raw ET0/canopy estimate models open-surface evapotranspiration. The real
+# terrace drip setup needs a much smaller calibrated fraction per day.
+WATER_MODEL_CALIBRATION = 0.03
+
+SEASONAL_WATER_CURVES = {
+    "warm_annual": [(1, 0.22), (80, 0.25), (130, 0.42), (172, 0.78), (220, 1.0), (280, 0.62), (335, 0.28), (366, 0.22)],
+    "annual": [(1, 0.28), (80, 0.32), (130, 0.5), (172, 0.82), (220, 1.0), (280, 0.68), (335, 0.32), (366, 0.28)],
+    "woody": [(1, 0.38), (80, 0.45), (130, 0.62), (172, 0.88), (220, 1.0), (280, 0.72), (335, 0.42), (366, 0.38)],
+    "evergreen": [(1, 0.45), (80, 0.5), (130, 0.65), (172, 0.88), (220, 1.0), (280, 0.78), (335, 0.5), (366, 0.45)],
+    "succulent": [(1, 0.55), (80, 0.58), (130, 0.68), (172, 0.82), (220, 0.9), (280, 0.72), (335, 0.58), (366, 0.55)],
+}
 
 
 @contextmanager
@@ -205,6 +252,8 @@ def init_db() -> None:
                 outlet_id INTEGER NOT NULL REFERENCES pump_outlets(id),
                 pos_x REAL NOT NULL DEFAULT 0.5,
                 pos_y REAL NOT NULL DEFAULT 0.5,
+                hose_numbers TEXT NOT NULL DEFAULT '',
+                target_ml_per_cycle REAL,
                 created_at TEXT NOT NULL
             );
 
@@ -224,6 +273,8 @@ def init_db() -> None:
         ensure_column(conn, "balcony_settings", "orientation_deg", "REAL NOT NULL DEFAULT 180")
         ensure_column(conn, "plants", "pos_x", "REAL NOT NULL DEFAULT 0.5")
         ensure_column(conn, "plants", "pos_y", "REAL NOT NULL DEFAULT 0.5")
+        ensure_column(conn, "plants", "hose_numbers", "TEXT NOT NULL DEFAULT ''")
+        ensure_column(conn, "plants", "target_ml_per_cycle", "REAL")
         ensure_column(conn, "plant_catalog", "crop_coefficient", "REAL NOT NULL DEFAULT 1.0")
         ensure_column(conn, "plant_catalog", "canopy_m2_medium", "REAL NOT NULL DEFAULT 0.2")
         ensure_column(conn, "plant_catalog", "recommended_pot_liters", "REAL NOT NULL DEFAULT 10")
@@ -265,19 +316,12 @@ def init_db() -> None:
         if conn.execute("SELECT COUNT(*) FROM terrace_walls").fetchone()[0] == 0:
             conn.executemany("INSERT INTO terrace_walls (side, height_m) VALUES (?, ?)", DEFAULT_WALLS)
 
-        if conn.execute("SELECT COUNT(*) FROM plants").fetchone()[0] == 0:
-            conn.executemany(
-                """
-                INSERT INTO plants
-                    (catalog_id, custom_name, size, pot_liters, pot_type, outlet_id, pos_x, pos_y, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                [
-                    ("olive", "Olive", "medium", 28, "overflow", 2, 0.25, 0.7, now_iso()),
-                    ("tomato", "Tomate", "medium", 18, "closed", 3, 0.7, 0.55, now_iso()),
-                    ("lavender", "Lavendel", "small", 10, "overflow", 1, 0.45, 0.25, now_iso()),
-                ],
-            )
+        plant_count = conn.execute("SELECT COUNT(*) FROM plants").fetchone()[0]
+        if plant_count == 0:
+            seed_plants(conn)
+        elif (DATA_DIR / "table.xlsx").exists() and has_unimported_plants(conn):
+            conn.execute("DELETE FROM plants")
+            seed_plants(conn)
 
 
 def ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
@@ -323,6 +367,221 @@ def upsert_plant_water_profiles(conn: sqlite3.Connection) -> None:
                 catalog_id,
             ),
         )
+
+
+def seed_plants(conn: sqlite3.Connection) -> None:
+    table_plants = plants_from_table_xlsx(DATA_DIR / "table.xlsx", conn)
+    if table_plants:
+        conn.executemany(
+            """
+            INSERT INTO plants
+                (catalog_id, custom_name, size, pot_liters, pot_type, outlet_id, pos_x, pos_y,
+                 hose_numbers, target_ml_per_cycle, created_at)
+            VALUES
+                (:catalog_id, :custom_name, :size, :pot_liters, :pot_type, :outlet_id, :pos_x, :pos_y,
+                 :hose_numbers, :target_ml_per_cycle, :created_at)
+            """,
+            table_plants,
+        )
+        return
+
+    conn.executemany(
+        """
+        INSERT INTO plants
+            (catalog_id, custom_name, size, pot_liters, pot_type, outlet_id, pos_x, pos_y,
+             hose_numbers, target_ml_per_cycle, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            ("olive", "Olive", "medium", 28, "overflow", 2, 0.25, 0.7, "", None, now_iso()),
+            ("tomato", "Tomate", "medium", 18, "closed", 3, 0.7, 0.55, "", None, now_iso()),
+            ("lavender", "Lavendel", "small", 10, "overflow", 1, 0.45, 0.25, "", None, now_iso()),
+        ],
+    )
+
+
+def has_unimported_plants(conn: sqlite3.Connection) -> bool:
+    row = conn.execute(
+        """
+        SELECT
+            COUNT(*) AS total,
+            SUM(CASE WHEN COALESCE(hose_numbers, '') = '' AND target_ml_per_cycle IS NULL THEN 1 ELSE 0 END) AS unimported
+        FROM plants
+        """
+    ).fetchone()
+    return int(row["total"]) > 0 and int(row["total"]) == int(row["unimported"] or 0)
+
+
+def plants_from_table_xlsx(path: Path, conn: sqlite3.Connection) -> list[dict]:
+    if not path.exists():
+        return []
+
+    rows = xlsx_rows(path)
+    header_index = next(
+        (
+            index
+            for index, row in enumerate(rows)
+            if "name" in [normalize_table_header(cell) for cell in row]
+            and any("groesse" in normalize_table_header(cell) for cell in row)
+        ),
+        None,
+    )
+    if header_index is None:
+        return []
+
+    headers = [normalize_table_header(cell) for cell in rows[header_index]]
+    created_at = now_iso()
+    plants = []
+    for index, row in enumerate(rows[header_index + 1 :], start=1):
+        values = dict(zip(headers, row))
+        name = values.get("name", "").strip()
+        if not name:
+            continue
+        catalog_id = catalog_id_for_table_name(name)
+        size = table_size(values.get("groesse", ""))
+        target_ml = parse_target_ml(values.get("ml-menge pro pumpzyklus", ""))
+        hose_numbers = values.get("nummer schlauch", "").strip()
+        plants.append(
+            {
+                "catalog_id": catalog_id,
+                "custom_name": name,
+                "size": size,
+                "pot_liters": estimated_pot_liters(conn, catalog_id, size),
+                "pot_type": table_pot_type(name),
+                "outlet_id": outlet_id_for_target_ml(conn, target_ml),
+                "pos_x": table_position(name, hose_numbers, "x"),
+                "pos_y": table_position(name, hose_numbers, "y"),
+                "hose_numbers": hose_numbers,
+                "target_ml_per_cycle": target_ml,
+                "created_at": created_at,
+            }
+        )
+    return plants
+
+
+def normalize_table_header(value: str) -> str:
+    normalized = value.strip().casefold().replace("ä", "ae").replace("ö", "oe").replace("ü", "ue").replace("ß", "ss")
+    return re.sub(r"\s+", " ", normalized)
+
+
+def xlsx_rows(path: Path) -> list[list[str]]:
+    ns = {"a": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+    with ZipFile(path) as archive:
+        shared_strings = []
+        if "xl/sharedStrings.xml" in archive.namelist():
+            shared_root = ET.fromstring(archive.read("xl/sharedStrings.xml"))
+            for item in shared_root.findall("a:si", ns):
+                shared_strings.append("".join(text.text or "" for text in item.findall(".//a:t", ns)))
+
+        sheet_root = ET.fromstring(archive.read("xl/worksheets/sheet1.xml"))
+        parsed_rows = []
+        for row in sheet_root.findall(".//a:sheetData/a:row", ns):
+            parsed = []
+            for cell in row.findall("a:c", ns):
+                column_index = xlsx_column_index(cell.attrib.get("r", "A1"))
+                while len(parsed) <= column_index:
+                    parsed.append("")
+                parsed[column_index] = xlsx_cell_value(cell, shared_strings, ns)
+            parsed_rows.append(parsed)
+        return parsed_rows
+
+
+def xlsx_column_index(reference: str) -> int:
+    letters = re.match(r"[A-Z]+", reference.upper())
+    if not letters:
+        return 0
+    index = 0
+    for char in letters.group(0):
+        index = index * 26 + (ord(char) - ord("A") + 1)
+    return index - 1
+
+
+def xlsx_cell_value(cell: ET.Element, shared_strings: list[str], ns: dict[str, str]) -> str:
+    if cell.attrib.get("t") == "inlineStr":
+        return "".join(text.text or "" for text in cell.findall(".//a:t", ns)).strip()
+    value = cell.find("a:v", ns)
+    if value is None or value.text is None:
+        return ""
+    text = value.text.strip()
+    if cell.attrib.get("t") == "s" and text:
+        return shared_strings[int(text)].strip()
+    return text
+
+
+def catalog_id_for_table_name(name: str) -> str:
+    normalized = normalize_plant_name(name)
+    return TABLE_PLANT_ALIASES.get(normalized) or TABLE_PLANT_ALIASES.get(normalized.split(" ", 1)[0]) or normalized
+
+
+def normalize_plant_name(name: str) -> str:
+    first_part = name.split(",", 1)[0]
+    normalized = first_part.casefold().replace("ä", "ae").replace("ö", "oe").replace("ü", "ue").replace("ß", "ss")
+    normalized = re.sub(r"[^a-z0-9]+", " ", normalized).strip()
+    return normalized
+
+
+def table_size(value: str) -> str:
+    normalized = value.casefold().replace("ß", "ss")
+    if "baum" in normalized or "strauch" in normalized:
+        return "tree"
+    if "gross" in normalized or "groß" in normalized:
+        return "large"
+    if "mittel" in normalized:
+        return "medium"
+    return "small"
+
+
+def parse_target_ml(value: str) -> int | None:
+    if not value:
+        return None
+    tail = value.split("=", 1)[1] if "=" in value else value
+    numbers = [int(match) for match in re.findall(r"\d+", tail)]
+    if not numbers:
+        return None
+    if "=" in value:
+        return numbers[0]
+    return sum(numbers)
+
+
+def table_pot_type(name: str) -> str:
+    if "lechuza" in name.casefold():
+        return "reservoir_overflow"
+    return "overflow"
+
+
+def estimated_pot_liters(conn: sqlite3.Connection, catalog_id: str, size: str) -> float:
+    row = conn.execute(
+        "SELECT recommended_pot_liters FROM plant_catalog WHERE id = ?",
+        (catalog_id,),
+    ).fetchone()
+    recommended = float(row["recommended_pot_liters"]) if row else 10.0
+    multiplier = {"small": 0.75, "medium": 1.0, "large": 1.35, "tree": 1.8}.get(size, 1.0)
+    return round(recommended * multiplier)
+
+
+def outlet_id_for_target_ml(conn: sqlite3.Connection, target_ml: int | None) -> int:
+    if target_ml is None:
+        return default_outlet_id_for_conn(conn)
+    row = conn.execute(
+        """
+        SELECT id
+        FROM pump_outlets
+        ORDER BY ABS(ml_per_run - ?), ml_per_run
+        LIMIT 1
+        """,
+        (target_ml,),
+    ).fetchone()
+    return int(row["id"]) if row else default_outlet_id_for_conn(conn)
+
+
+def default_outlet_id_for_conn(conn: sqlite3.Connection) -> int:
+    row = conn.execute("SELECT id FROM pump_outlets ORDER BY ml_per_run LIMIT 1").fetchone()
+    return int(row["id"])
+
+
+def table_position(name: str, hose_numbers: str, axis: str) -> float:
+    digest = sha256(f"{name}|{hose_numbers}|{axis}".encode("utf-8")).digest()
+    return round(0.12 + int.from_bytes(digest[:2], "big") / 65535 * 0.76, 3)
 
 
 def now_iso() -> str:
@@ -492,6 +751,47 @@ def plant_canopy_area_m2(plant: dict) -> float:
     )
 
 
+def seasonal_curve_value(points: list[tuple[int, float]], day_of_year: int) -> float:
+    day = max(1, min(366, day_of_year))
+    for index in range(1, len(points)):
+        prev_day, prev_value = points[index - 1]
+        next_day, next_value = points[index]
+        if day <= next_day:
+            span = max(1, next_day - prev_day)
+            progress = (day - prev_day) / span
+            return prev_value + (next_value - prev_value) * progress
+    return points[-1][1]
+
+
+def seasonal_profile_key(plant: dict) -> str:
+    catalog_id = plant.get("catalog_id")
+    category = plant.get("category", "")
+    if catalog_id in {"tomato", "zucchini", "cucumber", "eggplant", "chili", "basil"}:
+        return "warm_annual"
+    if category in {"Gemüse", "Kräuter", "Blühpflanzen", "Kletterpflanzen"}:
+        return "annual"
+    if category in {"Mediterrane Gehölze", "Obstgehölze", "Beerenobst", "Nadelgehölze"}:
+        return "evergreen"
+    if category == "Sukkulenten":
+        return "succulent"
+    return "woody"
+
+
+def seasonal_water_factor(plant: dict, when: date | None = None) -> dict:
+    current_day = (when or date.today()).timetuple().tm_yday
+    profile = seasonal_profile_key(plant)
+    factor = seasonal_curve_value(SEASONAL_WATER_CURVES[profile], current_day)
+    if plant.get("size") == "small" and current_day < 190 and profile in {"warm_annual", "annual"}:
+        factor *= 0.78
+    elif plant.get("size") == "medium" and current_day < 170 and profile in {"warm_annual", "annual"}:
+        factor *= 0.9
+    return {
+        "factor": round(clamp(factor, 0.18, 1.05), 3),
+        "profile": profile,
+        "day_of_year": current_day,
+    }
+
+
 def plant_water_need_ml(
     plant: dict,
     plant_sun: dict,
@@ -502,6 +802,7 @@ def plant_water_need_ml(
     wind_factor: float,
 ) -> dict:
     canopy_area = plant_canopy_area_m2(plant)
+    season = seasonal_water_factor(plant)
     sun_ratio = clamp(plant_sun["sun_hours"] / max(terrace_sun["theoretical_sun_hours"], 1), 0.15, 1.0)
     exposure_multiplier = clamp(0.55 + sun_ratio * 0.75, 0.55, 1.32) * plant_sun["wall_shade_factor"]
     growth_temperature = 0.55 if temperature_c < 12 else 0.82 if temperature_c < 16 else 1.0
@@ -532,9 +833,15 @@ def plant_water_need_ml(
     )
     rain_capture_area = pot_surface_area_m2(float(plant["pot_liters"])) + canopy_area * 0.18
     rain_credit_ml = rain_mm_effective * rain_capture_area * 1000
-    daily_need_ml = max(0, irrigation_need_ml - rain_credit_ml)
+    raw_daily_need_ml = max(0, irrigation_need_ml - rain_credit_ml)
+    daily_need_ml = raw_daily_need_ml * WATER_MODEL_CALIBRATION * season["factor"]
     return {
         "daily_need_ml": daily_need_ml,
+        "raw_daily_need_ml": raw_daily_need_ml,
+        "calibration_factor": WATER_MODEL_CALIBRATION,
+        "seasonal_factor": season["factor"],
+        "seasonal_profile": season["profile"],
+        "seasonal_day_of_year": season["day_of_year"],
         "canopy_area_m2": canopy_area,
         "transpiration_ml": transpiration_ml,
         "substrate_evaporation_ml": substrate_evaporation_ml,
@@ -777,6 +1084,7 @@ def shortcut_blueprint(base_url: str) -> dict:
             {"action": "Wenn", "condition": "should_run ist wahr"},
             {"action": "HomeKit", "value": "Pumpe einschalten"},
             {"action": "Warten", "seconds": 65},
+            {"action": "HomeKit", "value": "Pumpe ausschalten"},
             {
                 "action": "Inhalte von URL abrufen",
                 "method": "POST",
@@ -819,7 +1127,10 @@ def optimize_routing(plants: list[dict], outlets: list[dict], max_cycles: int = 
     outlet_limits = {outlet["id"]: 12 for outlet in options}
     best: dict | None = None
     for cycles in range(1, max_cycles + 1):
-        option_sets = [plant_tube_options(plant, options, cycles) for plant in plants]
+        option_sets = [
+            plant_tube_options(plant, options, cycles, max_total_tubes=current_tube_count(plant))
+            for plant in plants
+        ]
         candidate = choose_tube_assignments(plants, option_sets, outlet_limits, cycles)
         if candidate is None:
             continue
@@ -841,10 +1152,17 @@ def optimize_routing(plants: list[dict], outlets: list[dict], max_cycles: int = 
     if best is None:
         best = fallback_single_tube_plan(plants, options, max_cycles)
 
+    finalize_routing_plan(best, outlets, best["cycles"])
+    best["summary"] = routing_summary(best)
+    return best
+
+
+def finalize_routing_plan(plan: dict, outlets: list[dict], cycles: int) -> dict:
+    outlet_limits = {outlet["id"]: 12 for outlet in outlets}
     grouped: dict[int, dict] = {}
-    for assignment in best["assignments"]:
+    for assignment in plan["assignments"]:
         for tube in assignment["tubes"]:
-            delivered_by_tube = best["cycles"] * tube["ml_per_run"] * tube["count"]
+            delivered_by_tube = cycles * tube["ml_per_run"] * tube["count"]
             outlet = grouped.setdefault(
                 tube["outlet_id"],
                 {
@@ -863,13 +1181,19 @@ def optimize_routing(plants: list[dict], outlets: list[dict], max_cycles: int = 
             outlet["need_ml"] += assignment["need_ml"]
             outlet["delivered_ml"] += delivered_by_tube
 
-    best["by_outlet"] = sorted(grouped.values(), key=lambda item: item["ml_per_run"])
-    best["outlet_limits"] = outlet_limits
-    best["summary"] = routing_summary(best)
-    return best
+    plan["cycles"] = cycles
+    plan["by_outlet"] = sorted(grouped.values(), key=lambda item: item["ml_per_run"])
+    plan["outlet_limits"] = outlet_limits
+    return plan
 
 
-def plant_tube_options(plant: dict, outlets: list[dict], cycles: int) -> list[dict]:
+def plant_tube_options(
+    plant: dict,
+    outlets: list[dict],
+    cycles: int,
+    max_total_tubes: int = 9,
+    tube_penalty: float = 22,
+) -> list[dict]:
     need = float(plant["need_ml"])
     tolerance = overwater_tolerance_ml(plant)
     per_cycle_target = 0 if cycles == 0 else need / cycles
@@ -879,6 +1203,8 @@ def plant_tube_options(plant: dict, outlets: list[dict], cycles: int) -> list[di
         for count_30 in range(0, 4):
             for count_60 in range(0, 3):
                 if count_15 + count_30 + count_60 == 0:
+                    continue
+                if count_15 + count_30 + count_60 > max_total_tubes:
                     continue
                 ml_per_cycle = count_15 * 15 + count_30 * 30 + count_60 * 60
                 if ml_per_cycle > max(per_cycle_target * 2.4, per_cycle_target + 90):
@@ -890,7 +1216,7 @@ def plant_tube_options(plant: dict, outlets: list[dict], cycles: int) -> list[di
                 option_score = under * 7.5 + max(0, under - need * 0.08) * 14
                 option_score += over * 1.35 + max(0, over - tolerance) * 5.5
                 option_score += abs(ml_per_cycle - per_cycle_target) * 0.45
-                option_score += max(0, tube_count - 2) * 22
+                option_score += max(0, tube_count - 2) * tube_penalty
                 tubes = []
                 connections = {}
                 for ml_per_run, count in [(15, count_15), (30, count_30), (60, count_60)]:
@@ -925,6 +1251,17 @@ def plant_tube_options(plant: dict, outlets: list[dict], cycles: int) -> list[di
                     }
                 )
     return sorted(options, key=lambda item: item["score"])[:24]
+
+
+def current_tube_count(plant: dict) -> int:
+    hose_numbers = str(plant.get("current_hose_numbers") or plant.get("hose_numbers") or "").strip()
+    if hose_numbers:
+        return max(1, len(re.findall(r"\d+", hose_numbers)))
+    target_ml = plant.get("current_target_ml_per_cycle", plant.get("target_ml_per_cycle"))
+    if target_ml not in (None, ""):
+        smallest_ml = 15
+        return max(1, math.ceil(float(target_ml) / smallest_ml))
+    return 1
 
 
 def choose_tube_assignments(
@@ -1054,22 +1391,18 @@ def routing_summary(plan: dict) -> str:
     return "Ausgewogenste Kombination aus Zyklen und 15/30/60-ml-Ausgängen."
 
 
-def evaluate(
+def calculate_plant_results(
+    balcony: dict,
+    walls: list[dict],
+    plants: list[dict],
     temperature_c: float,
     rain_mm: float,
-    wind_kmh: float = 0,
+    wind_kmh: float,
+    sunshine_hours: float | None,
     slot: str = "morning",
-    sunshine_hours: float | None = None,
-    weather_source: str = "manual",
     et0_mm: float = 0,
 ) -> dict:
-    state = get_state()
-    balcony = state["balcony"]
-    walls = state["walls"]
-    plants = state["plants"]
-    outlets = state["outlets"]
     slot_multiplier = {"morning": 1.0, "midday": 0.72, "evening": 0.92}.get(slot, 1.0)
-
     orientation_deg = orientation_degrees(balcony)
     terrace_sun = estimate_sun_hours(balcony, walls)
     reference_et0_mm = et0_mm if et0_mm > 0 else estimate_reference_et0_mm(temperature_c, sunshine_hours, wind_kmh)
@@ -1079,7 +1412,6 @@ def evaluate(
 
     plant_results = []
     total_need_ml = 0
-
     for plant in plants:
         plant_sun = estimate_sun_hours(
             balcony,
@@ -1109,12 +1441,21 @@ def evaluate(
                 "drought_sensitivity": plant["drought_sensitivity"],
                 "current_outlet": plant["outlet_name"],
                 "current_ml_per_run": plant["ml_per_run"],
+                "current_hose_numbers": plant["hose_numbers"],
+                "current_target_ml_per_cycle": plant["target_ml_per_cycle"],
+                "current_tube_count": current_tube_count(plant),
                 "position": {"x": plant["pos_x"], "y": plant["pos_y"]},
                 "need_ml": round(scheduled_need),
                 "daily_need_ml": round(daily_need),
                 "water_model": {
                     "reference_et0_mm": reference_et0_mm,
                     "canopy_area_m2": water_need["canopy_area_m2"],
+                    "raw_daily_need_ml": round(water_need["raw_daily_need_ml"]),
+                    "calibrated_daily_need_ml": round(daily_need),
+                    "calibration_factor": water_need["calibration_factor"],
+                    "seasonal_factor": water_need["seasonal_factor"],
+                    "seasonal_profile": water_need["seasonal_profile"],
+                    "seasonal_day_of_year": water_need["seasonal_day_of_year"],
                     "transpiration_ml": round(water_need["transpiration_ml"]),
                     "substrate_evaporation_ml": round(water_need["substrate_evaporation_ml"]),
                     "rain_credit_ml": round(water_need["rain_credit_ml"]),
@@ -1126,7 +1467,236 @@ def evaluate(
             }
         )
 
-    routing_plan = optimize_routing(plant_results, outlets)
+    return {
+        "plants": plant_results,
+        "total_need_ml": total_need_ml,
+        "terrace_sun": terrace_sun,
+        "reference_et0_mm": reference_et0_mm,
+        "wind_factor": wind_factor,
+        "orientation_deg": orientation_deg,
+    }
+
+
+def optimize_static_connection_plan(
+    balcony: dict,
+    walls: list[dict],
+    plants: list[dict],
+    outlets: list[dict],
+) -> dict:
+    if not plants:
+        return {"cycles": 0, "score": 0, "assignments": [], "by_outlet": [], "outlet_limits": {}, "summary": "Noch keine Pflanzen angelegt."}
+
+    design = calculate_plant_results(
+        balcony,
+        walls,
+        plants,
+        temperature_c=CONNECTION_DESIGN["temperature_c"],
+        rain_mm=CONNECTION_DESIGN["rain_mm"],
+        wind_kmh=CONNECTION_DESIGN["wind_kmh"],
+        sunshine_hours=CONNECTION_DESIGN["sunshine_hours"],
+        slot="morning",
+    )
+    design_plants = design["plants"]
+    options = outlet_delivery_options(outlets)
+    outlet_limits = {outlet["id"]: 12 for outlet in options}
+    option_sets = [
+        plant_tube_options(
+            plant,
+            options,
+            CONNECTION_DESIGN["cycles"],
+            max_total_tubes=current_tube_count(plant),
+            tube_penalty=80,
+        )
+        for plant in design_plants
+    ]
+    candidate = choose_tube_assignments(design_plants, option_sets, outlet_limits, CONNECTION_DESIGN["cycles"])
+    if candidate is None:
+        candidate = fallback_single_tube_plan(design_plants, options, CONNECTION_DESIGN["cycles"])
+    else:
+        candidate = {
+            "cycles": CONNECTION_DESIGN["cycles"],
+            "score": round(candidate["score"], 2),
+            "assignments": candidate["assignments"],
+            "hard_underwatered": candidate["hard_underwatered"],
+            "severely_overwatered": candidate["severely_overwatered"],
+        }
+
+    finalize_routing_plan(candidate, outlets, CONNECTION_DESIGN["cycles"])
+    add_connection_comparison(candidate, design_plants)
+    candidate["summary"] = static_connection_summary(candidate)
+    candidate["design_basis"] = {
+        "temperature_c": CONNECTION_DESIGN["temperature_c"],
+        "rain_mm": CONNECTION_DESIGN["rain_mm"],
+        "wind_kmh": CONNECTION_DESIGN["wind_kmh"],
+        "sunshine_hours": CONNECTION_DESIGN["sunshine_hours"],
+        "cycles": CONNECTION_DESIGN["cycles"],
+    }
+    return candidate
+
+
+def add_connection_comparison(plan: dict, plants: list[dict]) -> None:
+    plant_by_id = {plant["id"]: plant for plant in plants}
+    for assignment in plan["assignments"]:
+        plant = plant_by_id.get(assignment["plant_id"], {})
+        current_target = plant.get("current_target_ml_per_cycle")
+        current_ml = float(current_target) if current_target not in (None, "") else float(plant.get("current_ml_per_run", 0) or 0)
+        recommended_ml = float(assignment["ml_per_cycle"])
+        tolerance = max(7, recommended_ml * 0.2)
+        current_delivered = current_ml * int(plan.get("cycles", CONNECTION_DESIGN["cycles"]))
+        need_ml = float(assignment["need_ml"])
+        current_under = max(0, need_ml - current_delivered)
+        current_over = max(0, current_delivered - need_ml)
+        over_tolerance = overwater_tolerance_ml(plant)
+        assignment["current_ml_per_cycle"] = round(current_ml)
+        assignment["current_delivered_ml"] = round(current_delivered)
+        assignment["current_hose_numbers"] = plant.get("current_hose_numbers", "")
+        assignment["connection_status"] = "ok"
+        assignment["connection_severity"] = "ok"
+        assignment["connection_action_title"] = "Passt"
+        assignment["connection_note"] = "Aktueller Anschluss passt zum festen Plan."
+        connection_differs = abs(current_ml - recommended_ml) > tolerance
+        if connection_differs:
+            direction = "mehr" if current_ml < recommended_ml else "weniger"
+            assignment["connection_status"] = "change"
+            assignment["connection_severity"] = "change"
+            assignment["connection_action_title"] = "Anschluss ändern"
+            assignment["connection_note"] = (
+                f"Besser {assignment['tube_label']} ({round(recommended_ml)} ml) statt aktuell "
+                f"{round(current_ml)} ml: diese Pflanze braucht dauerhaft {direction} Wasser pro gemeinsamem Zyklus."
+            )
+        if connection_differs and current_under > max(50, need_ml * 0.25):
+            assignment["connection_status"] = "urgent"
+            assignment["connection_severity"] = "urgent"
+            assignment["connection_action_title"] = "Unerlässlich verlegen"
+            assignment["connection_note"] = (
+                f"Unerlässlich: aktueller Anschluss liefert im Auslegungsfall ca. {round(current_under)} ml zu wenig. "
+                f"Auf {assignment['tube_label']} umstecken."
+            )
+        elif connection_differs and current_over > over_tolerance:
+            assignment["connection_status"] = "urgent"
+            assignment["connection_severity"] = "urgent"
+            assignment["connection_action_title"] = "Unerlässlich reduzieren"
+            assignment["connection_note"] = (
+                f"Unerlässlich: aktueller Anschluss liefert im Auslegungsfall ca. {round(current_over)} ml zu viel. "
+                f"Auf {assignment['tube_label']} reduzieren."
+            )
+
+
+def static_connection_summary(plan: dict) -> str:
+    changes = sum(1 for assignment in plan["assignments"] if assignment.get("connection_status") == "change")
+    urgent = sum(1 for assignment in plan["assignments"] if assignment.get("connection_status") == "urgent")
+    if plan.get("unassigned_plants"):
+        return "Warnung: Für mindestens eine Pflanze ist kein freier Anschluss mehr verfügbar."
+    if urgent:
+        return f"Dringend: {urgent} Pflanze(n) müssen umgesteckt werden, sonst droht deutliche Fehlversorgung."
+    if changes:
+        return f"Fester Anschlussplan: {changes} Pflanze(n) sollten anders verschlaucht werden."
+    return "Fester Anschlussplan passt. Wetter verändert nur die Anzahl gemeinsamer Pumpzyklen."
+
+
+def fixed_cycle_score(plant: dict, delivered_ml: float) -> tuple[float, bool, bool]:
+    need = float(plant["need_ml"])
+    under = max(0, need - delivered_ml)
+    over = max(0, delivered_ml - need)
+    tolerance = overwater_tolerance_ml(plant)
+    under_limit = max(20, need * 0.14)
+    score = under * 8 + over * 1.8
+    score += max(0, under - under_limit) * 24
+    score += max(0, over - tolerance) * 10
+    return score, under > under_limit, over > tolerance
+
+
+def apply_fixed_connection_to_weather(
+    connection_plan: dict,
+    plant_results: list[dict],
+    outlets: list[dict],
+    max_cycles: int = 96,
+) -> dict:
+    if not plant_results or not connection_plan.get("assignments"):
+        plan = deepcopy(connection_plan)
+        finalize_routing_plan(plan, outlets, 0)
+        plan["summary"] = "Noch keine Verschlauchung berechenbar."
+        return plan
+
+    plant_by_id = {plant["id"]: plant for plant in plant_results}
+    best = None
+    for cycles in range(0, max_cycles + 1):
+        score = cycles * 0.45
+        hard_under = 0
+        severe_over = 0
+        for assignment in connection_plan["assignments"]:
+            plant = plant_by_id[assignment["plant_id"]]
+            delivered = cycles * assignment["ml_per_cycle"]
+            plant_score, is_under, is_over = fixed_cycle_score(plant, delivered)
+            score += plant_score
+            hard_under += 1 if is_under else 0
+            severe_over += 1 if is_over else 0
+        candidate = {
+            "cycles": cycles,
+            "score": round(score, 2),
+            "hard_underwatered": hard_under,
+            "severely_overwatered": severe_over,
+        }
+        if best is None or candidate["score"] < best["score"]:
+            best = candidate
+
+    plan = deepcopy(connection_plan)
+    plan.update(best or {"cycles": 0, "score": 0, "hard_underwatered": 0, "severely_overwatered": 0})
+    for assignment in plan["assignments"]:
+        plant = plant_by_id[assignment["plant_id"]]
+        delivered = plan["cycles"] * assignment["ml_per_cycle"]
+        assignment["need_ml"] = round(float(plant["need_ml"]))
+        assignment["delivered_ml"] = round(delivered)
+        assignment["difference_ml"] = round(delivered - float(plant["need_ml"]))
+        assignment["under_ml"] = round(max(0, float(plant["need_ml"]) - delivered))
+        assignment["over_ml"] = round(max(0, delivered - float(plant["need_ml"])))
+    finalize_routing_plan(plan, outlets, plan["cycles"])
+    plan["summary"] = weather_fixed_plan_summary(plan)
+    return plan
+
+
+def weather_fixed_plan_summary(plan: dict) -> str:
+    if plan.get("hard_underwatered"):
+        return "Mit dem festen Anschlussplan bleibt mindestens eine Pflanze bei dieser Zykluszahl zu trocken."
+    if plan.get("severely_overwatered"):
+        return "Mit dem festen Anschlussplan bekommt mindestens eine Pflanze bei dieser Zykluszahl deutlich zu viel Wasser."
+    return "Beste Zykluszahl für den festen Anschlussplan."
+
+
+def evaluate(
+    temperature_c: float,
+    rain_mm: float,
+    wind_kmh: float = 0,
+    slot: str = "morning",
+    sunshine_hours: float | None = None,
+    weather_source: str = "manual",
+    et0_mm: float = 0,
+) -> dict:
+    state = get_state()
+    balcony = state["balcony"]
+    walls = state["walls"]
+    plants = state["plants"]
+    outlets = state["outlets"]
+    calculated = calculate_plant_results(
+        balcony,
+        walls,
+        plants,
+        temperature_c=temperature_c,
+        rain_mm=rain_mm,
+        wind_kmh=wind_kmh,
+        sunshine_hours=sunshine_hours,
+        slot=slot,
+        et0_mm=et0_mm,
+    )
+    plant_results = calculated["plants"]
+    total_need_ml = calculated["total_need_ml"]
+    terrace_sun = calculated["terrace_sun"]
+    reference_et0_mm = calculated["reference_et0_mm"]
+    wind_factor = calculated["wind_factor"]
+    orientation_deg = calculated["orientation_deg"]
+
+    connection_plan = optimize_static_connection_plan(balcony, walls, plants, outlets)
+    routing_plan = apply_fixed_connection_to_weather(connection_plan, plant_results, outlets)
     recommended_cycles = routing_plan["cycles"]
     assignment_by_plant = {assignment["plant_id"]: assignment for assignment in routing_plan["assignments"]}
     for plant in plant_results:
@@ -1138,6 +1708,10 @@ def evaluate(
             plant["suggested_tube_label"] = assignment["tube_label"]
             plant["delivered_ml"] = assignment["delivered_ml"]
             plant["difference_ml"] = assignment["difference_ml"]
+            plant["connection_status"] = assignment.get("connection_status")
+            plant["connection_severity"] = assignment.get("connection_severity")
+            plant["connection_action_title"] = assignment.get("connection_action_title")
+            plant["connection_note"] = assignment.get("connection_note")
 
     total_delivered_per_run = sum(
         tube["ml_per_run"] * tube["count"]
@@ -1165,6 +1739,8 @@ def evaluate(
         reason = "Wassertank reicht nicht für einen vollständigen Pumpenlauf"
     elif not plants:
         reason = "Noch keine Pflanzen angelegt"
+    elif recommended_cycles == 0:
+        reason = "Heute ist mit dem festen Anschlussplan kein Pumpenlauf nötig"
     elif remaining_cycles == 0 and recommended_cycles > 0:
         reason = "Alle empfohlenen Zyklen für heute sind bereits verbucht"
     elif should_run:
@@ -1196,6 +1772,7 @@ def evaluate(
         },
         "routing": routing_plan["by_outlet"],
         "routing_plan": routing_plan,
+        "connection_plan": connection_plan,
         "plants": plant_results,
         "inputs": {
             "temperature_c": temperature_c,
@@ -1302,6 +1879,19 @@ class AppHandler(SimpleHTTPRequestHandler):
             return
         send_json(self, {"error": "Not found"}, HTTPStatus.NOT_FOUND)
 
+    def do_PUT(self) -> None:
+        parsed = urlparse(self.path)
+        try:
+            if parsed.path.startswith("/api/plants/"):
+                plant_id = int(parsed.path.rsplit("/", 1)[1])
+                update_plant(plant_id, read_json(self))
+                send_json(self, get_state())
+                return
+        except (ValueError, KeyError, sqlite3.IntegrityError, json.JSONDecodeError) as exc:
+            send_json(self, {"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
+        send_json(self, {"error": "Not found"}, HTTPStatus.NOT_FOUND)
+
     def do_DELETE(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path.startswith("/api/plants/"):
@@ -1399,8 +1989,10 @@ def add_plant(payload: dict) -> int:
     with connect() as conn:
         cursor = conn.execute(
             """
-            INSERT INTO plants (catalog_id, custom_name, size, pot_liters, pot_type, outlet_id, pos_x, pos_y, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO plants
+                (catalog_id, custom_name, size, pot_liters, pot_type, outlet_id, pos_x, pos_y,
+                 hose_numbers, target_ml_per_cycle, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 payload["catalog_id"],
@@ -1411,10 +2003,50 @@ def add_plant(payload: dict) -> int:
                 outlet_id,
                 float(payload.get("pos_x", 0.5)),
                 float(payload.get("pos_y", 0.5)),
+                str(payload.get("hose_numbers", "")).strip(),
+                int(payload["target_ml_per_cycle"]) if payload.get("target_ml_per_cycle") else None,
                 now_iso(),
             ),
         )
         return int(cursor.lastrowid)
+
+
+def update_plant(plant_id: int, payload: dict) -> None:
+    required = ["catalog_id", "custom_name", "size", "pot_liters", "pot_type"]
+    for key in required:
+        if key not in payload:
+            raise KeyError(f"{key} fehlt")
+
+    target_ml_per_cycle = payload.get("target_ml_per_cycle")
+    outlet_id = int(payload.get("outlet_id") or default_outlet_id())
+    with connect() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE plants
+            SET catalog_id = ?,
+                custom_name = ?,
+                size = ?,
+                pot_liters = ?,
+                pot_type = ?,
+                outlet_id = ?,
+                hose_numbers = ?,
+                target_ml_per_cycle = ?
+            WHERE id = ?
+            """,
+            (
+                payload["catalog_id"],
+                payload["custom_name"].strip() or "Pflanze",
+                payload["size"],
+                float(payload["pot_liters"]),
+                payload["pot_type"],
+                outlet_id,
+                str(payload.get("hose_numbers", "")).strip(),
+                int(target_ml_per_cycle) if target_ml_per_cycle not in (None, "") else None,
+                plant_id,
+            ),
+        )
+        if cursor.rowcount == 0:
+            raise ValueError("Pflanze nicht gefunden")
 
 
 def default_outlet_id() -> int:
