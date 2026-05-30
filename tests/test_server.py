@@ -30,6 +30,9 @@ class WateringPlannerTests(unittest.TestCase):
         self.assertIn("sun_hours", result["sun"])
         self.assertIn("routing_plan", result)
         self.assertEqual(len(result["routing_plan"]["assignments"]), len(result["plants"]))
+        self.assertIn("automation", result)
+        self.assertIn("run_now", result)
+        self.assertIn("next_window", result["automation"])
         self.assertIn("water_model", result["plants"][0])
         self.assertGreater(result["plants"][0]["water_model"]["canopy_area_m2"], 0)
         self.assertEqual(result["connection_plan"]["design_basis"]["cycles"], 4)
@@ -58,6 +61,17 @@ class WateringPlannerTests(unittest.TestCase):
             after["tank"]["current_ml"],
             before["tank"]["current_ml"] - before["pump"]["delivered_per_cycle_ml"],
         )
+
+    def test_watering_events_are_listed_newest_first(self):
+        server.mark_run(delivered_ml=120, temperature_c=24, rain_mm=0.2)
+        server.mark_run(delivered_ml=90, temperature_c=25, rain_mm=0)
+
+        events = server.watering_events()
+
+        self.assertEqual(len(events), 2)
+        self.assertEqual(events[0]["delivered_ml"], 90)
+        self.assertEqual(events[0]["source"], "homekit")
+        self.assertIn("ran_at", events[0])
 
     def test_manual_weather_payload_does_not_fetch_network(self):
         weather = server.weather_from_payload(

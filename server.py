@@ -9,7 +9,7 @@ import ssl
 from copy import deepcopy
 from hashlib import sha256
 from contextlib import contextmanager
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -19,6 +19,7 @@ from urllib.request import urlopen
 from urllib.parse import parse_qs, urlencode, urlparse
 from zipfile import ZipFile
 from xml.etree import ElementTree as ET
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 ROOT = Path(__file__).parent
@@ -184,6 +185,10 @@ SEASONAL_WATER_CURVES = {
     "succulent": [(1, 0.55), (80, 0.58), (130, 0.68), (172, 0.82), (220, 0.9), (280, 0.72), (335, 0.58), (366, 0.55)],
 }
 
+AUTOMATION_WINDOWS = ["07:00", "10:00", "11:00", "14:00", "15:00", "16:00", "17:00"]
+AUTOMATION_EMERGENCY_WINDOW = "19:00"
+AUTOMATION_TRIGGER_TOLERANCE_MINUTES = 20
+
 
 @contextmanager
 def connect() -> Iterator[sqlite3.Connection]:
@@ -195,6 +200,29 @@ def connect() -> Iterator[sqlite3.Connection]:
         conn.commit()
     finally:
         conn.close()
+
+
+def ensure_data_dir_writable() -> None:
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        probe = DATA_DIR / ".write-test"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+        if DB_PATH.exists():
+            with sqlite3.connect(DB_PATH) as conn:
+                conn.execute("PRAGMA user_version")
+                conn.execute("CREATE TABLE IF NOT EXISTS __write_probe (id INTEGER PRIMARY KEY)")
+                conn.execute("DROP TABLE __write_probe")
+    except OSError as exc:
+        raise RuntimeError(
+            f"DATA_DIR ist nicht beschreibbar: {DATA_DIR}. "
+            "Prüfe im Synology Container Manager das Volume ./data:/app/data und deaktiviere Read-only."
+        ) from exc
+    except sqlite3.OperationalError as exc:
+        raise RuntimeError(
+            f"SQLite-Datenbank ist nicht beschreibbar: {DB_PATH}. "
+            "Prüfe Besitzer/Rechte von data/watering.sqlite3 und ob das Volume im Container Manager schreibbar gemountet ist."
+        ) from exc
 
 
 def init_db() -> None:
@@ -265,6 +293,11 @@ def init_db() -> None:
                 rain_mm REAL,
                 source TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
             """
         )
         ensure_column(conn, "balcony_settings", "latitude", "REAL NOT NULL DEFAULT 52.52")
@@ -322,6 +355,36 @@ def init_db() -> None:
         elif (DATA_DIR / "table.xlsx").exists() and has_unimported_plants(conn):
             conn.execute("DELETE FROM plants")
             seed_plants(conn)
+
+
+def get_setting(key: str, default: str = "") -> str:
+    with connect() as conn:
+        try:
+            row = conn.execute("SELECT value FROM app_settings WHERE key = ?", (key,)).fetchone()
+        except sqlite3.OperationalError:
+            return default
+        return str(row["value"]) if row else default
+
+
+def set_setting(key: str, value: str) -> None:
+    with connect() as conn:
+        conn.execute("CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        conn.execute(
+            """
+            INSERT INTO app_settings (key, value)
+            VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """,
+            (key, value),
+        )
+
+
+def delete_setting(key: str) -> None:
+    with connect() as conn:
+        try:
+            conn.execute("DELETE FROM app_settings WHERE key = ?", (key,))
+        except sqlite3.OperationalError:
+            pass
 
 
 def ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
@@ -631,6 +694,23 @@ def get_state() -> dict:
         "plants": plants,
         "cycles_completed_today": completed_cycles_today(),
     }
+
+
+def watering_events(limit: int = 12) -> list[dict]:
+    limit = int(clamp(limit, 1, 50))
+    with connect() as conn:
+        return [
+            row_to_dict(row)
+            for row in conn.execute(
+                """
+                SELECT id, ran_at, delivered_ml, temperature_c, rain_mm, source
+                FROM watering_events
+                ORDER BY ran_at DESC, id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            )
+        ]
 
 
 def completed_cycles_today() -> int:
@@ -1080,8 +1160,8 @@ def shortcut_blueprint(base_url: str) -> dict:
         "steps": [
             {"action": "URL", "value": check_url},
             {"action": "Inhalte von URL abrufen", "method": "GET", "headers": {"Accept": "application/json"}},
-            {"action": "Wert für Schlüssel abrufen", "key": "should_run"},
-            {"action": "Wenn", "condition": "should_run ist wahr"},
+            {"action": "Wert für Schlüssel abrufen", "key": "run_now"},
+            {"action": "Wenn", "condition": "run_now ist wahr"},
             {"action": "HomeKit", "value": "Pumpe einschalten"},
             {"action": "Warten", "seconds": 65},
             {"action": "HomeKit", "value": "Pumpe ausschalten"},
@@ -1663,6 +1743,81 @@ def weather_fixed_plan_summary(plan: dict) -> str:
     return "Beste Zykluszahl für den festen Anschlussplan."
 
 
+def local_now(timezone_name: str) -> datetime:
+    try:
+        tzinfo = ZoneInfo(timezone_name or "Europe/Berlin")
+    except ZoneInfoNotFoundError:
+        tzinfo = ZoneInfo("Europe/Berlin")
+    return datetime.now(tzinfo)
+
+
+def parse_hhmm(value: str) -> time:
+    hour, minute = value.split(":", 1)
+    return time(int(hour), int(minute))
+
+
+def window_datetime(today: date, value: str, tzinfo) -> datetime:
+    return datetime.combine(today, parse_hhmm(value), tzinfo=tzinfo)
+
+
+def parse_pause_until(value: str, timezone_name: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=local_now(timezone_name).tzinfo)
+    return parsed
+
+
+def automation_status(
+    should_run: bool,
+    remaining_cycles: int,
+    timezone_name: str,
+    pause_until_value: str = "",
+) -> dict:
+    now = local_now(timezone_name)
+    tolerance = timedelta(minutes=AUTOMATION_TRIGGER_TOLERANCE_MINUTES)
+    windows = [window_datetime(now.date(), value, now.tzinfo) for value in AUTOMATION_WINDOWS]
+    emergency = window_datetime(now.date(), AUTOMATION_EMERGENCY_WINDOW, now.tzinfo)
+    all_windows = windows + [emergency]
+    pause_until = parse_pause_until(pause_until_value, timezone_name)
+    paused = bool(pause_until and pause_until > now)
+    active_regular = next((item for item in windows if abs(now - item) <= tolerance), None)
+    active_emergency = abs(now - emergency) <= tolerance
+    future_regular = [item for item in windows if item >= now - tolerance]
+    next_window = next((item for item in all_windows if item >= now - tolerance), None)
+    regular_slots_remaining = len(future_regular)
+    should_prevent_shortfall = remaining_cycles * 2 >= max(regular_slots_remaining, 1)
+    run_regular = bool(active_regular and should_prevent_shortfall)
+    run_emergency = bool(active_emergency and remaining_cycles > 0)
+    run_now = bool(should_run and remaining_cycles > 0 and not paused and (run_regular or run_emergency))
+    if paused:
+        summary = f"Automatik pausiert bis {pause_until.strftime('%d.%m. %H:%M')}."
+    elif not should_run or remaining_cycles <= 0:
+        summary = "Kein automatischer Lauf nötig."
+    elif run_now:
+        summary = "Zeitfenster aktiv: Home Assistant darf jetzt einen Zyklus starten."
+    elif next_window:
+        summary = f"Nächste Prüfung um {next_window.strftime('%H:%M')}."
+    else:
+        summary = "Heute kein reguläres Zeitfenster mehr."
+    return {
+        "run_now": run_now,
+        "paused": paused,
+        "pause_until": pause_until.isoformat() if pause_until else "",
+        "windows": AUTOMATION_WINDOWS,
+        "emergency_window": AUTOMATION_EMERGENCY_WINDOW,
+        "active_window": active_regular.strftime("%H:%M") if active_regular else (AUTOMATION_EMERGENCY_WINDOW if active_emergency else ""),
+        "next_window": next_window.strftime("%H:%M") if next_window else "",
+        "regular_slots_remaining": regular_slots_remaining,
+        "shortfall_prevention": bool(should_run and remaining_cycles > 0 and should_prevent_shortfall),
+        "summary": summary,
+    }
+
+
 def evaluate(
     temperature_c: float,
     rain_mm: float,
@@ -1750,8 +1905,16 @@ def evaluate(
     else:
         reason = f"Temperatur {temperature_c:g} C unter Schwelle {temp_threshold:g} C"
 
+    automation = automation_status(
+        should_run,
+        remaining_cycles,
+        str(balcony.get("timezone_name", "Europe/Berlin")),
+        get_setting("automation_pause_until", ""),
+    )
+
     return {
         "should_run": should_run,
+        "run_now": automation["run_now"],
         "reason": reason,
         "recommended_cycles_today": recommended_cycles,
         "cycles_completed_today": cycles_completed,
@@ -1786,6 +1949,7 @@ def evaluate(
             "wind_factor": wind_factor,
         },
         "sun": terrace_sun,
+        "automation": automation,
         "calculated_at": now_iso(),
     }
 
@@ -1824,6 +1988,10 @@ class AppHandler(SimpleHTTPRequestHandler):
                 send_json(self, fetch_weather(get_state()["balcony"]))
             except ValueError as exc:
                 send_json(self, {"error": str(exc)}, HTTPStatus.BAD_GATEWAY)
+            return
+        if parsed.path == "/api/watering-events":
+            params = parse_qs(parsed.query)
+            send_json(self, {"events": watering_events(int(first(params, "limit", "12")))})
             return
         if parsed.path == "/api/shortcuts":
             params = parse_qs(parsed.query)
@@ -1873,6 +2041,23 @@ class AppHandler(SimpleHTTPRequestHandler):
                     rain_mm=float(weather["rain_mm"]),
                 )
                 send_json(self, evaluate_weather(weather, str(payload.get("slot", "morning"))))
+                return
+            if parsed.path == "/api/automation/pause":
+                payload = read_json(self)
+                timezone_name = get_state()["balcony"].get("timezone_name", "Europe/Berlin")
+                now = local_now(str(timezone_name))
+                if payload.get("until"):
+                    pause_until = datetime.fromisoformat(str(payload["until"]))
+                    if pause_until.tzinfo is None:
+                        pause_until = pause_until.replace(tzinfo=now.tzinfo)
+                else:
+                    pause_until = datetime.combine(now.date() + timedelta(days=1), time(0, 0), tzinfo=now.tzinfo)
+                set_setting("automation_pause_until", pause_until.isoformat())
+                send_json(self, {"automation_pause_until": pause_until.isoformat()})
+                return
+            if parsed.path == "/api/automation/resume":
+                delete_setting("automation_pause_until")
+                send_json(self, {"automation_pause_until": ""})
                 return
         except (ValueError, KeyError, sqlite3.IntegrityError, json.JSONDecodeError) as exc:
             send_json(self, {"error": str(exc)}, HTTPStatus.BAD_REQUEST)
@@ -2083,6 +2268,7 @@ def mark_run(delivered_ml: int, temperature_c: float, rain_mm: float) -> None:
 
 
 def main() -> None:
+    ensure_data_dir_writable()
     init_db()
     port = int(os.environ.get("PORT", "8080"))
     host = os.environ.get("HOST", "127.0.0.1")

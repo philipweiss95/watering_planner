@@ -1,6 +1,7 @@
 let state = null;
 let latestEvaluation = null;
 let shortcuts = null;
+let wateringEvents = [];
 let editingPlantId = null;
 
 const $ = (selector) => document.querySelector(selector);
@@ -31,8 +32,14 @@ function numberFields(payload, fields) {
 async function loadState() {
   state = await api("/api/state");
   shortcuts = await api(`/api/shortcuts?base_url=${encodeURIComponent(window.location.origin)}`);
+  await loadWateringEvents();
   renderState();
   await evaluateCurrent();
+}
+
+async function loadWateringEvents() {
+  const response = await api("/api/watering-events?limit=12");
+  wateringEvents = response.events || [];
 }
 
 function renderState() {
@@ -77,6 +84,7 @@ function renderState() {
   `;
 
   renderShortcuts();
+  renderWateringLog();
   renderPlants();
   renderBalconyPlan();
   renderEvaluation(latestEvaluation);
@@ -412,11 +420,15 @@ function renderEvaluation(result) {
   $("#configSummary").innerHTML = renderConfigSummary(result, urgentActions, changeActions);
   $("#result").innerHTML = `
     <div class="decision-copy">
-      <strong>${result.should_run ? "Pumpen empfohlen" : "Heute pausieren"}</strong>
+      <strong>${result.run_now ? "Jetzt pumpen" : result.should_run ? "Bedarf vorhanden" : "Heute pausieren"}</strong>
       <span>${result.reason}</span>
+      <span>${result.automation?.summary || ""}</span>
     </div>
+    ${renderAutomationControls(result)}
     ${renderActionSummary(urgentActions, changeActions)}
   `;
+  bindAutomationControls();
+  renderWateringLog();
   renderPlants();
 
   $("#routing").innerHTML = result.routing.length
@@ -437,6 +449,34 @@ function renderEvaluation(result) {
         )
         .join("") + renderRoutingAssignments(result)
     : `<p class="meta">Noch keine Verschlauchung berechenbar.</p>`;
+}
+
+function renderAutomationControls(result) {
+  if (!result.automation) return "";
+  const paused = result.automation.paused;
+  return `
+    <div class="automation-controls">
+      <button class="secondary small-button" data-pause-automation type="button" ${paused ? "disabled" : ""}>Heute pausieren</button>
+      <button class="secondary small-button" data-resume-automation type="button" ${paused ? "" : "disabled"}>Pause aufheben</button>
+    </div>
+  `;
+}
+
+function bindAutomationControls() {
+  document.querySelectorAll("[data-pause-automation]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      await api("/api/automation/pause", { method: "POST", body: JSON.stringify({ scope: "today" }) });
+      await evaluateCurrent();
+    });
+  });
+  document.querySelectorAll("[data-resume-automation]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      await api("/api/automation/resume", { method: "POST", body: JSON.stringify({}) });
+      await evaluateCurrent();
+    });
+  });
 }
 
 function renderConfigSummary(result, urgentActions, changeActions) {
@@ -490,6 +530,7 @@ function renderDashboardCards(result, urgentActions, changeActions) {
   const calibrationText = calibrationFactor && seasonalFactor
     ? `${Math.round(calibrationFactor * 100)}% Basis · ${Math.round(seasonalFactor * 100)}% Saison`
     : "Kalibriertes Modell";
+  const automation = result.automation || {};
   return `
     <article class="metric-card primary-metric ${result.should_run ? "go" : "stop"}">
       ${icon("cycles")}
@@ -531,6 +572,14 @@ function renderDashboardCards(result, urgentActions, changeActions) {
         <p class="metric-detail">${urgentActions.length ? "dringend" : changeActions.length ? "Änderungen" : "Bestand passt"}</p>
       </div>
     </article>
+    <article class="metric-card automation-metric ${automation.run_now ? "go" : automation.paused ? "stop" : "ok"}">
+      ${icon("clock")}
+      <div>
+        <p class="metric-label">Home Assistant</p>
+        <strong>${automation.run_now ? "Jetzt" : automation.next_window || "--"}</strong>
+        <p class="metric-detail">${automation.paused ? "Automatik pausiert" : automation.shortfall_prevention ? "vorgezogen bei knappen Fenstern" : "nächstes Zeitfenster"}</p>
+      </div>
+    </article>
     <article class="metric-card model-metric">
       ${icon("leaf")}
       <div>
@@ -550,8 +599,63 @@ function icon(name) {
     sun: `<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.9 4.9 1.4 1.4"/><path d="m17.7 17.7 1.4 1.4"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m4.9 19.1 1.4-1.4"/><path d="m17.7 6.3 1.4-1.4"/>`,
     route: `<path d="M6 19a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M18 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M8.5 15.5h3.2a3 3 0 0 0 3-3v-1"/><path d="M15.5 8.5h-3.2a3 3 0 0 0-3 3v1"/>`,
     leaf: `<path d="M20 4C12 4 6 8.5 6 15a5 5 0 0 0 5 5c6.5 0 9-8 9-16Z"/><path d="M6 20c2-6 6-9 12-12"/>`,
+    clock: `<circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/>`,
   };
   return `<span class="metric-icon"><svg viewBox="0 0 24 24" aria-hidden="true">${paths[name]}</svg></span>`;
+}
+
+function renderWateringLog() {
+  const target = $("#wateringLog");
+  if (!target) return;
+  if (!wateringEvents.length) {
+    target.innerHTML = `
+      <div class="empty-log">
+        ${icon("drop")}
+        <div>
+          <strong>Noch keine Läufe verbucht</strong>
+          <span>Home Assistant schreibt nach jedem Pumpzyklus automatisch einen Eintrag.</span>
+        </div>
+      </div>
+    `;
+    return;
+  }
+  target.innerHTML = wateringEvents
+    .map(
+      (event) => `
+        <article class="log-row">
+          <div class="log-icon">${icon("drop")}</div>
+          <div class="log-main">
+            <strong>${formatEventTime(event.ran_at)}</strong>
+            <span>${sourceLabel(event.source)} · ${Math.round(event.delivered_ml)} ml</span>
+          </div>
+          <div class="log-weather">
+            <span>${event.temperature_c === null ? "--" : `${Math.round(Number(event.temperature_c) * 10) / 10}&deg;C`}</span>
+            <span>${event.rain_mm === null ? "--" : `${Math.round(Number(event.rain_mm) * 10) / 10} mm`}</span>
+          </div>
+        </article>
+      `,
+    )
+    .join("");
+}
+
+function formatEventTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("de-DE", {
+    weekday: "short",
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function sourceLabel(source) {
+  return {
+    homekit: "Home Assistant",
+    shortcut: "Kurzbefehl",
+    manual: "Manuell",
+  }[source] || source;
 }
 
 function renderActionSummary(urgentActions, changeActions) {
@@ -717,6 +821,11 @@ $("#locateButton").addEventListener("click", () => {
     form.elements.longitude.value = position.coords.longitude.toFixed(6);
     form.elements.timezone_name.value = Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/Berlin";
   });
+});
+
+$("#refreshLogButton").addEventListener("click", async () => {
+  await loadWateringEvents();
+  renderWateringLog();
 });
 
 document.querySelectorAll("[data-view-target]").forEach((button) => {

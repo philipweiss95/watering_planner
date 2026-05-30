@@ -71,6 +71,13 @@ Für HomeKit reicht dann:
 GET /api/homekit/check?auto=true
 ```
 
+Die Antwort enthält zwei Entscheidungen:
+
+- `should_run`: Heute besteht grundsätzlich noch Bewässerungsbedarf.
+- `run_now`: Ein lokaler Automations-Controller wie Home Assistant soll im aktuellen Zeitfenster jetzt einen Zyklus starten.
+
+Der Planer kennt dafür die Tagesfenster `07:00`, `10:00`, `11:00`, `14:00`, `15:00`, `16:00`, `17:00` sowie ein Notfallfenster um `19:00`. Wenn die verbleibenden Zyklen im Tagesverlauf knapp werden, setzt der Planer `run_now` früher auf `true`, damit die Zyklen nicht erst spät am Tag nachgeholt werden müssen.
+
 Die Berechnung nutzt Temperatur, Tagesniederschlag, Wind, FAO-Referenzverdunstung ET₀, Sonnenscheindauer, Balkon-/Terrassenausrichtung in Grad, Koordinaten, Pflanzenpositionen und die vier Wandhöhen nach Seite. Wenn Open-Meteo keine ET₀-Werte liefert oder manuelle Wetterdaten genutzt werden, schätzt die App ET₀ aus Temperatur, Sonnenscheindauer und Wind. Zusätzlich wird Wind als Balkon-Expositionsfaktor berechnet: hohe Windgeschwindigkeiten erhöhen Transpiration und Topfverdunstung, niedrige Wände schützen weniger.
 
 Der Wasserbedarf pro Pflanze wird aus einem Pflanzenprofil berechnet:
@@ -109,6 +116,7 @@ Content-Type: application/json
 ```
 
 Dadurch zählt der Server die bereits erledigten Tageszyklen und reduziert den Tankstand.
+Die letzten Läufe erscheinen im Dashboard als Protokoll unter `Bewässerungsvorgänge`.
 
 ## API
 
@@ -121,4 +129,7 @@ Dadurch zählt der Server die bereits erledigten Tageszyklen und reduziert den T
 - `DELETE /api/plants/{id}`: Pflanze entfernen
 - `POST /api/evaluate`: Empfehlung berechnen, mit `{"auto_weather": true}` automatisch
 - `GET /api/homekit/check`: kompakte HomeKit-Entscheidung
+- `GET /api/watering-events`: Protokoll der letzten Bewässerungsläufe
 - `POST /api/homekit/mark-run`: Pumpenlauf verbuchen und Tank reduzieren
+- `POST /api/automation/pause`: Automatik bis morgen pausieren
+- `POST /api/automation/resume`: Automatik wieder aktivieren

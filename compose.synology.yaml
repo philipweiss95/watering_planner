@@ -1,7 +1,7 @@
 services:
   watering-planner:
     build: .
-    image: watering-planner:latest
+    image: watering-planner:20260529-ui6
     container_name: watering-planner
     restart: unless-stopped
     user: "0:0"

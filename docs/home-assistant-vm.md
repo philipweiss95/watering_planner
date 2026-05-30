@@ -102,9 +102,9 @@ switch.meross_pumpe
 
 Diese Entity-ID brauchst du später in der Automation.
 
-## 4. REST-Sensor für den Planer
+## 4. `configuration.yaml` vorbereiten
 
-In Home Assistant `configuration.yaml` ergänzen:
+In Home Assistant `configuration.yaml` ergänzen. `NAS-IP` durch die IP der Synology ersetzen, zum Beispiel `192.168.178.116`.
 
 ```yaml
 sensor:
@@ -115,8 +115,9 @@ sensor:
     method: GET
     scan_interval: 900
     timeout: 10
-    value_template: "{{ value_json.should_run }}"
+    value_template: "{{ value_json.run_now }}"
     json_attributes:
+      - run_now
       - should_run
       - reason
       - recommended_cycles_today
@@ -124,21 +125,8 @@ sensor:
       - remaining_cycles_today
       - pump
       - tank
-```
+      - automation
 
-Home Assistant neu starten. Danach gibt es einen Sensor:
-
-```text
-sensor.bewaesserung_planner
-```
-
-Der Sensor steht auf `True`, wenn ein Pumpenlauf ansteht.
-
-## 5. REST-Command zum Verbuchen
-
-Ebenfalls in `configuration.yaml`:
-
-```yaml
 rest_command:
   bewaesserung_mark_run:
     url: "http://NAS-IP:8080/api/homekit/mark-run"
@@ -146,67 +134,138 @@ rest_command:
     headers:
       Content-Type: "application/json"
     payload: '{"auto_weather": true, "slot": "morning"}'
+
+automation: !include automations.yaml
 ```
 
-## 6. Automation für einen einzelnen Lauf
+Wichtig:
 
-Ersetze `switch.meross_pumpe` durch deine echte Steckdosen-Entity.
+- `sensor:`, `rest_command:` und `automation:` stehen ganz links auf oberster YAML-Ebene.
+- Wenn `automation: !include automations.yaml` bereits existiert, nicht doppelt einfügen.
+- Nach Änderungen an `configuration.yaml` Home Assistant neu starten.
 
-```yaml
-alias: Bewaesserung - Zyklus starten wenn nötig
-mode: single
-trigger:
-  - platform: time_pattern
-    hours: "/2"
-condition:
-  - condition: state
-    entity_id: sensor.bewaesserung_planner
-    state: "True"
-action:
-  - service: switch.turn_on
-    target:
-      entity_id: switch.meross_pumpe
-  - delay: "00:01:10"
-  - service: switch.turn_off
-    target:
-      entity_id: switch.meross_pumpe
-  - service: rest_command.bewaesserung_mark_run
-  - service: homeassistant.update_entity
-    target:
-      entity_id: sensor.bewaesserung_planner
+Nach dem Neustart gibt es den Sensor:
+
+```text
+sensor.bewaesserung_planner
 ```
 
-Diese Automation prüft alle zwei Stunden. Wenn noch ein Zyklus offen ist, wird genau ein Lauf gestartet und danach verbucht. Beim nächsten Zeitfenster wird erneut geprüft.
+Der Sensor steht auf `True`, wenn ein Pumpenlauf ansteht.
 
-## 7. Mehr Kontrolle mit festen Zeitfenstern
+## 5. `automations.yaml` anlegen
 
-Wenn du lieber feste Zeitfenster möchtest:
+Die Datei liegt unter:
+
+```text
+/config/automations.yaml
+```
+
+Diese vollständige Automation nutzt die Meross-Steckdose `switch.smart_plug_mini`, schaltet sie pro Lauf 120 Sekunden ein und folgt der Entscheidung `run_now` aus dem Planer. Der Planer verteilt offene Zyklen über die Tagesfenster und zieht Läufe vor, wenn die verbleibenden Fenster knapp werden. Um 19 Uhr läuft nur noch ein Notfallzyklus, wenn der Planer `run_now` meldet.
 
 ```yaml
-trigger:
-  - platform: time
-    at: "07:00:00"
-  - platform: time
-    at: "11:00:00"
-  - platform: time
-    at: "15:00:00"
-  - platform: time
-    at: "19:00:00"
+- id: bewaesserung_tagesfenster
+  alias: Bewaesserung - Tagesfenster
+  description: Prüft tagsüber mehrere Fenster und startet pro Fenster höchstens einen Pumpzyklus.
+  mode: single
+
+  trigger:
+    - platform: time
+      at: "07:00:00"
+    - platform: time
+      at: "10:00:00"
+    - platform: time
+      at: "11:00:00"
+    - platform: time
+      at: "14:00:00"
+    - platform: time
+      at: "15:00:00"
+    - platform: time
+      at: "16:00:00"
+    - platform: time
+      at: "17:00:00"
+    - platform: time
+      at: "19:00:00"
+
+  condition:
+    - condition: template
+      value_template: >
+        {{ states('sensor.bewaesserung_planner') in ['True', 'true', 'on'] }}
+
+  action:
+    - service: homeassistant.update_entity
+      target:
+        entity_id: sensor.bewaesserung_planner
+
+    - delay:
+        seconds: 2
+
+    - condition: template
+      value_template: >
+        {{ states('sensor.bewaesserung_planner') in ['True', 'true', 'on'] }}
+
+    - service: switch.turn_on
+      target:
+        entity_id: switch.smart_plug_mini
+
+    - delay:
+        seconds: 120
+
+    - service: switch.turn_off
+      target:
+        entity_id: switch.smart_plug_mini
+
+    - service: rest_command.bewaesserung_mark_run
+
+    - delay:
+        seconds: 2
+
+    - service: homeassistant.update_entity
+      target:
+        entity_id: sensor.bewaesserung_planner
 ```
 
 Der Planer verhindert Überbewässerung, weil nach jedem Lauf `remaining_cycles_today` sinkt.
+Wenn sich Wetterdaten im Tagesverlauf verschärfen und dadurch mehr offene Zyklen entstehen, setzt der Planer `run_now` in den verbleibenden Zeitfenstern früher auf `true`. Home Assistant muss dadurch keine eigene Verteilungslogik kennen.
 
-## 8. Sicherheit
+Im Dashboard des Planers wird zusätzlich angezeigt:
+
+- ob Home Assistant jetzt starten darf
+- nächstes Zeitfenster
+- ob wegen knapper verbleibender Fenster vorgezogen wird
+- ob die Automatik bis morgen pausiert ist
+- Protokoll der letzten Bewässerungsvorgänge mit Zeitpunkt, Menge, Temperatur und Regen
+
+Über die Buttons **Heute pausieren** und **Pause aufheben** kann die Automatik direkt im Planer gesperrt oder wieder freigegeben werden.
+
+## 6. Prüfen und neu laden
+
+1. **Entwicklerwerkzeuge > YAML > Konfiguration prüfen**
+2. Wenn gültig: Home Assistant neu starten oder **Automationen neu laden**
+3. Unter **Einstellungen > Automatisierungen & Szenen** prüfen, ob `Bewaesserung - Tagesfenster` sichtbar ist.
+4. Unter **Entwicklerwerkzeuge > Zustände** prüfen:
+
+```text
+sensor.bewaesserung_planner
+switch.smart_plug_mini
+```
+
+5. Unter **Entwicklerwerkzeuge > Aktionen** prüfen:
+
+```text
+rest_command.bewaesserung_mark_run
+```
+
+## 7. Sicherheit
 
 Die Pumpe sollte standardmäßig aus sein. Ein Lauf ist:
 
 ```text
-Steckdose an -> 70 Sekunden warten -> Steckdose aus -> Lauf verbuchen
+Steckdose an -> 120 Sekunden warten -> Steckdose aus -> Lauf verbuchen
 ```
 
 Falls Home Assistant oder der Planer nicht erreichbar ist, startet kein neuer Lauf. Das ist sicherer als eine dauerhaft eingeschaltete Steckdose, die jeden Tag ohne Rückfrage pumpt.
 
-## 9. Tests nach Einrichtung
+## 8. Tests nach Einrichtung
 
 1. In Home Assistant die Steckdose manuell kurz einschalten und wieder ausschalten.
 2. Im Planer manuell Wetterwerte setzen und prüfen, ob ein Zyklus ansteht.
@@ -214,9 +273,10 @@ Falls Home Assistant oder der Planer nicht erreichbar ist, startet kein neuer La
 4. Automation einmal manuell ausführen.
 5. Prüfen, ob im Planer `cycles_completed_today` um 1 steigt.
 
-## 10. Fehlersuche
+## 9. Fehlersuche
 
 - Sensor bleibt `unavailable`: `NAS-IP` aus der HA-VM heraus prüfen.
 - Steckdose schaltet nicht: Entity-ID kontrollieren.
 - Lauf wird nicht verbucht: `rest_command` URL und Logs prüfen.
 - Matter-Gerät lässt sich nicht hinzufügen: Gerät aus Apple Home per Multi-Admin teilen und Home Assistant Companion App verwenden.
+- Automation erscheint nicht im GUI: prüfen, ob `automation: !include automations.yaml` in `configuration.yaml` steht und die Automation in `/config/automations.yaml` mit `- id:` beginnt.

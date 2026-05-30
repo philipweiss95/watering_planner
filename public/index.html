@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Terrassen-Bewässerungsplaner</title>
-    <link rel="stylesheet" href="/styles.css?v=20260529-4">
+    <link rel="stylesheet" href="/styles.css?v=20260529-6">
   </head>
   <body>
     <header class="topbar">
@@ -81,6 +81,17 @@
             <strong>Wird geladen</strong>
             <span>Wetter und Tageszyklen werden zusammengefasst.</span>
           </div>
+        </section>
+
+        <section class="panel watering-log-panel wide-panel">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Protokoll</p>
+              <h2>Bewässerungsvorgänge</h2>
+            </div>
+            <button class="secondary small-button" id="refreshLogButton" type="button">Aktualisieren</button>
+          </div>
+          <div class="watering-log" id="wateringLog"></div>
         </section>
       </div>
 
@@ -223,6 +234,6 @@
       </div>
     </main>
 
-    <script src="/app.js?v=20260529-4"></script>
+    <script src="/app.js?v=20260529-6"></script>
   </body>
 </html>

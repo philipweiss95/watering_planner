@@ -1,11 +1,11 @@
 services:
   watering-planner:
     build: .
-    image: watering-planner:latest
+    image: watering-planner:${APP_VERSION:-20260529-ui6}
     container_name: watering-planner
     restart: unless-stopped
     init: true
-    user: "${PUID:-1000}:${PGID:-1000}"
+    user: "${PUID:-0}:${PGID:-0}"
     environment:
       HOST: 0.0.0.0
       PORT: 8080
