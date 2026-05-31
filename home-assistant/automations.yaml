@@ -1,0 +1,55 @@
+# Replace switch.smart_plug_mini if Home Assistant assigned another entity ID.
+- id: bewaesserung_tagesfenster
+  alias: Bewaesserung - Tagesfenster
+  description: Prueft tagsueber mehrere Fenster und startet pro Fenster hoechstens einen Pumpzyklus.
+  mode: single
+
+  trigger:
+    - platform: time
+      at: "07:00:00"
+    - platform: time
+      at: "10:00:00"
+    - platform: time
+      at: "11:00:00"
+    - platform: time
+      at: "14:00:00"
+    - platform: time
+      at: "15:00:00"
+    - platform: time
+      at: "16:00:00"
+    - platform: time
+      at: "17:00:00"
+    - platform: time
+      at: "19:00:00"
+
+  action:
+    - service: homeassistant.update_entity
+      target:
+        entity_id: sensor.bewaesserung_planner
+
+    - delay:
+        seconds: 2
+
+    - condition: template
+      value_template: >
+        {{ states('sensor.bewaesserung_planner') in ['True', 'true', 'on'] }}
+
+    - service: switch.turn_on
+      target:
+        entity_id: switch.smart_plug_mini
+
+    - delay:
+        seconds: 120
+
+    - service: switch.turn_off
+      target:
+        entity_id: switch.smart_plug_mini
+
+    - service: rest_command.bewaesserung_mark_run
+
+    - delay:
+        seconds: 2
+
+    - service: homeassistant.update_entity
+      target:
+        entity_id: sensor.bewaesserung_planner

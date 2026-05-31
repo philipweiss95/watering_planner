@@ -104,39 +104,7 @@ Diese Entity-ID brauchst du später in der Automation.
 
 ## 4. `configuration.yaml` vorbereiten
 
-In Home Assistant `configuration.yaml` ergänzen. `NAS-IP` durch die IP der Synology ersetzen, zum Beispiel `192.168.178.116`.
-
-```yaml
-sensor:
-  - platform: rest
-    name: Bewaesserung Planner
-    unique_id: bewaesserung_planner
-    resource: "http://NAS-IP:8080/api/homekit/check?auto=true&slot=morning"
-    method: GET
-    scan_interval: 900
-    timeout: 10
-    value_template: "{{ value_json.run_now }}"
-    json_attributes:
-      - run_now
-      - should_run
-      - reason
-      - recommended_cycles_today
-      - cycles_completed_today
-      - remaining_cycles_today
-      - pump
-      - tank
-      - automation
-
-rest_command:
-  bewaesserung_mark_run:
-    url: "http://NAS-IP:8080/api/homekit/mark-run"
-    method: POST
-    headers:
-      Content-Type: "application/json"
-    payload: '{"auto_weather": true, "slot": "morning"}'
-
-automation: !include automations.yaml
-```
+Die fertige Vorlage liegt unter [`home-assistant/configuration.yaml`](../home-assistant/configuration.yaml). Nach `/config/configuration.yaml` kopieren oder die enthaltenen Abschnitte in eine vorhandene Datei übernehmen. `NAS-IP` durch die IP der Synology ersetzen, zum Beispiel `192.168.178.116`.
 
 Wichtig:
 
@@ -150,79 +118,20 @@ Nach dem Neustart gibt es den Sensor:
 sensor.bewaesserung_planner
 ```
 
-Der Sensor steht auf `True`, wenn ein Pumpenlauf ansteht.
+Der Sensor steht im aktiven Zeitfenster auf `True`, wenn ein Pumpenlauf ansteht. Zwischen den Zeitfenstern ist `False` normal, auch wenn für den Tag noch Zyklen offen sind.
 
 ## 5. `automations.yaml` anlegen
 
-Die Datei liegt unter:
+Die fertige Vorlage liegt unter [`home-assistant/automations.yaml`](../home-assistant/automations.yaml). Nach Home Assistant kopieren:
 
 ```text
 /config/automations.yaml
 ```
 
 Diese vollständige Automation nutzt die Meross-Steckdose `switch.smart_plug_mini`, schaltet sie pro Lauf 120 Sekunden ein und folgt der Entscheidung `run_now` aus dem Planer. Der Planer verteilt offene Zyklen über die Tagesfenster und zieht Läufe vor, wenn die verbleibenden Fenster knapp werden. Um 19 Uhr läuft nur noch ein Notfallzyklus, wenn der Planer `run_now` meldet.
+Falls die Steckdose in Home Assistant eine andere Entity-ID erhalten hat, `switch.smart_plug_mini` in der Vorlage ersetzen.
 
-```yaml
-- id: bewaesserung_tagesfenster
-  alias: Bewaesserung - Tagesfenster
-  description: Prüft tagsüber mehrere Fenster und startet pro Fenster höchstens einen Pumpzyklus.
-  mode: single
-
-  trigger:
-    - platform: time
-      at: "07:00:00"
-    - platform: time
-      at: "10:00:00"
-    - platform: time
-      at: "11:00:00"
-    - platform: time
-      at: "14:00:00"
-    - platform: time
-      at: "15:00:00"
-    - platform: time
-      at: "16:00:00"
-    - platform: time
-      at: "17:00:00"
-    - platform: time
-      at: "19:00:00"
-
-  condition:
-    - condition: template
-      value_template: >
-        {{ states('sensor.bewaesserung_planner') in ['True', 'true', 'on'] }}
-
-  action:
-    - service: homeassistant.update_entity
-      target:
-        entity_id: sensor.bewaesserung_planner
-
-    - delay:
-        seconds: 2
-
-    - condition: template
-      value_template: >
-        {{ states('sensor.bewaesserung_planner') in ['True', 'true', 'on'] }}
-
-    - service: switch.turn_on
-      target:
-        entity_id: switch.smart_plug_mini
-
-    - delay:
-        seconds: 120
-
-    - service: switch.turn_off
-      target:
-        entity_id: switch.smart_plug_mini
-
-    - service: rest_command.bewaesserung_mark_run
-
-    - delay:
-        seconds: 2
-
-    - service: homeassistant.update_entity
-      target:
-        entity_id: sensor.bewaesserung_planner
-```
+Die Sensoraktualisierung muss vor der Bedingung stehen. Der zuvor gespeicherte Sensorzustand stammt sonst möglicherweise noch aus der Zeit zwischen zwei Fenstern und ist dort absichtlich `False`.
 
 Der Planer verhindert Überbewässerung, weil nach jedem Lauf `remaining_cycles_today` sinkt.
 Wenn sich Wetterdaten im Tagesverlauf verschärfen und dadurch mehr offene Zyklen entstehen, setzt der Planer `run_now` in den verbleibenden Zeitfenstern früher auf `true`. Home Assistant muss dadurch keine eigene Verteilungslogik kennen.

@@ -175,7 +175,12 @@ CONNECTION_DESIGN = {
 
 # The raw ET0/canopy estimate models open-surface evapotranspiration. The real
 # terrace drip setup needs a much smaller calibrated fraction per day.
-WATER_MODEL_CALIBRATION = 0.03
+WATER_MODEL_CALIBRATION = 0.06
+LEGACY_WATER_MODEL_CALIBRATION = 0.04
+MIN_WATER_MODEL_CALIBRATION_PERCENT = 0.5
+MAX_WATER_MODEL_CALIBRATION_PERCENT = 20.0
+MIN_WATERING_AMOUNT_PERCENT = 25.0
+MAX_WATERING_AMOUNT_PERCENT = 300.0
 
 SEASONAL_WATER_CURVES = {
     "warm_annual": [(1, 0.22), (80, 0.25), (130, 0.42), (172, 0.78), (220, 1.0), (280, 0.62), (335, 0.28), (366, 0.22)],
@@ -385,6 +390,60 @@ def delete_setting(key: str) -> None:
             conn.execute("DELETE FROM app_settings WHERE key = ?", (key,))
         except sqlite3.OperationalError:
             pass
+
+
+def water_model_calibration() -> float:
+    amount_percent = saved_watering_amount_percent()
+    if amount_percent is not None:
+        return WATER_MODEL_CALIBRATION * amount_percent / 100
+    try:
+        calibration = float(get_setting("water_model_calibration", str(WATER_MODEL_CALIBRATION)))
+    except ValueError:
+        return WATER_MODEL_CALIBRATION
+    if math.isclose(calibration, LEGACY_WATER_MODEL_CALIBRATION):
+        return WATER_MODEL_CALIBRATION
+    if not MIN_WATER_MODEL_CALIBRATION_PERCENT / 100 <= calibration <= MAX_WATER_MODEL_CALIBRATION_PERCENT / 100:
+        return WATER_MODEL_CALIBRATION
+    return calibration
+
+
+def save_water_model_calibration_percent(value: object) -> None:
+    calibration_percent = float(value)
+    if not MIN_WATER_MODEL_CALIBRATION_PERCENT <= calibration_percent <= MAX_WATER_MODEL_CALIBRATION_PERCENT:
+        raise ValueError(
+            f"Wasser-Skalierung muss zwischen {MIN_WATER_MODEL_CALIBRATION_PERCENT:g} und "
+            f"{MAX_WATER_MODEL_CALIBRATION_PERCENT:g} Prozent liegen"
+        )
+    delete_setting("watering_amount_percent")
+    set_setting("water_model_calibration", str(calibration_percent / 100))
+
+
+def saved_watering_amount_percent() -> float | None:
+    try:
+        amount_percent = float(get_setting("watering_amount_percent"))
+    except ValueError:
+        return None
+    if not MIN_WATERING_AMOUNT_PERCENT <= amount_percent <= MAX_WATERING_AMOUNT_PERCENT:
+        return None
+    return amount_percent
+
+
+def watering_amount_percent() -> float:
+    amount_percent = saved_watering_amount_percent()
+    if amount_percent is not None:
+        return amount_percent
+    return water_model_calibration() / WATER_MODEL_CALIBRATION * 100
+
+
+def save_watering_amount_percent(value: object) -> None:
+    amount_percent = float(value)
+    if not MIN_WATERING_AMOUNT_PERCENT <= amount_percent <= MAX_WATERING_AMOUNT_PERCENT:
+        raise ValueError(
+            f"Gießmenge muss zwischen {MIN_WATERING_AMOUNT_PERCENT:g} und "
+            f"{MAX_WATERING_AMOUNT_PERCENT:g} Prozent liegen"
+        )
+    delete_setting("water_model_calibration")
+    set_setting("watering_amount_percent", str(amount_percent))
 
 
 def ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
@@ -692,6 +751,9 @@ def get_state() -> dict:
         "walls": walls,
         "catalog": catalog,
         "plants": plants,
+        "settings": {
+            "watering_amount_percent": round(watering_amount_percent(), 1),
+        },
         "cycles_completed_today": completed_cycles_today(),
     }
 
@@ -880,6 +942,7 @@ def plant_water_need_ml(
     rain_mm_effective: float,
     temperature_c: float,
     wind_factor: float,
+    calibration_factor: float | None = None,
 ) -> dict:
     canopy_area = plant_canopy_area_m2(plant)
     season = seasonal_water_factor(plant)
@@ -914,11 +977,12 @@ def plant_water_need_ml(
     rain_capture_area = pot_surface_area_m2(float(plant["pot_liters"])) + canopy_area * 0.18
     rain_credit_ml = rain_mm_effective * rain_capture_area * 1000
     raw_daily_need_ml = max(0, irrigation_need_ml - rain_credit_ml)
-    daily_need_ml = raw_daily_need_ml * WATER_MODEL_CALIBRATION * season["factor"]
+    calibration_factor = calibration_factor if calibration_factor is not None else water_model_calibration()
+    daily_need_ml = raw_daily_need_ml * calibration_factor * season["factor"]
     return {
         "daily_need_ml": daily_need_ml,
         "raw_daily_need_ml": raw_daily_need_ml,
-        "calibration_factor": WATER_MODEL_CALIBRATION,
+        "calibration_factor": calibration_factor,
         "seasonal_factor": season["factor"],
         "seasonal_profile": season["profile"],
         "seasonal_day_of_year": season["day_of_year"],
@@ -1489,6 +1553,7 @@ def calculate_plant_results(
     wind_factor = wind_exposure_factor(wind_kmh, walls)
     orientation_multiplier = orientation_exposure_factor(orientation_deg)
     rain_credit_mm = rain_credit_factor(rain_mm, orientation_deg, walls)
+    calibration_factor = water_model_calibration()
 
     plant_results = []
     total_need_ml = 0
@@ -1506,6 +1571,7 @@ def calculate_plant_results(
             rain_credit_mm,
             temperature_c,
             wind_factor,
+            calibration_factor,
         )
         daily_need = water_need["daily_need_ml"]
         scheduled_need = daily_need * slot_multiplier
@@ -1882,12 +1948,9 @@ def evaluate(
     hottest_sensitive_need = max((p["need_ml"] for p in plant_results), default=0)
     rain_threshold = round(clamp(2.2 + (temperature_c - 22) * 0.18 + hottest_sensitive_need / 1200, 0.8, 8.0), 1)
     temp_threshold = 16 if rain_mm < 1 else 22
-    should_run = (
-        bool(plants)
-        and remaining_cycles > 0
-        and rain_mm < rain_threshold
-        and temperature_c >= temp_threshold
-    )
+    # Plant demand already includes the weather credit. A remaining cycle must
+    # not be vetoed again by coarse rain or temperature thresholds.
+    should_run = bool(plants) and remaining_cycles > 0
 
     if plants and balcony["tank_current_ml"] < total_delivered_per_run:
         should_run = False
@@ -1899,11 +1962,9 @@ def evaluate(
     elif remaining_cycles == 0 and recommended_cycles > 0:
         reason = "Alle empfohlenen Zyklen für heute sind bereits verbucht"
     elif should_run:
-        reason = f"Wasserbedarf {round(total_need_ml)} ml, Regen unter Schwelle"
-    elif rain_mm >= rain_threshold:
-        reason = f"Erwarteter Regen {rain_mm:g} mm deckt genug Bedarf"
+        reason = f"Wasserbedarf {round(total_need_ml)} ml nach Wetteranrechnung"
     else:
-        reason = f"Temperatur {temperature_c:g} C unter Schwelle {temp_threshold:g} C"
+        reason = "Heute ist kein automatischer Lauf nötig"
 
     automation = automation_status(
         should_run,
@@ -2125,6 +2186,22 @@ def save_balcony(payload: dict) -> None:
             raise KeyError(f"{key} fehlt")
 
     orientation_deg = float(payload["orientation_deg"]) % 360
+    amount_percent = payload.get("watering_amount_percent")
+    calibration_percent = payload.get("water_model_calibration_percent")
+    if amount_percent is not None:
+        amount_percent = float(amount_percent)
+        if not MIN_WATERING_AMOUNT_PERCENT <= amount_percent <= MAX_WATERING_AMOUNT_PERCENT:
+            raise ValueError(
+                f"Gießmenge muss zwischen {MIN_WATERING_AMOUNT_PERCENT:g} und "
+                f"{MAX_WATERING_AMOUNT_PERCENT:g} Prozent liegen"
+            )
+    if calibration_percent is not None:
+        calibration_percent = float(calibration_percent)
+        if not MIN_WATER_MODEL_CALIBRATION_PERCENT <= calibration_percent <= MAX_WATER_MODEL_CALIBRATION_PERCENT:
+            raise ValueError(
+                f"Wasser-Skalierung muss zwischen {MIN_WATER_MODEL_CALIBRATION_PERCENT:g} und "
+                f"{MAX_WATER_MODEL_CALIBRATION_PERCENT:g} Prozent liegen"
+            )
     with connect() as conn:
         conn.execute(
             """
@@ -2163,6 +2240,10 @@ def save_balcony(payload: dict) -> None:
                 """,
                 (wall["side"], float(wall["height_m"])),
             )
+    if amount_percent is not None:
+        save_watering_amount_percent(amount_percent)
+    elif calibration_percent is not None:
+        save_water_model_calibration_percent(calibration_percent)
 
 
 def add_plant(payload: dict) -> int:

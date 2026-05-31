@@ -1,0 +1,31 @@
+# Replace NAS-IP with the address of the Synology running the planner.
+# Merge these top-level sections into an existing Home Assistant configuration.
+sensor:
+  - platform: rest
+    name: Bewaesserung Planner
+    unique_id: bewaesserung_planner
+    resource: "http://192.168.178.116:8080/api/homekit/check?auto=true&slot=morning"
+    method: GET
+    scan_interval: 900
+    timeout: 10
+    value_template: "{{ value_json.run_now }}"
+    json_attributes:
+      - run_now
+      - should_run
+      - reason
+      - recommended_cycles_today
+      - cycles_completed_today
+      - remaining_cycles_today
+      - pump
+      - tank
+      - automation
+
+rest_command:
+  bewaesserung_mark_run:
+    url: "http://192.168.178.116:8080/api/homekit/mark-run"
+    method: POST
+    headers:
+      Content-Type: "application/json"
+    payload: '{"auto_weather": true, "slot": "morning"}'
+
+automation: !include automations.yaml

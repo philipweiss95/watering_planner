@@ -1,6 +1,9 @@
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
+from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 import server
 
@@ -45,6 +48,19 @@ class WateringPlannerTests(unittest.TestCase):
         )
         self.assertLessEqual(result["recommended_cycles_today"], 10)
 
+    def test_weather_adjusted_remaining_cycles_are_not_blocked_by_rain_threshold(self):
+        with patch(
+            "server.local_now",
+            return_value=datetime(2026, 5, 31, 19, 0, tzinfo=ZoneInfo("Europe/Berlin")),
+        ):
+            result = server.evaluate(temperature_c=26, rain_mm=3.5, wind_kmh=8, sunshine_hours=7)
+
+        self.assertGreater(result["remaining_cycles_today"], 0)
+        self.assertGreaterEqual(result["inputs"]["rain_mm"], result["thresholds"]["rain_mm"])
+        self.assertTrue(result["should_run"])
+        self.assertTrue(result["run_now"])
+        self.assertIn("nach Wetteranrechnung", result["reason"])
+
     def test_mark_run_counts_cycle_and_reduces_tank(self):
         before = server.evaluate(temperature_c=26, rain_mm=0.5)
         server.mark_run(
@@ -61,6 +77,59 @@ class WateringPlannerTests(unittest.TestCase):
             after["tank"]["current_ml"],
             before["tank"]["current_ml"] - before["pump"]["delivered_per_cycle_ml"],
         )
+
+    def test_water_model_calibration_defaults_to_six_percent(self):
+        state = server.get_state()
+        result = server.evaluate(temperature_c=26, rain_mm=0, wind_kmh=8, sunshine_hours=7)
+
+        self.assertEqual(state["settings"]["watering_amount_percent"], 100)
+        self.assertEqual(result["plants"][0]["water_model"]["calibration_factor"], 0.06)
+
+    def test_new_standard_increases_sunny_day_need_by_half(self):
+        server.save_watering_amount_percent(100 * server.LEGACY_WATER_MODEL_CALIBRATION / server.WATER_MODEL_CALIBRATION)
+        legacy = server.evaluate(temperature_c=25, rain_mm=0, wind_kmh=0, sunshine_hours=7)
+        server.delete_setting("watering_amount_percent")
+        adjusted = server.evaluate(temperature_c=25, rain_mm=0, wind_kmh=0, sunshine_hours=7)
+
+        legacy_need = sum(plant["daily_need_ml"] for plant in legacy["plants"])
+        adjusted_need = sum(plant["daily_need_ml"] for plant in adjusted["plants"])
+        self.assertAlmostEqual(adjusted_need / legacy_need, 1.5, delta=0.05)
+
+    def test_legacy_saved_default_moves_to_new_standard(self):
+        server.set_setting("water_model_calibration", "0.04")
+
+        self.assertEqual(server.water_model_calibration(), 0.06)
+        self.assertEqual(server.watering_amount_percent(), 100)
+
+    def test_legacy_high_value_becomes_new_standard_without_changing_amount(self):
+        server.set_setting("water_model_calibration", "0.06")
+
+        self.assertEqual(server.water_model_calibration(), 0.06)
+        self.assertEqual(server.watering_amount_percent(), 100)
+
+    def test_balcony_save_persists_water_model_calibration(self):
+        state = server.get_state()
+        payload = {
+            **state["balcony"],
+            "outlets": state["outlets"],
+            "walls": state["walls"],
+            "watering_amount_percent": 125,
+        }
+        before = server.evaluate(temperature_c=26, rain_mm=0, wind_kmh=8, sunshine_hours=7)
+
+        server.save_balcony(payload)
+
+        after = server.evaluate(temperature_c=26, rain_mm=0, wind_kmh=8, sunshine_hours=7)
+        self.assertEqual(server.get_state()["settings"]["watering_amount_percent"], 125)
+        self.assertEqual(after["plants"][0]["water_model"]["calibration_factor"], 0.075)
+        self.assertGreater(
+            sum(plant["need_ml"] for plant in after["plants"]),
+            sum(plant["need_ml"] for plant in before["plants"]),
+        )
+
+    def test_watering_amount_rejects_extreme_values(self):
+        with self.assertRaises(ValueError):
+            server.save_watering_amount_percent(500)
 
     def test_watering_events_are_listed_newest_first(self):
         server.mark_run(delivered_ml=120, temperature_c=24, rain_mm=0.2)

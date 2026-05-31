@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Terrassen-Bewässerungsplaner</title>
-    <link rel="stylesheet" href="/styles.css?v=20260529-6">
+    <link rel="stylesheet" href="/styles.css?v=20260531-8">
   </head>
   <body>
     <header class="topbar">
@@ -96,15 +96,147 @@
       </div>
 
       <div class="view config-view" data-view="config">
+        <section class="panel config-intro-panel wide-panel">
+          <p class="eyebrow">Konfiguration</p>
+          <h2>Einstellungen für deine Bewässerung</h2>
+          <p class="section-copy">Passe zuerst die Gießmenge und die Grunddaten an. Der Planer berechnet daraus den täglichen Bedarf und zeigt dir darunter, ob die Verschlauchung zu deinen Pflanzen passt.</p>
+        </section>
+
         <div class="config-summary wide-panel" id="configSummary"></div>
+
+        <section class="panel config-setup-panel wide-panel">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Grundlagen</p>
+              <h2>Bewässerung einstellen</h2>
+            </div>
+          </div>
+          <form id="balconyForm" class="settings-form">
+            <fieldset class="settings-group watering-settings">
+              <div class="settings-group-heading">
+                <div>
+                  <p class="eyebrow">Feinabstimmung</p>
+                  <h3>Wie viel soll gegossen werden?</h3>
+                </div>
+                <strong class="setting-value" id="wateringAmountLabel">100 %</strong>
+              </div>
+              <p class="field-help">Mit <code>100 %</code> nutzt der Planer die empfohlene Standardmenge. Wenn die Erde regelmäßig zu trocken bleibt, erhöhe den Wert schrittweise, zum Beispiel auf <code>120 %</code>.</p>
+              <label class="range-field">
+                Gießmenge im Vergleich zum Standard
+                <input type="range" name="watering_amount_percent" min="25" max="300" step="5" value="100">
+              </label>
+              <div class="range-scale" aria-hidden="true">
+                <span>Weniger</span>
+                <span>Standard</span>
+                <span>Mehr</span>
+              </div>
+              <div class="preset-row" aria-label="Schnellauswahl Gießmenge">
+                <button class="preset-button" data-watering-preset="80" type="button">Etwas weniger</button>
+                <button class="preset-button" data-watering-preset="100" type="button">Standard</button>
+                <button class="preset-button" data-watering-preset="120" type="button">Etwas mehr</button>
+                <button class="preset-button" data-watering-preset="150" type="button">Deutlich mehr</button>
+              </div>
+              <div class="watering-preview" id="wateringAmountPreview"></div>
+            </fieldset>
+
+            <fieldset class="settings-group">
+              <div class="settings-group-heading">
+                <div>
+                  <p class="eyebrow">Balkon</p>
+                  <h3>Fläche und Ausrichtung</h3>
+                </div>
+              </div>
+              <p class="field-help">Die Ausrichtung und Maße beeinflussen Sonne, Schatten und Verdunstung.</p>
+              <div class="settings-grid">
+                <label>
+                  Himmelsrichtung in Grad
+                  <input type="number" name="orientation_deg" min="0" max="359" step="1">
+                  <span class="field-help"><code>0°</code> Nord · <code>90°</code> Ost · <code>180°</code> Süd · <code>270°</code> West</span>
+                </label>
+                <label>
+                  Breite in Metern
+                  <input type="number" name="width_m" min="0.4" step="0.1">
+                </label>
+                <label>
+                  Tiefe in Metern
+                  <input type="number" name="depth_m" min="0.4" step="0.1">
+                </label>
+              </div>
+              <details class="advanced-settings">
+                <summary>Standort für Wetterdaten</summary>
+                <p class="field-help">Der Standort wird nur für Wetterdaten und Sonnenstand benötigt. Mit der Ortung kannst du beide Werte automatisch eintragen.</p>
+                <button id="locateButton" class="secondary small-button" type="button">Standort automatisch ermitteln</button>
+                <div class="settings-grid">
+                  <label>
+                    Breitengrad
+                    <input type="number" name="latitude" step="0.000001">
+                  </label>
+                  <label>
+                    Längengrad
+                    <input type="number" name="longitude" step="0.000001">
+                  </label>
+                </div>
+              </details>
+              <input type="hidden" name="timezone_name" value="Europe/Berlin">
+            </fieldset>
+
+            <fieldset class="settings-group">
+              <div class="settings-group-heading">
+                <div>
+                  <p class="eyebrow">Wasservorrat</p>
+                  <h3>Tank</h3>
+                </div>
+              </div>
+              <p class="field-help">Der Tankstand verhindert Pumpenläufe, wenn nicht mehr genug Wasser für einen vollständigen Zyklus vorhanden ist.</p>
+              <div class="settings-grid">
+                <label>
+                  Tankgröße in Litern
+                  <input type="number" name="tank_capacity_liters" min="0" step="0.1">
+                </label>
+                <label>
+                  Aktueller Tankstand in Litern
+                  <input type="number" name="tank_current_liters" min="0" step="0.1">
+                </label>
+              </div>
+            </fieldset>
+
+            <fieldset class="settings-group">
+              <div class="settings-group-heading">
+                <div>
+                  <p class="eyebrow">Beschattung</p>
+                  <h3>Wände und Brüstung</h3>
+                </div>
+              </div>
+              <p class="field-help">Hohe Begrenzungen schützen vor Wind und werfen Schatten. Trage je Seite die Höhe in Metern ein. Bei einer offenen Seite genügt <code>0</code>.</p>
+              <div class="wall-editor" id="wallEditor"></div>
+            </fieldset>
+
+            <fieldset class="settings-group">
+              <div class="settings-group-heading">
+                <div>
+                  <p class="eyebrow">Pumpe</p>
+                  <h3>Ausgänge und Wassermenge</h3>
+                </div>
+              </div>
+              <p class="field-help">Jeder Pumpenausgang liefert pro Zyklus eine feste Menge. Passe diese Werte nur an, wenn deine Hardware anders konfiguriert ist.</p>
+              <div class="outlet-editor" id="outletEditor"></div>
+            </fieldset>
+
+            <div class="settings-save-bar">
+              <p class="field-help">Änderungen wirken nach dem Speichern sofort auf Bedarf, Pumpenläufe und Anschlussvorschläge.</p>
+              <button type="submit" class="primary">Einstellungen speichern</button>
+            </div>
+          </form>
+        </section>
 
         <section class="panel config-routing-panel">
           <div class="section-heading">
             <div>
-              <p class="eyebrow">Empfehlung</p>
-              <h2>Verschlauchung</h2>
+              <p class="eyebrow">Anschlüsse</p>
+              <h2>Verschlauchung prüfen</h2>
             </div>
           </div>
+          <p class="section-copy">Hier siehst du, ob die aktuellen Schläuche zur geplanten Gießmenge passen. Änderungen sind nur nötig, wenn eine Pflanze dauerhaft zu viel oder zu wenig Wasser erhält.</p>
           <div class="routing" id="routing"></div>
         </section>
 
@@ -112,9 +244,10 @@
           <div class="section-heading">
             <div>
               <p class="eyebrow">Standorte</p>
-              <h2>Balkonfläche</h2>
+              <h2>Pflanzen platzieren</h2>
             </div>
           </div>
+          <p class="section-copy">Ziehe die Pflanzen an ihre ungefähre Position. So kann der Planer Schatten durch Wände und Brüstung berücksichtigen.</p>
           <div class="balcony-plan" id="balconyPlan"></div>
         </section>
 
@@ -122,9 +255,10 @@
           <div class="section-heading">
             <div>
               <p class="eyebrow">Bestand</p>
-              <h2>Pflanzen bearbeiten</h2>
+              <h2>Meine Pflanzen</h2>
             </div>
           </div>
+          <p class="section-copy">Topfgröße, Pflanzenart und Standort bestimmen den individuellen Wasserbedarf. Technische Anschlussdaten kannst du bei Bedarf direkt an der Pflanze korrigieren.</p>
           <div class="plants" id="plants"></div>
         </section>
 
@@ -135,17 +269,18 @@
               <h2>Pflanze anlegen</h2>
             </div>
           </div>
+          <p class="section-copy">Lege für jeden Topf eine Pflanze an. Den passenden Anschluss schlägt der Planer anschließend automatisch vor.</p>
           <form id="plantForm" class="grid">
             <label>
               Pflanzenart
               <select name="catalog_id" id="catalogSelect"></select>
             </label>
             <label>
-              Name
+              Eigener Name (optional)
               <input name="custom_name" placeholder="z.B. Tomate links">
             </label>
             <label>
-              Größe
+              Wuchsgröße
               <select name="size">
                 <option value="small">Klein</option>
                 <option value="medium" selected>Mittel</option>
@@ -154,11 +289,11 @@
               </select>
             </label>
             <label>
-              Topf Liter
+              Topfvolumen in Litern
               <input type="number" name="pot_liters" min="1" step="1" value="12">
             </label>
             <label>
-              Topfart
+              Topf-Eigenschaften
               <select name="pot_type">
                 <option value="reservoir">Mit Wasserdepot</option>
                 <option value="overflow" selected>Mit Überlaufschutz</option>
@@ -167,50 +302,6 @@
               </select>
             </label>
             <button type="submit" class="primary">Hinzufügen</button>
-          </form>
-        </section>
-
-        <section class="panel config-setup-panel">
-          <div class="section-heading">
-            <div>
-              <p class="eyebrow">Setup</p>
-              <h2>Balkon und Pumpe</h2>
-            </div>
-            <button id="locateButton" class="secondary" type="button">Ortung</button>
-          </div>
-          <form id="balconyForm" class="grid">
-            <label>
-              Ausrichtung in Grad
-              <input type="number" name="orientation_deg" min="0" max="359" step="1">
-            </label>
-            <label>
-              Breite m
-              <input type="number" name="width_m" step="0.1">
-            </label>
-            <label>
-              Tiefe m
-              <input type="number" name="depth_m" step="0.1">
-            </label>
-            <label>
-              Breitengrad
-              <input type="number" name="latitude" step="0.000001">
-            </label>
-            <label>
-              Längengrad
-              <input type="number" name="longitude" step="0.000001">
-            </label>
-            <input type="hidden" name="timezone_name" value="Europe/Berlin">
-            <label>
-              Tank max ml
-              <input type="number" name="tank_capacity_ml" step="100">
-            </label>
-            <label>
-              Tank aktuell ml
-              <input type="number" name="tank_current_ml" step="100">
-            </label>
-            <div class="wall-editor" id="wallEditor"></div>
-            <div class="outlet-editor" id="outletEditor"></div>
-            <button type="submit" class="primary">Speichern</button>
           </form>
         </section>
       </div>
@@ -234,6 +325,6 @@
       </div>
     </main>
 
-    <script src="/app.js?v=20260529-6"></script>
+    <script src="/app.js?v=20260531-8"></script>
   </body>
 </html>

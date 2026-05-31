@@ -57,31 +57,40 @@ function renderState() {
     const field = balconyForm.elements[key];
     if (field) field.value = value;
   }
+  balconyForm.elements.tank_capacity_liters.value = Number(state.balcony.tank_capacity_ml || 0) / 1000;
+  balconyForm.elements.tank_current_liters.value = Number(state.balcony.tank_current_ml || 0) / 1000;
+  balconyForm.elements.watering_amount_percent.value = state.settings?.watering_amount_percent ?? 100;
 
   $("#outletEditor").innerHTML = state.outlets
     .map(
       (outlet) => `
         <div class="outlet-row" data-outlet-id="${outlet.id}">
-          <label>Ausgang <input name="outlet_name_${outlet.id}" value="${outlet.name}"></label>
-          <label>ml pro Lauf <input type="number" name="outlet_ml_${outlet.id}" value="${outlet.ml_per_run}"></label>
+          <label>
+            Bezeichnung
+            <input name="outlet_name_${outlet.id}" value="${outlet.name}">
+          </label>
+          <label>
+            Wasser je Zyklus in ml
+            <input type="number" min="0" step="1" name="outlet_ml_${outlet.id}" value="${outlet.ml_per_run}">
+          </label>
         </div>
       `,
     )
     .join("");
 
   $("#wallEditor").innerHTML = `
-    <div class="subgrid-title">Wände</div>
     ${["north", "east", "south", "west"]
       .map((side) => {
         const wall = state.walls.find((item) => item.side === side) || { height_m: 0 };
         return `
-          <label>${sideLabel(side)}
+          <label>${sideLabel(side)}seite in Metern
             <input type="number" step="0.05" min="0" name="wall_${side}" value="${wall.height_m}">
           </label>
         `;
       })
       .join("")}
   `;
+  updateWateringAmountPreview();
 
   renderShortcuts();
   renderWateringLog();
@@ -121,7 +130,7 @@ function renderPlants() {
               : "Schläuche werden automatisch berechnet";
             const connectionText = assignment?.connection_note || plant.connection_note || "";
             const needText = evaluated
-              ? `Bedarf heute ${evaluated.need_ml} ml · ET₀ ${evaluated.water_model.reference_et0_mm} mm · Windfaktor ${evaluated.water_model.wind_factor} · Krone ${evaluated.water_model.canopy_area_m2} m²`
+              ? `Berechneter Bedarf heute: ${evaluated.need_ml} ml`
               : "Bedarf wird nach Wetterdaten berechnet";
             return `
               <article class="plant-card">
@@ -136,7 +145,7 @@ function renderPlants() {
                   </div>
                 </div>
                 ${renderConnectionCompare(plant, assignment)}
-                <p class="meta">${outletText} · Position ${Math.round(plant.pos_x * 100)}/${Math.round(plant.pos_y * 100)}</p>
+                <p class="meta">${outletText}</p>
                 ${connectionText ? `<p class="meta ${connectionClass(assignment)}">${connectionText}</p>` : ""}
                 <p class="meta">${needText}</p>
               </article>
@@ -249,7 +258,7 @@ function renderPlantEditForm(plant) {
             <input name="custom_name" value="${escapeAttribute(plant.custom_name)}">
           </label>
           <label>
-            Größe
+            Wuchsgröße
             <select name="size">
               ${[
                 ["small", "Klein"],
@@ -262,11 +271,11 @@ function renderPlantEditForm(plant) {
             </select>
           </label>
           <label>
-            Topf Liter
+            Topfvolumen in Litern
             <input type="number" name="pot_liters" min="1" step="1" value="${plant.pot_liters}">
           </label>
           <label>
-            Topfart
+            Topf-Eigenschaften
             <select name="pot_type">
               ${[
                 ["reservoir", "Mit Wasserdepot"],
@@ -279,17 +288,17 @@ function renderPlantEditForm(plant) {
             </select>
           </label>
           <label>
-            Ausgang
+            Bestehender Pumpenausgang
             <select name="outlet_id">
               ${state.outlets.map((outlet) => `<option value="${outlet.id}" ${outlet.id === plant.outlet_id ? "selected" : ""}>${outlet.name} · ${outlet.ml_per_run} ml</option>`).join("")}
             </select>
           </label>
           <label>
-            Schlauch
+            Schlauchnummern
             <input name="hose_numbers" value="${escapeAttribute(plant.hose_numbers || "")}" placeholder="z.B. 12, 5, 16">
           </label>
           <label>
-            ml pro Pumpzyklus
+            Aktuelle Wassermenge je Zyklus in ml
             <input type="number" name="target_ml_per_cycle" min="0" step="1" value="${plant.target_ml_per_cycle ?? ""}">
           </label>
         </div>
@@ -428,6 +437,7 @@ function renderEvaluation(result) {
     ${renderActionSummary(urgentActions, changeActions)}
   `;
   bindAutomationControls();
+  updateWateringAmountPreview();
   renderWateringLog();
   renderPlants();
 
@@ -482,7 +492,7 @@ function bindAutomationControls() {
 function renderConfigSummary(result, urgentActions, changeActions) {
   const connectionsUsed = result.routing.reduce((sum, route) => sum + Number(route.connections_used || 0), 0);
   const connectionsLimit = result.routing.reduce((sum, route) => sum + Number(route.connections_limit || 0), 0);
-  const currentMl = result.pump.delivered_per_cycle_ml;
+  const wateringAmount = state.settings?.watering_amount_percent ?? 100;
   const statusText = urgentActions.length
     ? `${urgentActions.length} dringend`
     : changeActions.length
@@ -506,8 +516,8 @@ function renderConfigSummary(result, urgentActions, changeActions) {
     <article class="config-card water">
       ${icon("drop")}
       <div>
-        <span>Je Zyklus</span>
-        <strong>${currentMl} ml</strong>
+        <span>Gießmenge</span>
+        <strong>${formatPercent(wateringAmount)} %</strong>
       </div>
     </article>
     <article class="config-card action ${urgentActions.length ? "urgent" : changeActions.length ? "warn" : "ok"}">
@@ -525,11 +535,8 @@ function renderDashboardCards(result, urgentActions, changeActions) {
   const tankPercent = Math.round((result.tank.current_ml / Math.max(result.tank.capacity_ml, 1)) * 100);
   const remainingLiters = (result.pump.delivered_if_remaining_ml / 1000).toFixed(1);
   const perCycleLiters = (result.pump.delivered_per_cycle_ml / 1000).toFixed(2);
-  const calibrationFactor = result.plants[0]?.water_model?.calibration_factor;
-  const seasonalFactor = result.plants[0]?.water_model?.seasonal_factor;
-  const calibrationText = calibrationFactor && seasonalFactor
-    ? `${Math.round(calibrationFactor * 100)}% Basis · ${Math.round(seasonalFactor * 100)}% Saison`
-    : "Kalibriertes Modell";
+  const wateringAmount = state.settings?.watering_amount_percent ?? 100;
+  const calibrationText = `${formatPercent(wateringAmount)}% der Standardmenge`;
   const automation = result.automation || {};
   return `
     <article class="metric-card primary-metric ${result.should_run ? "go" : "stop"}">
@@ -589,6 +596,44 @@ function renderDashboardCards(result, urgentActions, changeActions) {
       </div>
     </article>
   `;
+}
+
+function formatPercent(value) {
+  return Number(value.toFixed(1)).toLocaleString("de-DE");
+}
+
+function updateWateringAmountPreview() {
+  const form = $("#balconyForm");
+  const preview = $("#wateringAmountPreview");
+  const label = $("#wateringAmountLabel");
+  if (!form || !preview || !label) return;
+
+  const amount = Number(form.elements.watering_amount_percent.value || 100);
+  const savedAmount = Number(state?.settings?.watering_amount_percent || 100);
+  const standardDailyMl = latestEvaluation
+    ? latestEvaluation.plants.reduce((sum, plant) => sum + Number(plant.daily_need_ml || 0), 0) / savedAmount * 100
+    : 0;
+  const projectedDailyMl = standardDailyMl * amount / 100;
+  const relativeText = amount === 100
+    ? "Entspricht der empfohlenen Standardmenge"
+    : `${formatPercent(Math.abs(amount - 100))} % ${amount > 100 ? "mehr" : "weniger"} als Standard`;
+  const litersText = latestEvaluation
+    ? `Bei aktuell geladenem Wetter sind das ungefähr ${formatLiters(projectedDailyMl)} statt ${formatLiters(standardDailyMl)} Pflanzenbedarf pro Tag.`
+    : "Nach dem Laden der Wetterdaten siehst du hier eine Vorschau in Litern.";
+
+  label.textContent = `${formatPercent(amount)} %`;
+  preview.innerHTML = `
+    <strong>${relativeText}</strong>
+    <span>${litersText}</span>
+    <span>Pumpenläufe erfolgen in ganzen Zyklen. Die genaue Anzahl wird nach dem Speichern neu berechnet.</span>
+  `;
+  document.querySelectorAll("[data-watering-preset]").forEach((button) => {
+    button.classList.toggle("active", Number(button.dataset.wateringPreset) === amount);
+  });
+}
+
+function formatLiters(ml) {
+  return `${Number(ml / 1000).toLocaleString("de-DE", { minimumFractionDigits: 1, maximumFractionDigits: 1 })} l`;
 }
 
 function icon(name) {
@@ -759,14 +804,7 @@ $("#plantForm").addEventListener("submit", async (event) => {
       method: "POST",
       body: JSON.stringify(payload),
     });
-    state = {
-      balcony: response.balcony,
-      catalog: response.catalog,
-      outlets: response.outlets,
-      walls: response.walls,
-      plants: response.plants,
-      cycles_completed_today: response.cycles_completed_today,
-    };
+    state = response;
     event.currentTarget.reset();
     renderState();
     await evaluateWithPayload(currentManualWeatherPayload());
@@ -785,9 +823,14 @@ $("#balconyForm").addEventListener("submit", async (event) => {
     "orientation_deg",
     "latitude",
     "longitude",
-    "tank_capacity_ml",
-    "tank_current_ml",
+    "tank_capacity_liters",
+    "tank_current_liters",
+    "watering_amount_percent",
   ]);
+  payload.tank_capacity_ml = Math.round(payload.tank_capacity_liters * 1000);
+  payload.tank_current_ml = Math.round(payload.tank_current_liters * 1000);
+  delete payload.tank_capacity_liters;
+  delete payload.tank_current_liters;
   payload.timezone_name = payload.timezone_name || Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/Berlin";
   payload.outlets = state.outlets.map((outlet) => ({
     id: outlet.id,
@@ -811,6 +854,15 @@ $("#balconyForm").addEventListener("submit", async (event) => {
   });
   renderState();
   await evaluateCurrent();
+});
+
+$("#balconyForm").elements.watering_amount_percent.addEventListener("input", updateWateringAmountPreview);
+
+document.querySelectorAll("[data-watering-preset]").forEach((button) => {
+  button.addEventListener("click", () => {
+    $("#balconyForm").elements.watering_amount_percent.value = button.dataset.wateringPreset;
+    updateWateringAmountPreview();
+  });
 });
 
 $("#locateButton").addEventListener("click", () => {

@@ -175,17 +175,17 @@ docker compose up -d --build
 
 Die Datenbank bleibt erhalten, solange der Ordner `data` nicht gelöscht wird.
 
-Im Synology **Container Manager** reicht ein normaler Neustart nicht aus, wenn sich Dateien im Image geändert haben. Ein Neustart verwendet oft weiter das bereits gebaute Image `watering-planner:latest`. Nach Änderungen an `public/index.html`, `public/app.js`, `public/styles.css`, `server.py` oder `Dockerfile` immer:
+Im Synology **Container Manager** reicht ein normaler Neustart nicht aus, wenn sich Dateien im Image geändert haben. Ein Neustart verwendet weiter das bereits gebaute Image. Nach Änderungen an `public/index.html`, `public/app.js`, `public/styles.css`, `server.py` oder `Dockerfile` immer:
 
 1. Projekt stoppen.
 2. Projekt **neu erstellen / neu bauen**.
-3. Falls Container Manager weiter die alte Oberfläche zeigt: altes Image `watering-planner:latest` löschen und das Projekt danach erneut erstellen.
+3. Falls Container Manager weiter die alte Oberfläche zeigt: das alte `watering-planner`-Image löschen und das Projekt danach erneut erstellen.
 4. Im Browser hart neu laden.
 
 Du erkennst die aktuelle Oberfläche daran, dass die ausgelieferte HTML-Datei diese Zeile enthält:
 
 ```html
-<link rel="stylesheet" href="/styles.css?v=20260529-4">
+<link rel="stylesheet" href="/styles.css?v=20260531-8">
 ```
 
 Wenn im Browser oder per `curl http://NAS-IP:8080/` noch eine ältere `styles.css` ohne Versionsparameter oder ohne `app-nav` auftaucht, läuft auf der NAS noch ein altes Image oder ein Container aus einem anderen Projektordner.
@@ -193,33 +193,53 @@ Wenn im Browser oder per `curl http://NAS-IP:8080/` noch eine ältere `styles.cs
 Die Synology-Compose-Datei verwendet deshalb ein versioniertes Image:
 
 ```yaml
-image: watering-planner:20260529-ui4
+image: watering-planner:20260531-ui10
 ```
 
 Wenn nach dem Kopieren der neuen Dateien weiter ein 5964-Byte-HTML ohne `app-nav` ausgeliefert wird, wurde die neue Compose-Datei noch nicht verwendet. In dem Fall im Container Manager:
 
-1. Container `watering-planner` stoppen und löschen.
-2. Image `watering-planner:latest` löschen.
+1. Projekt `watering-planner` stoppen und löschen. Den Projektordner und `data/` behalten.
+2. Das alte `watering-planner`-Image löschen.
 3. Projekt aus dem Ordner mit `compose.synology.yaml` neu erstellen.
 4. Nach dem Start prüfen:
 
 ```bash
 curl http://NAS-IP:8080/ | grep app-nav
-curl http://NAS-IP:8080/ | grep 'styles.css?v=20260529-4'
+curl http://NAS-IP:8080/ | grep 'styles.css?v=20260531-8'
 ```
+
+## Verwaisten Container-Manager-Eintrag reparieren
+
+Wenn Container Manager beim Stoppen `No such container` meldet, zeigt die Oberfläche einen veralteten Eintrag an. Das kann nach dem Neuaufbau eines Projekts passieren: Der alte Container existiert in Docker nicht mehr, wird aber in der Synology-Oberfläche noch angezeigt.
+
+Nicht den einzelnen Container-Eintrag weiterverwenden. Öffne in Container Manager den Bereich **Projekt** und stoppe oder lösche dort das Projekt `watering-planner`. Den Projektordner und insbesondere `data/` nicht löschen.
+
+Falls auch die Projektansicht nicht mehr sauber funktioniert, per SSH neu erstellen:
+
+```bash
+cd /volume1/docker/watering-planner
+sudo docker ps -a --format 'table {{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Image}}'
+sudo docker ps --filter publish=8080 --format 'table {{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Ports}}'
+sudo docker compose -f compose.synology.yaml down --remove-orphans
+sudo docker compose -f compose.synology.yaml up -d --build
+```
+
+Falls der zweite `docker ps`-Befehl noch einen unerwarteten Container an Port `8080` zeigt, stoppe ihn über seine echte ID mit `sudo docker stop CONTAINER-ID` und führe anschließend die beiden `docker compose`-Befehle erneut aus.
+
+Danach Container Manager neu laden. Falls der verwaiste Eintrag weiterhin sichtbar bleibt, Container Manager über das DSM Paket-Zentrum neu starten und das Projekt aus `compose.synology.yaml` erneut öffnen. Das Volume `./data:/app/data` sorgt dafür, dass die SQLite-Datenbank bei diesem Neuaufbau erhalten bleibt.
 
 ## Logs und Status
 
 Logs anzeigen:
 
 ```bash
-docker compose logs -f
+docker compose -f compose.synology.yaml logs -f
 ```
 
 Containerstatus anzeigen:
 
 ```bash
-docker compose ps
+docker compose -f compose.synology.yaml ps
 ```
 
 Healthcheck testen:

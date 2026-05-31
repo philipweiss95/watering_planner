@@ -1,7 +1,7 @@
 services:
   watering-planner:
     build: .
-    image: watering-planner:${APP_VERSION:-20260529-ui6}
+    image: watering-planner:${APP_VERSION:-20260531-ui10}
     container_name: watering-planner
     restart: unless-stopped
     init: true
