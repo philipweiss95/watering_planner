@@ -37,7 +37,7 @@
 
   trigger:
     - platform: webhook
-      webhook_id: REPLACE_WITH_RANDOM_WEBHOOK_ID
+      webhook_id: 45dbcc8d4b31475289af2fd6ecb0eaf9
       allowed_methods:
         - POST
       local_only: false
