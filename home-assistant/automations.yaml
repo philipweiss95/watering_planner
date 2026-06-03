@@ -1,29 +1,20 @@
-# Replace switch.smart_plug_mini if Home Assistant assigned another entity ID.
+# Replace switch.smart_plug_mini in configuration.yaml if Home Assistant
+# assigned another entity ID.
 - id: bewaesserung_tagesfenster
   alias: Bewaesserung - Tagesfenster
-  description: Prueft tagsueber mehrere Fenster und startet pro Fenster hoechstens einen Pumpzyklus.
+  description: Prüft regelmäßig, ob der Planner einen Pumpzyklus in einem Tagesfenster freigibt.
   mode: single
 
   trigger:
-    - platform: time
-      at: "07:00:00"
-    - platform: time
-      at: "10:00:00"
-    - platform: time
-      at: "11:00:00"
-    - platform: time
-      at: "14:00:00"
-    - platform: time
-      at: "15:00:00"
-    - platform: time
-      at: "16:00:00"
-    - platform: time
-      at: "17:00:00"
-    - platform: time
-      at: "19:00:00"
+    - platform: time_pattern
+      minutes: "/15"
 
   action:
-    - service: homeassistant.update_entity
+    - condition: time
+      after: "06:59:00"
+      before: "19:21:00"
+
+    - action: homeassistant.update_entity
       target:
         entity_id: sensor.bewaesserung_planner
 
@@ -34,22 +25,22 @@
       value_template: >
         {{ states('sensor.bewaesserung_planner') in ['True', 'true', 'on'] }}
 
-    - service: switch.turn_on
-      target:
-        entity_id: switch.smart_plug_mini
+    - action: script.bewaesserung_pumpzyklus
 
-    - delay:
-        seconds: 120
+# The random webhook ID must match HOME_ASSISTANT_WEBHOOK_URL in
+# .env.synology on the NAS. Opening the URL in a browser sends GET and does not
+# start the pump.
+- id: bewaesserung_manueller_sofortlauf
+  alias: Bewaesserung - Manueller Sofortlauf
+  description: Startet einen vom Planner angeforderten Pumpzyklus.
+  mode: single
 
-    - service: switch.turn_off
-      target:
-        entity_id: switch.smart_plug_mini
+  trigger:
+    - platform: webhook
+      webhook_id: REPLACE_WITH_RANDOM_WEBHOOK_ID
+      allowed_methods:
+        - POST
+      local_only: false
 
-    - service: rest_command.bewaesserung_mark_run
-
-    - delay:
-        seconds: 2
-
-    - service: homeassistant.update_entity
-      target:
-        entity_id: sensor.bewaesserung_planner
+  action:
+    - action: script.bewaesserung_pumpzyklus

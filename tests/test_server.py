@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from zoneinfo import ZoneInfo
 
 import server
@@ -77,6 +77,33 @@ class WateringPlannerTests(unittest.TestCase):
             after["tank"]["current_ml"],
             before["tank"]["current_ml"] - before["pump"]["delivered_per_cycle_ml"],
         )
+
+    def test_completed_cycles_today_uses_balcony_timezone(self):
+        now = datetime(2026, 6, 3, 0, 30, tzinfo=ZoneInfo("Europe/Berlin"))
+        with server.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO watering_events (ran_at, delivered_ml, temperature_c, rain_mm, source)
+                VALUES (?, ?, ?, ?, ?), (?, ?, ?, ?, ?)
+                """,
+                (
+                    "2026-06-02T21:59:00+00:00",
+                    100,
+                    20,
+                    0,
+                    "test",
+                    "2026-06-02T22:10:00+00:00",
+                    100,
+                    20,
+                    0,
+                    "test",
+                ),
+            )
+
+        with patch("server.local_now", return_value=now):
+            completed = server.completed_cycles_today("Europe/Berlin")
+
+        self.assertEqual(completed, 1)
 
     def test_water_model_calibration_defaults_to_six_percent(self):
         state = server.get_state()
@@ -156,6 +183,29 @@ class WateringPlannerTests(unittest.TestCase):
 
         self.assertIn("/api/homekit/check?auto=true", blueprint["check_url"])
         self.assertEqual(blueprint["mark_run_url"], "https://example.test/api/homekit/mark-run")
+        self.assertEqual(blueprint["manual_run_url"], "https://example.test/api/manual-run")
+
+    def test_manual_run_is_disabled_without_home_assistant_webhook(self):
+        with patch.dict("os.environ", {"HOME_ASSISTANT_WEBHOOK_URL": ""}):
+            result = server.evaluate(temperature_c=26, rain_mm=0, wind_kmh=8, sunshine_hours=7)
+
+        self.assertFalse(result["manual_run"]["available"])
+        self.assertIn("Webhook", result["manual_run"]["reason"])
+
+    def test_manual_run_posts_configured_home_assistant_webhook(self):
+        webhook_url = "http://home-assistant.test:8123/api/webhook/watering_planner_manual_run"
+        response = MagicMock()
+        response.__enter__.return_value = response
+        with patch.dict("os.environ", {"HOME_ASSISTANT_WEBHOOK_URL": webhook_url}):
+            result = server.evaluate(temperature_c=26, rain_mm=0, wind_kmh=8, sunshine_hours=7)
+            with patch("server.urlopen", return_value=response) as mock_urlopen:
+                server.trigger_home_assistant_manual_run(result)
+
+        request = mock_urlopen.call_args.args[0]
+        self.assertTrue(result["manual_run"]["available"])
+        self.assertEqual(request.full_url, webhook_url)
+        self.assertEqual(request.method, "POST")
+        response.read.assert_called_once()
 
     def test_add_plant_does_not_require_manual_outlet(self):
         plant_id = server.add_plant(
@@ -171,8 +221,38 @@ class WateringPlannerTests(unittest.TestCase):
         plant = next(item for item in state["plants"] if item["id"] == plant_id)
 
         self.assertEqual(plant["outlet_name"], "S")
+        self.assertEqual(plant["configured_ml_per_cycle"], 0)
+
+    def test_add_plant_calculates_water_amount_from_hoses_and_outlet(self):
+        server.save_hoses(
+            {
+                "hoses": [
+                    {"number": "6", "outlet_id": 3},
+                    {"number": "7", "outlet_id": 3},
+                ]
+            }
+        )
+        plant_id = server.add_plant(
+            {
+                "catalog_id": "olive",
+                "custom_name": "Olive zwei Schläuche",
+                "size": "large",
+                "pot_liters": 45,
+                "pot_type": "overflow",
+                "hose_numbers": "6, 7, 7",
+                "target_ml_per_cycle": 999,
+            }
+        )
+
+        plant = next(item for item in server.get_state()["plants"] if item["id"] == plant_id)
+
+        self.assertEqual(plant["hose_numbers"], "6, 7")
+        self.assertEqual(plant["hose_count"], 2)
+        self.assertEqual(plant["target_ml_per_cycle"], 120)
+        self.assertEqual(plant["configured_ml_per_cycle"], 120)
 
     def test_update_plant_edits_inventory_fields(self):
+        server.save_hoses({"hoses": [{"number": "14", "outlet_id": 2}]})
         plant_id = server.add_plant(
             {
                 "catalog_id": "basil",
@@ -191,9 +271,8 @@ class WateringPlannerTests(unittest.TestCase):
                 "size": "medium",
                 "pot_liters": 12,
                 "pot_type": "reservoir_overflow",
-                "outlet_id": 2,
                 "hose_numbers": "14",
-                "target_ml_per_cycle": 30,
+                "target_ml_per_cycle": 999,
             },
         )
 
@@ -203,7 +282,174 @@ class WateringPlannerTests(unittest.TestCase):
         self.assertEqual(plant["custom_name"], "Rosmarin rechts")
         self.assertEqual(plant["hose_numbers"], "14")
         self.assertEqual(plant["target_ml_per_cycle"], 30)
+        self.assertEqual(plant["configured_ml_per_cycle"], 30)
         self.assertEqual(plant["outlet_id"], 2)
+
+    def test_balcony_save_recalculates_water_amount_after_outlet_change(self):
+        server.save_hoses(
+            {
+                "hoses": [
+                    {"number": "21", "outlet_id": 1},
+                    {"number": "22", "outlet_id": 1},
+                ]
+            }
+        )
+        plant_id = server.add_plant(
+            {
+                "catalog_id": "basil",
+                "custom_name": "Basilikum Test",
+                "size": "small",
+                "pot_liters": 8,
+                "pot_type": "overflow",
+                "hose_numbers": "21, 22",
+            }
+        )
+        state = server.get_state()
+        payload = {
+            **state["balcony"],
+            "outlets": [
+                {**outlet, "ml_per_run": 20 if outlet["id"] == 1 else outlet["ml_per_run"]}
+                for outlet in state["outlets"]
+            ],
+            "walls": state["walls"],
+        }
+
+        server.save_balcony(payload)
+
+        plant = next(item for item in server.get_state()["plants"] if item["id"] == plant_id)
+        self.assertEqual(plant["target_ml_per_cycle"], 40)
+        self.assertEqual(plant["configured_ml_per_cycle"], 40)
+
+    def test_plant_water_amount_combines_hoses_from_different_outputs(self):
+        server.save_hoses(
+            {
+                "hoses": [
+                    {"number": "31", "outlet_id": 1},
+                    {"number": "32", "outlet_id": 3},
+                ]
+            }
+        )
+        plant_id = server.add_plant(
+            {
+                "catalog_id": "olive",
+                "custom_name": "Olive gemischt",
+                "size": "large",
+                "pot_liters": 45,
+                "pot_type": "overflow",
+                "hose_numbers": ["31", "32"],
+            }
+        )
+
+        plant = next(item for item in server.get_state()["plants"] if item["id"] == plant_id)
+
+        self.assertEqual(plant["hose_numbers"], "31, 32")
+        self.assertEqual(plant["configured_ml_per_cycle"], 75)
+        self.assertIn("31: S (15 ml)", plant["outlet_summary"])
+        self.assertIn("32: L (60 ml)", plant["outlet_summary"])
+
+    def test_init_db_migrates_legacy_plant_hoses_once(self):
+        with server.connect() as conn:
+            plant_id = int(conn.execute("SELECT id FROM plants ORDER BY id LIMIT 1").fetchone()["id"])
+            conn.execute("UPDATE plants SET outlet_id = 3, hose_numbers = '41, 42' WHERE id = ?", (plant_id,))
+            conn.execute("DELETE FROM irrigation_hoses")
+
+        server.init_db()
+
+        hoses = server.get_state()["hoses"]
+        migrated = [hose for hose in hoses if hose["number"] in {"41", "42"}]
+        self.assertEqual([hose["number"] for hose in migrated], ["41", "42"])
+        self.assertTrue(all(hose["outlet_name"] == "L" for hose in migrated))
+
+    def test_evaluation_uses_configured_hoses_for_pump_delivery(self):
+        server.save_hoses(
+            {
+                "hoses": [
+                    {"number": "51", "outlet_id": 1},
+                    {"number": "52", "outlet_id": 3},
+                ]
+            }
+        )
+        server.add_plant(
+            {
+                "catalog_id": "olive",
+                "custom_name": "Olive reale Menge",
+                "size": "large",
+                "pot_liters": 45,
+                "pot_type": "overflow",
+                "hose_numbers": ["51", "52"],
+            }
+        )
+
+        result = server.evaluate(temperature_c=26, rain_mm=0, wind_kmh=8, sunshine_hours=7)
+
+        self.assertEqual(result["pump"]["delivered_per_cycle_ml"], 75)
+
+    def test_evaluation_without_configured_hoses_does_not_run(self):
+        server.save_hoses({"hoses": []})
+
+        result = server.evaluate(temperature_c=26, rain_mm=0, wind_kmh=8, sunshine_hours=7)
+
+        self.assertFalse(result["should_run"])
+        self.assertFalse(result["run_now"])
+        self.assertEqual(result["pump"]["delivered_per_cycle_ml"], 0)
+        self.assertIn("keine nutzbare Verschlauchung", result["reason"])
+
+    def test_automation_waits_after_completed_run(self):
+        now = datetime(2026, 6, 2, 10, 0, tzinfo=ZoneInfo("Europe/Berlin"))
+        with patch("server.local_now", return_value=now):
+            status = server.automation_status(
+                should_run=True,
+                remaining_cycles=3,
+                timezone_name="Europe/Berlin",
+                latest_run_value="2026-06-02T07:45:00+00:00",
+            )
+
+        self.assertFalse(status["run_now"])
+        self.assertTrue(status["cooldown_active"])
+        self.assertEqual(status["cooldown_until"], "2026-06-02T10:15:00+02:00")
+        self.assertEqual(status["summary"], "Pause nach letztem Lauf bis 10:15.")
+
+    def test_automation_distributes_four_cycles_across_the_day(self):
+        checks = [
+            (6, 45, 0, False),
+            (7, 0, 0, True),
+            (10, 0, 1, False),
+            (11, 0, 1, True),
+            (14, 0, 2, False),
+            (15, 0, 2, True),
+            (18, 0, 3, False),
+            (19, 0, 3, True),
+        ]
+
+        for hour, minute, completed, expected_run_now in checks:
+            with self.subTest(hour=hour, minute=minute, completed=completed):
+                now = datetime(2026, 6, 2, hour, minute, tzinfo=ZoneInfo("Europe/Berlin"))
+                with patch("server.local_now", return_value=now):
+                    status = server.automation_status(
+                        should_run=True,
+                        remaining_cycles=4 - completed,
+                        timezone_name="Europe/Berlin",
+                        recommended_cycles=4,
+                        completed_cycles=completed,
+                    )
+
+                self.assertEqual(status["windows"], ["07:00", "11:00", "15:00", "19:00"])
+                self.assertEqual(status["run_now"], expected_run_now)
+
+    def test_automation_catches_up_a_missed_distributed_cycle(self):
+        now = datetime(2026, 6, 2, 12, 0, tzinfo=ZoneInfo("Europe/Berlin"))
+        with patch("server.local_now", return_value=now):
+            status = server.automation_status(
+                should_run=True,
+                remaining_cycles=3,
+                timezone_name="Europe/Berlin",
+                recommended_cycles=4,
+                completed_cycles=1,
+            )
+
+        self.assertTrue(status["run_now"])
+        self.assertTrue(status["catch_up"])
+        self.assertEqual(status["next_window"], "15:00")
 
     def test_catalog_contains_common_balcony_plants(self):
         catalog_ids = {plant["id"] for plant in server.get_state()["catalog"]}
@@ -216,7 +462,7 @@ class WateringPlannerTests(unittest.TestCase):
         self.assertIn("carnation", catalog_ids)
         self.assertIn("pine", catalog_ids)
 
-    def test_table_xlsx_seeds_inventory_when_present(self):
+    def test_table_xlsx_is_ignored_when_seeding_inventory(self):
         source = server.ROOT / "data" / "table.xlsx"
         if not source.exists():
             self.skipTest("data/table.xlsx ist nicht vorhanden")
@@ -228,14 +474,8 @@ class WateringPlannerTests(unittest.TestCase):
 
         state = server.get_state()
         names = {plant["custom_name"] for plant in state["plants"]}
-        olive = next(plant for plant in state["plants"] if plant["custom_name"] == "Olive")
 
-        self.assertIn("Basilikum", names)
-        self.assertIn("Nelke, Korb", names)
-        self.assertEqual(olive["hose_numbers"], "6, 7")
-        self.assertEqual(olive["target_ml_per_cycle"], 120)
-        self.assertGreaterEqual(olive["pos_x"], 0.12)
-        self.assertLessEqual(olive["pos_x"], 0.88)
+        self.assertEqual(names, {"Olive", "Tomate", "Lavendel"})
 
     def test_wind_increases_water_need(self):
         calm = server.evaluate(temperature_c=26, rain_mm=0, wind_kmh=2, sunshine_hours=7)
@@ -264,6 +504,7 @@ class WateringPlannerTests(unittest.TestCase):
         self.assertGreaterEqual(hot["recommended_cycles_today"], mild["recommended_cycles_today"])
 
     def test_connection_plan_flags_wrong_current_outlet_amount(self):
+        server.save_hoses({"hoses": [{"number": "101", "outlet_id": 1}]})
         plant_id = server.add_plant(
             {
                 "catalog_id": "tomato",
@@ -271,8 +512,7 @@ class WateringPlannerTests(unittest.TestCase):
                 "size": "large",
                 "pot_liters": 27,
                 "pot_type": "overflow",
-                "outlet_id": 1,
-                "target_ml_per_cycle": 15,
+                "hose_numbers": "101",
             }
         )
 
@@ -283,6 +523,7 @@ class WateringPlannerTests(unittest.TestCase):
         self.assertTrue("Besser" in assignment["connection_note"] or "Unerlässlich" in assignment["connection_note"])
 
     def test_connection_plan_marks_urgent_under_supply(self):
+        server.save_hoses({"hoses": [{"number": "102", "outlet_id": 1}]})
         plant_id = server.add_plant(
             {
                 "catalog_id": "tomato",
@@ -290,8 +531,7 @@ class WateringPlannerTests(unittest.TestCase):
                 "size": "large",
                 "pot_liters": 27,
                 "pot_type": "overflow",
-                "outlet_id": 1,
-                "target_ml_per_cycle": 15,
+                "hose_numbers": "102",
             }
         )
 

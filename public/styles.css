@@ -51,7 +51,7 @@ body {
 
 .app-nav {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   width: 100%;
   gap: 4px;
   padding: 4px;
@@ -482,12 +482,20 @@ button {
 .automation-controls {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
 }
 
 .automation-controls button:disabled {
   cursor: not-allowed;
   opacity: 0.5;
+}
+
+.manual-run-hint {
+  flex-basis: 100%;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.4;
 }
 
 .watering-log-panel {
@@ -876,6 +884,29 @@ button {
   background: #f6f8f5;
 }
 
+.derived-water-preview {
+  display: grid;
+  gap: 3px;
+  align-content: center;
+  min-height: 78px;
+  border: 1px solid #c9dfce;
+  border-radius: 8px;
+  padding: 10px 11px;
+  background: #edf8ee;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.derived-water-preview strong {
+  color: var(--accent-strong);
+  font-size: 1.12rem;
+}
+
+.derived-water-preview small {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
 .connection-compare {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -1001,6 +1032,33 @@ button {
 .wall-editor {
   display: grid;
   gap: 10px;
+  margin-top: 12px;
+}
+
+.hose-editor {
+  display: grid;
+  gap: 10px;
+}
+
+.hose-row {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  background: #fbfcfa;
+}
+
+.hose-assignment {
+  align-self: center;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.hose-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   margin-top: 12px;
 }
 
@@ -1174,6 +1232,10 @@ button {
     grid-column: 2;
   }
 
+  .hoses-view .config-routing-panel {
+    grid-column: 1 / -1;
+  }
+
   .config-plants-panel .plants {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1213,6 +1275,11 @@ button {
     align-items: center;
   }
 
+  .hose-row {
+    grid-template-columns: minmax(120px, 0.6fr) minmax(150px, 0.8fr) minmax(180px, 1fr) auto;
+    align-items: end;
+  }
+
   .shortcut-grid {
     grid-template-columns: minmax(0, 1fr) minmax(260px, 0.55fr);
   }
@@ -1221,7 +1288,16 @@ button {
 @media (max-width: 520px) {
   .nav-button {
     padding-inline: 8px;
-    font-size: 0.8rem;
+    font-size: 0.68rem;
+  }
+
+  .nav-button {
+    gap: 4px;
+  }
+
+  .nav-button svg {
+    width: 15px;
+    height: 15px;
   }
 
   .dashboard-cards {
@@ -1234,7 +1310,8 @@ button {
 }
 
 @media (min-width: 980px) {
-  .config-view.active {
+  .plants-view.active,
+  .hoses-view.active {
     grid-template-columns: minmax(0, 1.35fr) minmax(340px, 0.75fr);
     align-items: start;
   }

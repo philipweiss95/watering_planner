@@ -7,7 +7,6 @@ import re
 import sqlite3
 import ssl
 from copy import deepcopy
-from hashlib import sha256
 from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta, timezone
 from http import HTTPStatus
@@ -15,10 +14,8 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Iterator
 from urllib.error import URLError
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 from urllib.parse import parse_qs, urlencode, urlparse
-from zipfile import ZipFile
-from xml.etree import ElementTree as ET
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
@@ -122,23 +119,6 @@ PLANT_WATER_PROFILES = {
     "aloe": {"crop_coefficient": 0.28, "canopy_m2_medium": 0.14, "recommended_pot_liters": 8, "moisture_preference": 0.48},
 }
 
-TABLE_PLANT_ALIASES = {
-    "basilikum": "basil",
-    "lavendel": "lavender",
-    "zucchini": "zucchini",
-    "nelke": "carnation",
-    "olive": "olive",
-    "tomate": "tomato",
-    "himbeere": "raspberry",
-    "paprika": "chili",
-    "chili": "chili",
-    "kiefer": "pine",
-    "mispel": "loquat",
-    "erdbeere": "strawberry",
-    "rosmarin": "rosemary",
-}
-
-
 DEFAULT_BALCONY = {
     "orientation": "south",
     "orientation_deg": 180,
@@ -190,9 +170,10 @@ SEASONAL_WATER_CURVES = {
     "succulent": [(1, 0.55), (80, 0.58), (130, 0.68), (172, 0.82), (220, 0.9), (280, 0.72), (335, 0.58), (366, 0.55)],
 }
 
-AUTOMATION_WINDOWS = ["07:00", "10:00", "11:00", "14:00", "15:00", "16:00", "17:00"]
-AUTOMATION_EMERGENCY_WINDOW = "19:00"
+AUTOMATION_DAY_START = "07:00"
+AUTOMATION_DAY_END = "19:00"
 AUTOMATION_TRIGGER_TOLERANCE_MINUTES = 20
+AUTOMATION_RUN_COOLDOWN_MINUTES = 30
 
 
 @contextmanager
@@ -299,6 +280,12 @@ def init_db() -> None:
                 source TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS irrigation_hoses (
+                number TEXT PRIMARY KEY,
+                outlet_id INTEGER NOT NULL REFERENCES pump_outlets(id),
+                plant_id INTEGER REFERENCES plants(id)
+            );
+
             CREATE TABLE IF NOT EXISTS app_settings (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
@@ -357,9 +344,7 @@ def init_db() -> None:
         plant_count = conn.execute("SELECT COUNT(*) FROM plants").fetchone()[0]
         if plant_count == 0:
             seed_plants(conn)
-        elif (DATA_DIR / "table.xlsx").exists() and has_unimported_plants(conn):
-            conn.execute("DELETE FROM plants")
-            seed_plants(conn)
+        migrate_legacy_hoses(conn)
 
 
 def get_setting(key: str, default: str = "") -> str:
@@ -492,21 +477,6 @@ def upsert_plant_water_profiles(conn: sqlite3.Connection) -> None:
 
 
 def seed_plants(conn: sqlite3.Connection) -> None:
-    table_plants = plants_from_table_xlsx(DATA_DIR / "table.xlsx", conn)
-    if table_plants:
-        conn.executemany(
-            """
-            INSERT INTO plants
-                (catalog_id, custom_name, size, pot_liters, pot_type, outlet_id, pos_x, pos_y,
-                 hose_numbers, target_ml_per_cycle, created_at)
-            VALUES
-                (:catalog_id, :custom_name, :size, :pot_liters, :pot_type, :outlet_id, :pos_x, :pos_y,
-                 :hose_numbers, :target_ml_per_cycle, :created_at)
-            """,
-            table_plants,
-        )
-        return
-
     conn.executemany(
         """
         INSERT INTO plants
@@ -515,195 +485,171 @@ def seed_plants(conn: sqlite3.Connection) -> None:
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
-            ("olive", "Olive", "medium", 28, "overflow", 2, 0.25, 0.7, "", None, now_iso()),
-            ("tomato", "Tomate", "medium", 18, "closed", 3, 0.7, 0.55, "", None, now_iso()),
-            ("lavender", "Lavendel", "small", 10, "overflow", 1, 0.45, 0.25, "", None, now_iso()),
+            ("olive", "Olive", "medium", 28, "overflow", 2, 0.25, 0.7, "1", 30, now_iso()),
+            ("tomato", "Tomate", "medium", 18, "closed", 3, 0.7, 0.55, "2", 60, now_iso()),
+            ("lavender", "Lavendel", "small", 10, "overflow", 1, 0.45, 0.25, "3", 15, now_iso()),
         ],
     )
 
 
-def has_unimported_plants(conn: sqlite3.Connection) -> bool:
-    row = conn.execute(
-        """
-        SELECT
-            COUNT(*) AS total,
-            SUM(CASE WHEN COALESCE(hose_numbers, '') = '' AND target_ml_per_cycle IS NULL THEN 1 ELSE 0 END) AS unimported
-        FROM plants
-        """
-    ).fetchone()
-    return int(row["total"]) > 0 and int(row["total"]) == int(row["unimported"] or 0)
+def parse_hose_numbers(value: object) -> list[str]:
+    hose_numbers = []
+    for hose_number in re.findall(r"\d+", str(value or "")):
+        if hose_number not in hose_numbers:
+            hose_numbers.append(hose_number)
+    return hose_numbers
 
 
-def plants_from_table_xlsx(path: Path, conn: sqlite3.Connection) -> list[dict]:
-    if not path.exists():
-        return []
+def normalize_hose_numbers(value: object) -> str:
+    return ", ".join(parse_hose_numbers(value))
 
-    rows = xlsx_rows(path)
-    header_index = next(
-        (
-            index
-            for index, row in enumerate(rows)
-            if "name" in [normalize_table_header(cell) for cell in row]
-            and any("groesse" in normalize_table_header(cell) for cell in row)
-        ),
-        None,
-    )
-    if header_index is None:
-        return []
 
-    headers = [normalize_table_header(cell) for cell in rows[header_index]]
-    created_at = now_iso()
-    plants = []
-    for index, row in enumerate(rows[header_index + 1 :], start=1):
-        values = dict(zip(headers, row))
-        name = values.get("name", "").strip()
-        if not name:
-            continue
-        catalog_id = catalog_id_for_table_name(name)
-        size = table_size(values.get("groesse", ""))
-        target_ml = parse_target_ml(values.get("ml-menge pro pumpzyklus", ""))
-        hose_numbers = values.get("nummer schlauch", "").strip()
-        plants.append(
-            {
-                "catalog_id": catalog_id,
-                "custom_name": name,
-                "size": size,
-                "pot_liters": estimated_pot_liters(conn, catalog_id, size),
-                "pot_type": table_pot_type(name),
-                "outlet_id": outlet_id_for_target_ml(conn, target_ml),
-                "pos_x": table_position(name, hose_numbers, "x"),
-                "pos_y": table_position(name, hose_numbers, "y"),
-                "hose_numbers": hose_numbers,
-                "target_ml_per_cycle": target_ml,
-                "created_at": created_at,
-            }
+def irrigation_hoses(conn: sqlite3.Connection) -> list[dict]:
+    return [
+        row_to_dict(row)
+        for row in conn.execute(
+            """
+            SELECT
+                irrigation_hoses.number,
+                irrigation_hoses.outlet_id,
+                irrigation_hoses.plant_id,
+                pump_outlets.name AS outlet_name,
+                pump_outlets.ml_per_run,
+                plants.custom_name AS plant_name
+            FROM irrigation_hoses
+            JOIN pump_outlets ON pump_outlets.id = irrigation_hoses.outlet_id
+            LEFT JOIN plants ON plants.id = irrigation_hoses.plant_id
+            ORDER BY CAST(irrigation_hoses.number AS INTEGER), irrigation_hoses.number
+            """
         )
-    return plants
+    ]
 
 
-def normalize_table_header(value: str) -> str:
-    normalized = value.strip().casefold().replace("ä", "ae").replace("ö", "oe").replace("ü", "ue").replace("ß", "ss")
-    return re.sub(r"\s+", " ", normalized)
+def migrate_legacy_hoses(conn: sqlite3.Connection) -> None:
+    if conn.execute("SELECT COUNT(*) FROM irrigation_hoses").fetchone()[0] > 0:
+        return
+    for plant in conn.execute("SELECT id, outlet_id, hose_numbers FROM plants"):
+        for number in parse_hose_numbers(plant["hose_numbers"]):
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO irrigation_hoses (number, outlet_id, plant_id)
+                VALUES (?, ?, ?)
+                """,
+                (number, int(plant["outlet_id"]), int(plant["id"])),
+            )
 
 
-def xlsx_rows(path: Path) -> list[list[str]]:
-    ns = {"a": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
-    with ZipFile(path) as archive:
-        shared_strings = []
-        if "xl/sharedStrings.xml" in archive.namelist():
-            shared_root = ET.fromstring(archive.read("xl/sharedStrings.xml"))
-            for item in shared_root.findall("a:si", ns):
-                shared_strings.append("".join(text.text or "" for text in item.findall(".//a:t", ns)))
-
-        sheet_root = ET.fromstring(archive.read("xl/worksheets/sheet1.xml"))
-        parsed_rows = []
-        for row in sheet_root.findall(".//a:sheetData/a:row", ns):
-            parsed = []
-            for cell in row.findall("a:c", ns):
-                column_index = xlsx_column_index(cell.attrib.get("r", "A1"))
-                while len(parsed) <= column_index:
-                    parsed.append("")
-                parsed[column_index] = xlsx_cell_value(cell, shared_strings, ns)
-            parsed_rows.append(parsed)
-        return parsed_rows
+def enrich_plant_connection(plant: dict, hoses: list[dict]) -> dict:
+    assigned_hoses = [hose for hose in hoses if hose["plant_id"] == plant["id"]]
+    hose_count = len(assigned_hoses)
+    plant["hoses"] = assigned_hoses
+    plant["hose_numbers"] = ", ".join(hose["number"] for hose in assigned_hoses)
+    plant["hose_count"] = hose_count
+    plant["configured_ml_per_cycle"] = sum(int(hose["ml_per_run"]) for hose in assigned_hoses)
+    plant["outlet_summary"] = ", ".join(
+        f"{hose['number']}: {hose['outlet_name']} ({hose['ml_per_run']} ml)"
+        for hose in assigned_hoses
+    )
+    return plant
 
 
-def xlsx_column_index(reference: str) -> int:
-    letters = re.match(r"[A-Z]+", reference.upper())
-    if not letters:
-        return 0
-    index = 0
-    for char in letters.group(0):
-        index = index * 26 + (ord(char) - ord("A") + 1)
-    return index - 1
-
-
-def xlsx_cell_value(cell: ET.Element, shared_strings: list[str], ns: dict[str, str]) -> str:
-    if cell.attrib.get("t") == "inlineStr":
-        return "".join(text.text or "" for text in cell.findall(".//a:t", ns)).strip()
-    value = cell.find("a:v", ns)
-    if value is None or value.text is None:
-        return ""
-    text = value.text.strip()
-    if cell.attrib.get("t") == "s" and text:
-        return shared_strings[int(text)].strip()
-    return text
-
-
-def catalog_id_for_table_name(name: str) -> str:
-    normalized = normalize_plant_name(name)
-    return TABLE_PLANT_ALIASES.get(normalized) or TABLE_PLANT_ALIASES.get(normalized.split(" ", 1)[0]) or normalized
-
-
-def normalize_plant_name(name: str) -> str:
-    first_part = name.split(",", 1)[0]
-    normalized = first_part.casefold().replace("ä", "ae").replace("ö", "oe").replace("ü", "ue").replace("ß", "ss")
-    normalized = re.sub(r"[^a-z0-9]+", " ", normalized).strip()
-    return normalized
-
-
-def table_size(value: str) -> str:
-    normalized = value.casefold().replace("ß", "ss")
-    if "baum" in normalized or "strauch" in normalized:
-        return "tree"
-    if "gross" in normalized or "groß" in normalized:
-        return "large"
-    if "mittel" in normalized:
-        return "medium"
-    return "small"
-
-
-def parse_target_ml(value: str) -> int | None:
-    if not value:
-        return None
-    tail = value.split("=", 1)[1] if "=" in value else value
-    numbers = [int(match) for match in re.findall(r"\d+", tail)]
-    if not numbers:
-        return None
-    if "=" in value:
-        return numbers[0]
-    return sum(numbers)
-
-
-def table_pot_type(name: str) -> str:
-    if "lechuza" in name.casefold():
-        return "reservoir_overflow"
-    return "overflow"
-
-
-def estimated_pot_liters(conn: sqlite3.Connection, catalog_id: str, size: str) -> float:
-    row = conn.execute(
-        "SELECT recommended_pot_liters FROM plant_catalog WHERE id = ?",
-        (catalog_id,),
-    ).fetchone()
-    recommended = float(row["recommended_pot_liters"]) if row else 10.0
-    multiplier = {"small": 0.75, "medium": 1.0, "large": 1.35, "tree": 1.8}.get(size, 1.0)
-    return round(recommended * multiplier)
-
-
-def outlet_id_for_target_ml(conn: sqlite3.Connection, target_ml: int | None) -> int:
-    if target_ml is None:
-        return default_outlet_id_for_conn(conn)
-    row = conn.execute(
+def sync_legacy_plant_connection(conn: sqlite3.Connection, plant_id: int) -> None:
+    hoses = [
+        row_to_dict(row)
+        for row in conn.execute(
+            """
+            SELECT irrigation_hoses.number, irrigation_hoses.outlet_id, pump_outlets.ml_per_run
+            FROM irrigation_hoses
+            JOIN pump_outlets ON pump_outlets.id = irrigation_hoses.outlet_id
+            WHERE irrigation_hoses.plant_id = ?
+            ORDER BY CAST(irrigation_hoses.number AS INTEGER), irrigation_hoses.number
+            """,
+            (plant_id,),
+        )
+    ]
+    fallback_outlet_id = default_outlet_id_for_conn(conn)
+    conn.execute(
         """
-        SELECT id
-        FROM pump_outlets
-        ORDER BY ABS(ml_per_run - ?), ml_per_run
-        LIMIT 1
+        UPDATE plants
+        SET outlet_id = ?, hose_numbers = ?, target_ml_per_cycle = ?
+        WHERE id = ?
         """,
-        (target_ml,),
-    ).fetchone()
-    return int(row["id"]) if row else default_outlet_id_for_conn(conn)
+        (
+            int(hoses[0]["outlet_id"]) if hoses else fallback_outlet_id,
+            ", ".join(hose["number"] for hose in hoses),
+            sum(int(hose["ml_per_run"]) for hose in hoses) or None,
+            plant_id,
+        ),
+    )
+
+
+def assign_hoses_to_plant(conn: sqlite3.Connection, plant_id: int, hose_numbers: object) -> None:
+    selected = parse_hose_numbers(hose_numbers)
+    existing = {
+        str(row["number"])
+        for row in conn.execute("SELECT number FROM irrigation_hoses")
+    }
+    missing = [number for number in selected if number not in existing]
+    if missing:
+        raise ValueError(f"Unbekannte Schläuche: {', '.join(missing)}")
+    affected = {
+        int(row["plant_id"])
+        for row in conn.execute(
+            "SELECT DISTINCT plant_id FROM irrigation_hoses WHERE plant_id IS NOT NULL AND (plant_id = ? OR number IN ({placeholders}))".format(
+                placeholders=", ".join("?" for _ in selected) or "NULL"
+            ),
+            (plant_id, *selected),
+        )
+    }
+    conn.execute("UPDATE irrigation_hoses SET plant_id = NULL WHERE plant_id = ?", (plant_id,))
+    if selected:
+        conn.execute(
+            "UPDATE irrigation_hoses SET plant_id = ? WHERE number IN ({})".format(", ".join("?" for _ in selected)),
+            (plant_id, *selected),
+        )
+    affected.add(plant_id)
+    for affected_plant_id in affected:
+        sync_legacy_plant_connection(conn, affected_plant_id)
+
+
+def save_hoses(payload: dict) -> None:
+    hoses = payload.get("hoses")
+    if not isinstance(hoses, list):
+        raise ValueError("hoses fehlt")
+    normalized = []
+    seen = set()
+    for hose in hoses:
+        number = normalize_hose_numbers(hose.get("number", ""))
+        if not number or "," in number:
+            raise ValueError("Jeder Schlauch braucht genau eine Nummer")
+        if number in seen:
+            raise ValueError(f"Schlauch {number} ist doppelt vorhanden")
+        seen.add(number)
+        normalized.append({"number": number, "outlet_id": int(hose["outlet_id"])})
+    with connect() as conn:
+        if normalized:
+            conn.execute(
+                "DELETE FROM irrigation_hoses WHERE number NOT IN ({})".format(", ".join("?" for _ in normalized)),
+                tuple(hose["number"] for hose in normalized),
+            )
+        else:
+            conn.execute("DELETE FROM irrigation_hoses")
+        for hose in normalized:
+            conn.execute(
+                """
+                INSERT INTO irrigation_hoses (number, outlet_id)
+                VALUES (?, ?)
+                ON CONFLICT(number) DO UPDATE SET outlet_id = excluded.outlet_id
+                """,
+                (hose["number"], hose["outlet_id"]),
+            )
+        for plant in conn.execute("SELECT id FROM plants"):
+            sync_legacy_plant_connection(conn, int(plant["id"]))
 
 
 def default_outlet_id_for_conn(conn: sqlite3.Connection) -> int:
     row = conn.execute("SELECT id FROM pump_outlets ORDER BY ml_per_run LIMIT 1").fetchone()
     return int(row["id"])
-
-
-def table_position(name: str, hose_numbers: str, axis: str) -> float:
-    digest = sha256(f"{name}|{hose_numbers}|{axis}".encode("utf-8")).digest()
-    return round(0.12 + int.from_bytes(digest[:2], "big") / 65535 * 0.76, 3)
 
 
 def now_iso() -> str:
@@ -720,8 +666,9 @@ def get_state() -> dict:
         outlets = [row_to_dict(row) for row in conn.execute("SELECT * FROM pump_outlets ORDER BY ml_per_run")]
         walls = [row_to_dict(row) for row in conn.execute("SELECT * FROM terrace_walls ORDER BY side")]
         catalog = [row_to_dict(row) for row in conn.execute("SELECT * FROM plant_catalog ORDER BY category, name")]
+        hoses = irrigation_hoses(conn)
         plants = [
-            row_to_dict(row)
+            enrich_plant_connection(row_to_dict(row), hoses)
             for row in conn.execute(
                 """
                 SELECT
@@ -748,13 +695,14 @@ def get_state() -> dict:
     return {
         "balcony": balcony,
         "outlets": outlets,
+        "hoses": hoses,
         "walls": walls,
         "catalog": catalog,
         "plants": plants,
         "settings": {
             "watering_amount_percent": round(watering_amount_percent(), 1),
         },
-        "cycles_completed_today": completed_cycles_today(),
+        "cycles_completed_today": completed_cycles_today(str(balcony.get("timezone_name", "Europe/Berlin"))),
     }
 
 
@@ -775,13 +723,26 @@ def watering_events(limit: int = 12) -> list[dict]:
         ]
 
 
-def completed_cycles_today() -> int:
+def completed_cycles_today(timezone_name: str = "Europe/Berlin") -> int:
+    now = local_now(timezone_name)
+    start_local = datetime.combine(now.date(), time(0, 0), tzinfo=now.tzinfo)
+    end_local = start_local + timedelta(days=1)
+    start = start_local.astimezone(timezone.utc)
+    end = end_local.astimezone(timezone.utc)
     with connect() as conn:
         row = conn.execute(
-            "SELECT COUNT(*) AS count FROM watering_events WHERE substr(ran_at, 1, 10) = ?",
-            (datetime.now(timezone.utc).date().isoformat(),),
+            "SELECT COUNT(*) AS count FROM watering_events WHERE ran_at >= ? AND ran_at < ?",
+            (start.isoformat(), end.isoformat()),
         ).fetchone()
         return int(row["count"])
+
+
+def latest_watering_run_at() -> str:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT ran_at FROM watering_events ORDER BY ran_at DESC, id DESC LIMIT 1"
+        ).fetchone()
+        return str(row["ran_at"]) if row else ""
 
 
 def clamp(value: float, minimum: float, maximum: float) -> float:
@@ -1218,6 +1179,7 @@ def evaluate_weather(weather: dict, slot: str = "morning") -> dict:
 def shortcut_blueprint(base_url: str) -> dict:
     check_url = f"{base_url.rstrip('/')}/api/homekit/check?auto=true&slot=morning"
     mark_url = f"{base_url.rstrip('/')}/api/homekit/mark-run"
+    manual_run_url = f"{base_url.rstrip('/')}/api/manual-run"
     return {
         "name": "Terrassenbewässerung prüfen",
         "base_url_placeholder": base_url,
@@ -1240,6 +1202,17 @@ def shortcut_blueprint(base_url: str) -> dict:
         ],
         "check_url": check_url,
         "mark_run_url": mark_url,
+        "manual_run_url": manual_run_url,
+        "manual_run_steps": [
+            {"action": "URL", "value": manual_run_url},
+            {
+                "action": "Inhalte von URL abrufen",
+                "method": "POST",
+                "url": manual_run_url,
+                "headers": {"Content-Type": "application/json"},
+                "body": {"auto_weather": True},
+            },
+        ],
     }
 
 
@@ -1588,7 +1561,8 @@ def calculate_plant_results(
                 "current_outlet": plant["outlet_name"],
                 "current_ml_per_run": plant["ml_per_run"],
                 "current_hose_numbers": plant["hose_numbers"],
-                "current_target_ml_per_cycle": plant["target_ml_per_cycle"],
+                "current_hoses": plant["hoses"],
+                "current_target_ml_per_cycle": plant["configured_ml_per_cycle"],
                 "current_tube_count": current_tube_count(plant),
                 "position": {"x": plant["pos_x"], "y": plant["pos_y"]},
                 "need_ml": round(scheduled_need),
@@ -1752,6 +1726,53 @@ def fixed_cycle_score(plant: dict, delivered_ml: float) -> tuple[float, bool, bo
     return score, under > under_limit, over > tolerance
 
 
+def configured_connection_plan(plants: list[dict]) -> dict:
+    assignments = []
+    unassigned_plants = []
+    for plant in plants:
+        grouped = {}
+        for hose in plant.get("hoses", []):
+            tube = grouped.setdefault(
+                int(hose["outlet_id"]),
+                {
+                    "outlet_id": int(hose["outlet_id"]),
+                    "outlet_name": hose["outlet_name"],
+                    "ml_per_run": int(hose["ml_per_run"]),
+                    "count": 0,
+                },
+            )
+            tube["count"] += 1
+        tubes = list(grouped.values())
+        if not tubes:
+            unassigned_plants.append(plant["custom_name"])
+            continue
+        ml_per_cycle = sum(tube["ml_per_run"] * tube["count"] for tube in tubes)
+        assignments.append(
+            normalize_assignment(
+                {
+                    "plant_id": plant["id"],
+                    "plant_name": plant["custom_name"],
+                    "catalog_name": plant["catalog_name"],
+                    "tubes": tubes,
+                    "connections": {tube["outlet_id"]: tube["count"] for tube in tubes},
+                    "ml_per_cycle": ml_per_cycle,
+                    "need_ml": 0,
+                    "delivered_ml": 0,
+                    "difference_ml": 0,
+                    "under_ml": 0,
+                    "over_ml": 0,
+                    "score": 0,
+                }
+            )
+        )
+    return {
+        "cycles": 0,
+        "score": 0,
+        "assignments": assignments,
+        "unassigned_plants": unassigned_plants,
+    }
+
+
 def apply_fixed_connection_to_weather(
     connection_plan: dict,
     plant_results: list[dict],
@@ -1826,6 +1847,17 @@ def window_datetime(today: date, value: str, tzinfo) -> datetime:
     return datetime.combine(today, parse_hhmm(value), tzinfo=tzinfo)
 
 
+def distributed_automation_windows(today: date, total_cycles: int, tzinfo) -> list[datetime]:
+    start = window_datetime(today, AUTOMATION_DAY_START, tzinfo)
+    end = window_datetime(today, AUTOMATION_DAY_END, tzinfo)
+    if total_cycles <= 0:
+        return []
+    if total_cycles == 1:
+        return [start]
+    spacing = (end - start) / (total_cycles - 1)
+    return [start + spacing * index for index in range(total_cycles)]
+
+
 def parse_pause_until(value: str, timezone_name: str) -> datetime | None:
     if not value:
         return None
@@ -1833,9 +1865,10 @@ def parse_pause_until(value: str, timezone_name: str) -> datetime | None:
         parsed = datetime.fromisoformat(value)
     except ValueError:
         return None
+    timezone = local_now(timezone_name).tzinfo
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=local_now(timezone_name).tzinfo)
-    return parsed
+        parsed = parsed.replace(tzinfo=timezone)
+    return parsed.astimezone(timezone)
 
 
 def automation_status(
@@ -1843,45 +1876,123 @@ def automation_status(
     remaining_cycles: int,
     timezone_name: str,
     pause_until_value: str = "",
+    latest_run_value: str = "",
+    recommended_cycles: int | None = None,
+    completed_cycles: int | None = None,
 ) -> dict:
     now = local_now(timezone_name)
     tolerance = timedelta(minutes=AUTOMATION_TRIGGER_TOLERANCE_MINUTES)
-    windows = [window_datetime(now.date(), value, now.tzinfo) for value in AUTOMATION_WINDOWS]
-    emergency = window_datetime(now.date(), AUTOMATION_EMERGENCY_WINDOW, now.tzinfo)
-    all_windows = windows + [emergency]
+    total_cycles = max(0, int(recommended_cycles if recommended_cycles is not None else remaining_cycles))
+    completed = max(0, int(completed_cycles if completed_cycles is not None else total_cycles - remaining_cycles))
+    windows = distributed_automation_windows(now.date(), total_cycles, now.tzinfo)
+    day_start = window_datetime(now.date(), AUTOMATION_DAY_START, now.tzinfo)
+    day_end = window_datetime(now.date(), AUTOMATION_DAY_END, now.tzinfo)
     pause_until = parse_pause_until(pause_until_value, timezone_name)
     paused = bool(pause_until and pause_until > now)
-    active_regular = next((item for item in windows if abs(now - item) <= tolerance), None)
-    active_emergency = abs(now - emergency) <= tolerance
-    future_regular = [item for item in windows if item >= now - tolerance]
-    next_window = next((item for item in all_windows if item >= now - tolerance), None)
-    regular_slots_remaining = len(future_regular)
-    should_prevent_shortfall = remaining_cycles * 2 >= max(regular_slots_remaining, 1)
-    run_regular = bool(active_regular and should_prevent_shortfall)
-    run_emergency = bool(active_emergency and remaining_cycles > 0)
-    run_now = bool(should_run and remaining_cycles > 0 and not paused and (run_regular or run_emergency))
+    latest_run = parse_pause_until(latest_run_value, timezone_name)
+    cooldown_until = latest_run + timedelta(minutes=AUTOMATION_RUN_COOLDOWN_MINUTES) if latest_run else None
+    cooldown_active = bool(cooldown_until and cooldown_until > now)
+    due_windows = [item for item in windows if item <= now]
+    future_windows = [item for item in windows if item > now]
+    next_window = future_windows[0] if future_windows else None
+    behind_schedule = completed < len(due_windows)
+    catch_up = bool(behind_schedule and due_windows and now > due_windows[min(completed, len(due_windows) - 1)] + tolerance)
+    distribution_active = day_start <= now <= day_end + tolerance
+    run_now = bool(
+        should_run
+        and remaining_cycles > 0
+        and distribution_active
+        and behind_schedule
+        and not paused
+        and not cooldown_active
+    )
     if paused:
         summary = f"Automatik pausiert bis {pause_until.strftime('%d.%m. %H:%M')}."
+    elif cooldown_active:
+        summary = f"Pause nach letztem Lauf bis {cooldown_until.strftime('%H:%M')}."
     elif not should_run or remaining_cycles <= 0:
         summary = "Kein automatischer Lauf nötig."
     elif run_now:
-        summary = "Zeitfenster aktiv: Home Assistant darf jetzt einen Zyklus starten."
+        summary = "Geplanter Zeitpunkt erreicht: Home Assistant darf jetzt einen Zyklus starten."
     elif next_window:
-        summary = f"Nächste Prüfung um {next_window.strftime('%H:%M')}."
+        summary = f"Nächster geplanter Lauf um {next_window.strftime('%H:%M')}."
     else:
-        summary = "Heute kein reguläres Zeitfenster mehr."
+        summary = "Heute kein geplanter Lauf mehr."
     return {
         "run_now": run_now,
         "paused": paused,
         "pause_until": pause_until.isoformat() if pause_until else "",
-        "windows": AUTOMATION_WINDOWS,
-        "emergency_window": AUTOMATION_EMERGENCY_WINDOW,
-        "active_window": active_regular.strftime("%H:%M") if active_regular else (AUTOMATION_EMERGENCY_WINDOW if active_emergency else ""),
+        "cooldown_active": cooldown_active,
+        "cooldown_until": cooldown_until.isoformat() if cooldown_until else "",
+        "cooldown_minutes": AUTOMATION_RUN_COOLDOWN_MINUTES,
+        "windows": [item.strftime("%H:%M") for item in windows],
+        "distribution_start": AUTOMATION_DAY_START,
+        "distribution_end": AUTOMATION_DAY_END,
+        "active_window": due_windows[-1].strftime("%H:%M") if behind_schedule and distribution_active else "",
         "next_window": next_window.strftime("%H:%M") if next_window else "",
-        "regular_slots_remaining": regular_slots_remaining,
-        "shortfall_prevention": bool(should_run and remaining_cycles > 0 and should_prevent_shortfall),
+        "regular_slots_remaining": len(future_windows),
+        "due_cycles": len(due_windows),
+        "catch_up": catch_up,
+        "shortfall_prevention": catch_up,
         "summary": summary,
     }
+
+
+def home_assistant_webhook_url() -> str:
+    value = os.environ.get("HOME_ASSISTANT_WEBHOOK_URL", "").strip()
+    if not value or "HOME-ASSISTANT-IP" in value:
+        return ""
+    parsed = urlparse(value)
+    return value if parsed.scheme in {"http", "https"} and parsed.netloc else ""
+
+
+def manual_run_status(result: dict) -> dict:
+    delivered_per_cycle = int(result["pump"]["delivered_per_cycle_ml"])
+    if not result["plants"]:
+        reason = "Noch keine Pflanzen angelegt."
+    elif delivered_per_cycle <= 0:
+        reason = "Noch keine nutzbare Verschlauchung vorhanden."
+    elif int(result["tank"]["current_ml"]) < delivered_per_cycle:
+        reason = "Der Wassertank reicht nicht für einen vollständigen Pumpenlauf."
+    elif result.get("automation", {}).get("cooldown_active"):
+        reason = "Nach dem letzten Pumpenlauf ist noch eine Sicherheitspause aktiv."
+    elif not home_assistant_webhook_url():
+        reason = "Home-Assistant-Webhook für manuelle Läufe ist noch nicht konfiguriert."
+    else:
+        return {
+            "available": True,
+            "reason": "Ein manueller Zyklus kann sofort über Home Assistant gestartet werden.",
+            "endpoint": "/api/manual-run",
+        }
+    return {
+        "available": False,
+        "reason": reason,
+        "endpoint": "/api/manual-run",
+    }
+
+
+def trigger_home_assistant_manual_run(result: dict) -> None:
+    status = manual_run_status(result)
+    if not status["available"]:
+        raise ValueError(status["reason"])
+    payload = json.dumps(
+        {
+            "source": "watering-planner",
+            "requested_at": now_iso(),
+            "delivered_per_cycle_ml": result["pump"]["delivered_per_cycle_ml"],
+        }
+    ).encode("utf-8")
+    request = Request(
+        home_assistant_webhook_url(),
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=5) as response:
+            response.read()
+    except (OSError, URLError, TimeoutError) as exc:
+        raise ValueError(f"Home Assistant konnte nicht erreicht werden: {exc}") from exc
 
 
 def evaluate(
@@ -1917,22 +2028,25 @@ def evaluate(
     orientation_deg = calculated["orientation_deg"]
 
     connection_plan = optimize_static_connection_plan(balcony, walls, plants, outlets)
-    routing_plan = apply_fixed_connection_to_weather(connection_plan, plant_results, outlets)
+    routing_plan = apply_fixed_connection_to_weather(configured_connection_plan(plants), plant_results, outlets)
     recommended_cycles = routing_plan["cycles"]
-    assignment_by_plant = {assignment["plant_id"]: assignment for assignment in routing_plan["assignments"]}
+    actual_assignment_by_plant = {assignment["plant_id"]: assignment for assignment in routing_plan["assignments"]}
+    suggested_assignment_by_plant = {assignment["plant_id"]: assignment for assignment in connection_plan["assignments"]}
     for plant in plant_results:
-        assignment = assignment_by_plant.get(plant["id"])
-        if assignment:
-            plant["suggested_outlet"] = assignment["outlet_name"]
-            plant["suggested_ml_per_run"] = assignment["ml_per_run"]
-            plant["suggested_tubes"] = assignment["tubes"]
-            plant["suggested_tube_label"] = assignment["tube_label"]
-            plant["delivered_ml"] = assignment["delivered_ml"]
-            plant["difference_ml"] = assignment["difference_ml"]
-            plant["connection_status"] = assignment.get("connection_status")
-            plant["connection_severity"] = assignment.get("connection_severity")
-            plant["connection_action_title"] = assignment.get("connection_action_title")
-            plant["connection_note"] = assignment.get("connection_note")
+        suggested = suggested_assignment_by_plant.get(plant["id"])
+        actual = actual_assignment_by_plant.get(plant["id"])
+        if suggested:
+            plant["suggested_outlet"] = suggested["outlet_name"]
+            plant["suggested_ml_per_run"] = suggested["ml_per_run"]
+            plant["suggested_tubes"] = suggested["tubes"]
+            plant["suggested_tube_label"] = suggested["tube_label"]
+            plant["connection_status"] = suggested.get("connection_status")
+            plant["connection_severity"] = suggested.get("connection_severity")
+            plant["connection_action_title"] = suggested.get("connection_action_title")
+            plant["connection_note"] = suggested.get("connection_note")
+        if actual:
+            plant["delivered_ml"] = actual["delivered_ml"]
+            plant["difference_ml"] = actual["difference_ml"]
 
     total_delivered_per_run = sum(
         tube["ml_per_run"] * tube["count"]
@@ -1940,7 +2054,7 @@ def evaluate(
         for tube in assignment["tubes"]
     )
 
-    cycles_completed = completed_cycles_today()
+    cycles_completed = completed_cycles_today(str(balcony.get("timezone_name", "Europe/Berlin")))
     remaining_cycles = max(0, recommended_cycles - cycles_completed)
     delivered_if_remaining = remaining_cycles * total_delivered_per_run
     tank_after = max(0, balcony["tank_current_ml"] - delivered_if_remaining)
@@ -1952,7 +2066,10 @@ def evaluate(
     # not be vetoed again by coarse rain or temperature thresholds.
     should_run = bool(plants) and remaining_cycles > 0
 
-    if plants and balcony["tank_current_ml"] < total_delivered_per_run:
+    if plants and total_delivered_per_run <= 0:
+        should_run = False
+        reason = "Noch keine nutzbare Verschlauchung vorhanden"
+    elif plants and balcony["tank_current_ml"] < total_delivered_per_run:
         should_run = False
         reason = "Wassertank reicht nicht für einen vollständigen Pumpenlauf"
     elif not plants:
@@ -1971,9 +2088,12 @@ def evaluate(
         remaining_cycles,
         str(balcony.get("timezone_name", "Europe/Berlin")),
         get_setting("automation_pause_until", ""),
+        latest_watering_run_at(),
+        recommended_cycles,
+        cycles_completed,
     )
 
-    return {
+    result = {
         "should_run": should_run,
         "run_now": automation["run_now"],
         "reason": reason,
@@ -1985,7 +2105,7 @@ def evaluate(
             "rain_mm": rain_threshold,
         },
         "pump": {
-            "duration_seconds": 60,
+            "duration_seconds": 120,
             "delivered_per_cycle_ml": total_delivered_per_run,
             "delivered_if_remaining_ml": delivered_if_remaining,
         },
@@ -2013,6 +2133,8 @@ def evaluate(
         "automation": automation,
         "calculated_at": now_iso(),
     }
+    result["manual_run"] = manual_run_status(result)
+    return result
 
 
 def read_json(handler: SimpleHTTPRequestHandler) -> dict:
@@ -2082,6 +2204,10 @@ class AppHandler(SimpleHTTPRequestHandler):
                 plant_id = add_plant(payload)
                 send_json(self, {"id": plant_id, **get_state()}, HTTPStatus.CREATED)
                 return
+            if parsed.path == "/api/hoses":
+                save_hoses(read_json(self))
+                send_json(self, get_state())
+                return
             if parsed.path.startswith("/api/plants/") and parsed.path.endswith("/position"):
                 plant_id = int(parsed.path.split("/")[3])
                 update_plant_position(plant_id, read_json(self))
@@ -2102,6 +2228,28 @@ class AppHandler(SimpleHTTPRequestHandler):
                     rain_mm=float(weather["rain_mm"]),
                 )
                 send_json(self, evaluate_weather(weather, str(payload.get("slot", "morning"))))
+                return
+            if parsed.path == "/api/manual-run":
+                payload = read_json(self)
+                weather = weather_from_payload(payload)
+                result = evaluate_weather(weather, str(payload.get("slot", "morning")))
+                if not result["manual_run"]["available"]:
+                    send_json(self, {"error": result["manual_run"]["reason"]}, HTTPStatus.CONFLICT)
+                    return
+                try:
+                    trigger_home_assistant_manual_run(result)
+                except ValueError as exc:
+                    send_json(self, {"error": str(exc)}, HTTPStatus.BAD_GATEWAY)
+                    return
+                send_json(
+                    self,
+                    {
+                        "accepted": True,
+                        "message": "Manueller Pumpenlauf wurde an Home Assistant übergeben.",
+                        "evaluation": result,
+                    },
+                    HTTPStatus.ACCEPTED,
+                )
                 return
             if parsed.path == "/api/automation/pause":
                 payload = read_json(self)
@@ -2143,6 +2291,7 @@ class AppHandler(SimpleHTTPRequestHandler):
         if parsed.path.startswith("/api/plants/"):
             plant_id = int(parsed.path.rsplit("/", 1)[1])
             with connect() as conn:
+                conn.execute("UPDATE irrigation_hoses SET plant_id = NULL WHERE plant_id = ?", (plant_id,))
                 conn.execute("DELETE FROM plants WHERE id = ?", (plant_id,))
             send_json(self, get_state())
             return
@@ -2231,6 +2380,8 @@ def save_balcony(payload: dict) -> None:
                 "UPDATE pump_outlets SET name = ?, ml_per_run = ? WHERE id = ?",
                 (outlet["name"], int(outlet["ml_per_run"]), int(outlet["id"])),
             )
+        for plant in conn.execute("SELECT id FROM plants"):
+            sync_legacy_plant_connection(conn, int(plant["id"]))
         for wall in payload["walls"]:
             conn.execute(
                 """
@@ -2251,8 +2402,9 @@ def add_plant(payload: dict) -> int:
     for key in required:
         if key not in payload:
             raise KeyError(f"{key} fehlt")
-    outlet_id = int(payload.get("outlet_id") or default_outlet_id())
+    hose_numbers = normalize_hose_numbers(payload.get("hose_numbers", ""))
     with connect() as conn:
+        outlet_id = default_outlet_id_for_conn(conn)
         cursor = conn.execute(
             """
             INSERT INTO plants
@@ -2269,12 +2421,14 @@ def add_plant(payload: dict) -> int:
                 outlet_id,
                 float(payload.get("pos_x", 0.5)),
                 float(payload.get("pos_y", 0.5)),
-                str(payload.get("hose_numbers", "")).strip(),
-                int(payload["target_ml_per_cycle"]) if payload.get("target_ml_per_cycle") else None,
+                hose_numbers,
+                None,
                 now_iso(),
             ),
         )
-        return int(cursor.lastrowid)
+        plant_id = int(cursor.lastrowid)
+        assign_hoses_to_plant(conn, plant_id, hose_numbers)
+        return plant_id
 
 
 def update_plant(plant_id: int, payload: dict) -> None:
@@ -2283,8 +2437,7 @@ def update_plant(plant_id: int, payload: dict) -> None:
         if key not in payload:
             raise KeyError(f"{key} fehlt")
 
-    target_ml_per_cycle = payload.get("target_ml_per_cycle")
-    outlet_id = int(payload.get("outlet_id") or default_outlet_id())
+    hose_numbers = normalize_hose_numbers(payload.get("hose_numbers", ""))
     with connect() as conn:
         cursor = conn.execute(
             """
@@ -2293,10 +2446,7 @@ def update_plant(plant_id: int, payload: dict) -> None:
                 custom_name = ?,
                 size = ?,
                 pot_liters = ?,
-                pot_type = ?,
-                outlet_id = ?,
-                hose_numbers = ?,
-                target_ml_per_cycle = ?
+                pot_type = ?
             WHERE id = ?
             """,
             (
@@ -2305,20 +2455,17 @@ def update_plant(plant_id: int, payload: dict) -> None:
                 payload["size"],
                 float(payload["pot_liters"]),
                 payload["pot_type"],
-                outlet_id,
-                str(payload.get("hose_numbers", "")).strip(),
-                int(target_ml_per_cycle) if target_ml_per_cycle not in (None, "") else None,
                 plant_id,
             ),
         )
         if cursor.rowcount == 0:
             raise ValueError("Pflanze nicht gefunden")
+        assign_hoses_to_plant(conn, plant_id, hose_numbers)
 
 
 def default_outlet_id() -> int:
     with connect() as conn:
-        row = conn.execute("SELECT id FROM pump_outlets ORDER BY ml_per_run LIMIT 1").fetchone()
-        return int(row["id"])
+        return default_outlet_id_for_conn(conn)
 
 
 def update_plant_position(plant_id: int, payload: dict) -> None:

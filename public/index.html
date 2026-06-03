@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Terrassen-Bewässerungsplaner</title>
-    <link rel="stylesheet" href="/styles.css?v=20260531-8">
+    <link rel="stylesheet" href="/styles.css?v=20260602-1">
   </head>
   <body>
     <header class="topbar">
@@ -20,9 +20,17 @@
           <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10.5V20h13v-9.5"/><path d="M9 20v-6h6v6"/></svg>
           <span>Dashboard</span>
         </button>
-        <button class="nav-button" data-view-target="config" type="button">
+        <button class="nav-button" data-view-target="plants" type="button">
+          <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 4C12 4 6 8.5 6 15a5 5 0 0 0 5 5c6.5 0 9-8 9-16Z"/><path d="M6 20c2-6 6-9 12-12"/></svg>
+          <span>Pflanzen</span>
+        </button>
+        <button class="nav-button" data-view-target="hoses" type="button">
+          <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 19a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M18 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M8.5 15.5h3.2a3 3 0 0 0 3-3v-1"/><path d="M15.5 8.5h-3.2a3 3 0 0 0-3 3v1"/></svg>
+          <span>Schläuche</span>
+        </button>
+        <button class="nav-button" data-view-target="settings" type="button">
           <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"/><path d="M4 17h16"/><path d="M8 5v4"/><path d="M16 15v4"/></svg>
-          <span>Konfig.</span>
+          <span>Einstell.</span>
         </button>
         <button class="nav-button" data-view-target="info" type="button">
           <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 11v5"/><path d="M12 8h.01"/></svg>
@@ -95,7 +103,7 @@
         </section>
       </div>
 
-      <div class="view config-view" data-view="config">
+      <div class="view settings-view" data-view="settings">
         <section class="panel config-intro-panel wide-panel">
           <p class="eyebrow">Konfiguration</p>
           <h2>Einstellungen für deine Bewässerung</h2>
@@ -228,7 +236,25 @@
             </div>
           </form>
         </section>
+      </div>
 
+      <div class="view hoses-view" data-view="hoses">
+        <section class="panel wide-panel">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Hardware</p>
+              <h2>Schläuche und Outputs</h2>
+            </div>
+          </div>
+          <p class="section-copy">Lege jeden physischen Schlauch einmal an und wähle den Output, an dem er angeschlossen ist. Die Pflanze ordnest du anschließend auf der Seite Pflanzen zu.</p>
+          <form id="hoseForm">
+            <div class="hose-editor" id="hoseEditor"></div>
+            <div class="hose-actions">
+              <button class="secondary small-button" id="addHoseButton" type="button">Schlauch hinzufügen</button>
+              <button class="primary small-button" type="submit">Schläuche speichern</button>
+            </div>
+          </form>
+        </section>
         <section class="panel config-routing-panel">
           <div class="section-heading">
             <div>
@@ -239,7 +265,9 @@
           <p class="section-copy">Hier siehst du, ob die aktuellen Schläuche zur geplanten Gießmenge passen. Änderungen sind nur nötig, wenn eine Pflanze dauerhaft zu viel oder zu wenig Wasser erhält.</p>
           <div class="routing" id="routing"></div>
         </section>
+      </div>
 
+      <div class="view plants-view" data-view="plants">
         <section class="panel plan-panel config-plan-panel">
           <div class="section-heading">
             <div>
@@ -258,7 +286,7 @@
               <h2>Meine Pflanzen</h2>
             </div>
           </div>
-          <p class="section-copy">Topfgröße, Pflanzenart und Standort bestimmen den individuellen Wasserbedarf. Technische Anschlussdaten kannst du bei Bedarf direkt an der Pflanze korrigieren.</p>
+          <p class="section-copy">Topfgröße, Pflanzenart und Standort bestimmen den individuellen Wasserbedarf. Wähle je Pflanze die angeschlossenen Schläuche; deren Outputs bestimmen automatisch die gelieferte Menge.</p>
           <div class="plants" id="plants"></div>
         </section>
 
@@ -269,8 +297,8 @@
               <h2>Pflanze anlegen</h2>
             </div>
           </div>
-          <p class="section-copy">Lege für jeden Topf eine Pflanze an. Den passenden Anschluss schlägt der Planer anschließend automatisch vor.</p>
-          <form id="plantForm" class="grid">
+          <p class="section-copy">Lege für jeden Topf eine Pflanze an und wähle die angeschlossenen Schläuche. Die Output-Mengen werden aus der Schlauchkonfiguration übernommen.</p>
+          <form id="plantForm" class="grid" data-water-connection-form>
             <label>
               Pflanzenart
               <select name="catalog_id" id="catalogSelect"></select>
@@ -301,6 +329,11 @@
                 <option value="closed">Geschlossener Topf</option>
               </select>
             </label>
+            <label>
+              Angeschlossene Schläuche
+              <select name="hose_numbers" id="plantHoseSelect" multiple size="5"></select>
+            </label>
+            <div class="derived-water-preview" data-derived-water-preview></div>
             <button type="submit" class="primary">Hinzufügen</button>
           </form>
         </section>
@@ -318,13 +351,13 @@
             <div class="shortcut-box" id="shortcutBox"></div>
             <div class="shortcut-box">
               <p class="meta">Tastatur</p>
-              <code>1 Dashboard · 2 Konfiguration · 3 Info · R Aktualisieren</code>
+              <code>1 Dashboard · 2 Pflanzen · 3 Schläuche · 4 Einstellungen · 5 Info · R Aktualisieren</code>
             </div>
           </div>
         </section>
       </div>
     </main>
 
-    <script src="/app.js?v=20260531-8"></script>
+    <script src="/app.js?v=20260602-1"></script>
   </body>
 </html>

@@ -1,5 +1,8 @@
 # Replace NAS-IP with the address of the Synology running the planner.
 # Merge these top-level sections into an existing Home Assistant configuration.
+# Load the HTTP endpoint used by webhook automation triggers.
+webhook:
+
 sensor:
   - platform: rest
     name: Bewaesserung Planner
@@ -27,5 +30,46 @@ rest_command:
     headers:
       Content-Type: "application/json"
     payload: '{"auto_weather": true, "slot": "morning"}'
+
+script:
+  bewaesserung_pumpzyklus:
+    alias: Bewaesserung - Pumpzyklus
+    description: Setzt die Pumpe zurueck, schaltet sie fuer einen vollstaendigen Zyklus ein und verbucht den Lauf.
+    mode: single
+    sequence:
+      - alias: Pumpe vor dem Start ausschalten
+        action: switch.turn_off
+        target:
+          entity_id: switch.smart_plug_mini
+
+      - alias: Neustart der Pumpe abwarten
+        delay:
+          seconds: 2
+
+      - alias: Pumpe einschalten
+        action: switch.turn_on
+        target:
+          entity_id: switch.smart_plug_mini
+
+      - alias: Pumpzyklus abwarten
+        delay:
+          seconds: 120
+
+      - alias: Pumpe ausschalten
+        action: switch.turn_off
+        target:
+          entity_id: switch.smart_plug_mini
+
+      - alias: Pumpzyklus im Planner verbuchen
+        action: rest_command.bewaesserung_mark_run
+
+      - alias: Planner-Aktualisierung abwarten
+        delay:
+          seconds: 2
+
+      - alias: Planner-Sensor aktualisieren
+        action: homeassistant.update_entity
+        target:
+          entity_id: sensor.bewaesserung_planner
 
 automation: !include automations.yaml

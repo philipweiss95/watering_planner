@@ -51,6 +51,7 @@ function renderState() {
   catalogSelect.innerHTML = state.catalog
     .map((plant) => `<option value="${plant.id}">${plant.name}</option>`)
     .join("");
+  $("#plantHoseSelect").innerHTML = hoseSelectOptions();
 
   const balconyForm = $("#balconyForm");
   for (const [key, value] of Object.entries(state.balcony)) {
@@ -94,9 +95,11 @@ function renderState() {
 
   renderShortcuts();
   renderWateringLog();
+  renderHoses();
   renderPlants();
   renderBalconyPlan();
   renderEvaluation(latestEvaluation);
+  updateDerivedWaterPreview($("#plantForm"));
 }
 
 function setActiveView(viewName) {
@@ -116,7 +119,7 @@ function setActiveView(viewName) {
 }
 
 function renderPlants() {
-  const assignments = latestEvaluation?.routing_plan?.assignments || [];
+  const assignments = latestEvaluation?.connection_plan?.assignments || [];
   const evaluatedPlants = latestEvaluation?.plants || [];
   $("#plants").innerHTML = state.plants.length
     ? state.plants
@@ -125,9 +128,9 @@ function renderPlants() {
             if (plant.id === editingPlantId) return renderPlantEditForm(plant);
             const assignment = assignments.find((item) => item.plant_id === plant.id);
             const evaluated = evaluatedPlants.find((item) => item.id === plant.id);
-            const outletText = assignment
-              ? `Fester Anschluss: ${assignment.tube_label} pro Zyklus`
-              : "Schläuche werden automatisch berechnet";
+            const outletText = plant.hose_count
+              ? `Anschluss: ${hoseLabel(plant.hose_numbers)} · ${plant.outlet_summary} · ${plant.configured_ml_per_cycle} ml/Zyklus`
+              : "Noch keine Schläuche angeschlossen";
             const connectionText = assignment?.connection_note || plant.connection_note || "";
             const needText = evaluated
               ? `Berechneter Bedarf heute: ${evaluated.need_ml} ml`
@@ -198,14 +201,15 @@ function renderPlants() {
       await evaluateCurrent();
     });
   });
+  bindDerivedWaterPreviews();
 }
 
 function renderConnectionCompare(plant, assignment) {
   const status = assignment?.connection_status || plant.connection_status || "ok";
-  const currentMl = Math.round(plant.target_ml_per_cycle || plant.ml_per_run || 0);
+  const currentMl = Math.round(plant.configured_ml_per_cycle || 0);
   const recommendedMl = Math.round(assignment?.ml_per_cycle || currentMl);
   const currentLabel = plant.hose_numbers
-    ? `Schlauch ${plant.hose_numbers}`
+    ? hoseLabel(plant.hose_numbers)
     : "Kein Schlauch";
   const suggestedLabel = assignment?.tube_label || "Noch kein Vorschlag";
   return `
@@ -241,7 +245,7 @@ function connectionClass(assignment) {
 function renderPlantEditForm(plant) {
   return `
     <article class="plant-card editing">
-      <form class="plant-edit-form" data-plant-edit-form="${plant.id}">
+      <form class="plant-edit-form" data-plant-edit-form="${plant.id}" data-water-connection-form>
         <div class="plant-top">
           <strong>${plant.custom_name}</strong>
           <button class="secondary small-button" data-cancel-edit type="button">Abbrechen</button>
@@ -288,19 +292,12 @@ function renderPlantEditForm(plant) {
             </select>
           </label>
           <label>
-            Bestehender Pumpenausgang
-            <select name="outlet_id">
-              ${state.outlets.map((outlet) => `<option value="${outlet.id}" ${outlet.id === plant.outlet_id ? "selected" : ""}>${outlet.name} · ${outlet.ml_per_run} ml</option>`).join("")}
+            Angeschlossene Schläuche
+            <select name="hose_numbers" multiple size="5">
+              ${hoseSelectOptions(plant.hose_numbers)}
             </select>
           </label>
-          <label>
-            Schlauchnummern
-            <input name="hose_numbers" value="${escapeAttribute(plant.hose_numbers || "")}" placeholder="z.B. 12, 5, 16">
-          </label>
-          <label>
-            Aktuelle Wassermenge je Zyklus in ml
-            <input type="number" name="target_ml_per_cycle" min="0" step="1" value="${plant.target_ml_per_cycle ?? ""}">
-          </label>
+          <div class="derived-water-preview" data-derived-water-preview></div>
         </div>
         <button type="submit" class="primary">Speichern</button>
       </form>
@@ -311,9 +308,107 @@ function renderPlantEditForm(plant) {
 function plantPayloadFromForm(form) {
   const payload = formData(form);
   payload.pot_liters = Number(payload.pot_liters);
-  payload.outlet_id = Number(payload.outlet_id);
-  payload.target_ml_per_cycle = payload.target_ml_per_cycle === "" ? null : Number(payload.target_ml_per_cycle);
+  payload.hose_numbers = selectedHoseNumbers(form);
   return payload;
+}
+
+function outletOptions(selectedOutletId = null) {
+  return state.outlets
+    .map(
+      (outlet) =>
+        `<option value="${outlet.id}" ${outlet.id === selectedOutletId ? "selected" : ""}>${outlet.name} · ${outlet.ml_per_run} ml je Schlauch</option>`,
+    )
+    .join("");
+}
+
+function hoseNumbers(value) {
+  const raw = Array.isArray(value) ? value.join(",") : String(value || "");
+  return [...new Set(raw.match(/\d+/g) || [])];
+}
+
+function hoseLabel(value) {
+  const numbers = hoseNumbers(value);
+  return `${numbers.length === 1 ? "Schlauch" : "Schläuche"} ${numbers.join(", ")}`;
+}
+
+function updateDerivedWaterPreview(form) {
+  const preview = form?.querySelector("[data-derived-water-preview]");
+  if (!preview) return;
+  const selected = selectedHoseNumbers(form);
+  const hoses = state?.hoses?.filter((hose) => selected.includes(hose.number)) || [];
+  const totalMl = hoses.reduce((sum, hose) => sum + Number(hose.ml_per_run || 0), 0);
+  const detail = hoses.length
+    ? hoses.map((hose) => `${hose.number}: ${hose.outlet_name} (${hose.ml_per_run} ml)`).join(" · ")
+    : "Noch keine Schläuche ausgewählt";
+  preview.innerHTML = `
+    <span>Automatisch berechnete Wassermenge</span>
+    <strong>${totalMl} ml pro Zyklus</strong>
+    <small>${detail}</small>
+  `;
+}
+
+function selectedHoseNumbers(form) {
+  const field = form?.elements.hose_numbers;
+  if (!field) return [];
+  if (field.multiple) return Array.from(field.selectedOptions).map((option) => option.value);
+  return hoseNumbers(field.value);
+}
+
+function hoseSelectOptions(selectedNumbers = []) {
+  const selected = new Set(hoseNumbers(selectedNumbers));
+  return (state?.hoses || [])
+    .map((hose) => {
+      const assigned = hose.plant_name ? ` · aktuell ${hose.plant_name}` : "";
+      return `<option value="${escapeAttribute(hose.number)}" ${selected.has(hose.number) ? "selected" : ""}>Schlauch ${hose.number} · ${hose.outlet_name} · ${hose.ml_per_run} ml${assigned}</option>`;
+    })
+    .join("");
+}
+
+function renderHoses() {
+  const editor = $("#hoseEditor");
+  if (!editor) return;
+  editor.innerHTML = state.hoses.length
+    ? state.hoses.map((hose) => hoseRow(hose)).join("")
+    : `<p class="meta">Noch keine Schläuche angelegt.</p>`;
+  bindHoseRemoveButtons();
+}
+
+function hoseRow(hose = {}) {
+  return `
+    <div class="hose-row" data-hose-row>
+      <label>
+        Schlauchnummer
+        <input name="hose_number" value="${escapeAttribute(hose.number || "")}" placeholder="z.B. 12">
+      </label>
+      <label>
+        Output
+        <select name="hose_outlet_id">${outletOptions(hose.outlet_id)}</select>
+      </label>
+      <span class="hose-assignment">${hose.plant_name ? `Pflanze: ${hose.plant_name}` : "Noch keiner Pflanze zugeordnet"}</span>
+      <button class="delete small-button" data-remove-hose type="button">Entfernen</button>
+    </div>
+  `;
+}
+
+function bindHoseRemoveButtons() {
+  document.querySelectorAll("[data-remove-hose]").forEach((button) => {
+    if (button.dataset.removeHoseBound) return;
+    button.addEventListener("click", () => {
+      button.closest("[data-hose-row]").remove();
+    });
+    button.dataset.removeHoseBound = "true";
+  });
+}
+
+function bindDerivedWaterPreviews() {
+  document.querySelectorAll("[data-water-connection-form]").forEach((form) => {
+    if (!form.dataset.waterPreviewBound) {
+      form.addEventListener("input", () => updateDerivedWaterPreview(form));
+      form.addEventListener("change", () => updateDerivedWaterPreview(form));
+      form.dataset.waterPreviewBound = "true";
+    }
+    updateDerivedWaterPreview(form);
+  });
 }
 
 function escapeAttribute(value) {
@@ -441,7 +536,7 @@ function renderEvaluation(result) {
   renderWateringLog();
   renderPlants();
 
-  $("#routing").innerHTML = result.routing.length
+  const configuredRouting = result.routing.length
     ? result.routing
         .map(
           (route) => `
@@ -457,22 +552,43 @@ function renderEvaluation(result) {
             </article>
           `,
         )
-        .join("") + renderRoutingAssignments(result)
+        .join("")
     : `<p class="meta">Noch keine Verschlauchung berechenbar.</p>`;
+  $("#routing").innerHTML = configuredRouting + renderRoutingAssignments(result);
 }
 
 function renderAutomationControls(result) {
   if (!result.automation) return "";
   const paused = result.automation.paused;
+  const manualRun = result.manual_run || {};
   return `
     <div class="automation-controls">
+      <button class="primary small-button" data-manual-run type="button" ${manualRun.available ? "" : "disabled"}>Zyklus jetzt starten</button>
       <button class="secondary small-button" data-pause-automation type="button" ${paused ? "disabled" : ""}>Heute pausieren</button>
       <button class="secondary small-button" data-resume-automation type="button" ${paused ? "" : "disabled"}>Pause aufheben</button>
+      <span class="manual-run-hint">${manualRun.reason || ""}</span>
     </div>
   `;
 }
 
 function bindAutomationControls() {
+  document.querySelectorAll("[data-manual-run]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      if (!window.confirm("Jetzt sofort einen vollständigen Pumpzyklus über Home Assistant starten?")) return;
+      button.disabled = true;
+      try {
+        const response = await api("/api/manual-run", {
+          method: "POST",
+          body: JSON.stringify({ auto_weather: true }),
+        });
+        window.alert(response.message);
+        await evaluateCurrent();
+      } catch (error) {
+        window.alert(error.message);
+        button.disabled = false;
+      }
+    });
+  });
   document.querySelectorAll("[data-pause-automation]").forEach((button) => {
     button.addEventListener("click", async () => {
       button.disabled = true;
@@ -584,7 +700,7 @@ function renderDashboardCards(result, urgentActions, changeActions) {
       <div>
         <p class="metric-label">Home Assistant</p>
         <strong>${automation.run_now ? "Jetzt" : automation.next_window || "--"}</strong>
-        <p class="metric-detail">${automation.paused ? "Automatik pausiert" : automation.shortfall_prevention ? "vorgezogen bei knappen Fenstern" : "nächstes Zeitfenster"}</p>
+        <p class="metric-detail">${automation.paused ? "Automatik pausiert" : automation.catch_up ? "verpasster Lauf wird nachgeholt" : "nächster verteilter Lauf"}</p>
       </div>
     </article>
     <article class="metric-card model-metric">
@@ -718,14 +834,14 @@ function renderActionSummary(urgentActions, changeActions) {
 }
 
 function renderRoutingAssignments(result) {
-  if (!result.routing_plan?.assignments?.length) return "";
-  const urgent = result.routing_plan.assignments.filter((item) => item.connection_status === "urgent");
-  const changes = result.routing_plan.assignments.filter((item) => item.connection_status === "change");
-  const ok = result.routing_plan.assignments.filter((item) => item.connection_status === "ok");
+  if (!result.connection_plan?.assignments?.length) return "";
+  const urgent = result.connection_plan.assignments.filter((item) => item.connection_status === "urgent");
+  const changes = result.connection_plan.assignments.filter((item) => item.connection_status === "change");
+  const ok = result.connection_plan.assignments.filter((item) => item.connection_status === "ok");
   const sorted = [...urgent, ...changes, ...ok];
   return `
     <div class="assignment-list">
-      <strong>${result.routing_plan.summary}</strong>
+      <strong>${result.connection_plan.summary}</strong>
       ${sorted
         .map(
           (item) => `
@@ -765,6 +881,11 @@ function rainSummary(result) {
 function renderShortcuts() {
   if (!shortcuts) return;
   $("#shortcutBox").innerHTML = `
+    <p class="meta">Sofort einen Zyklus starten</p>
+    <code>${shortcuts.manual_run_url}</code>
+    <ol>
+      ${shortcuts.manual_run_steps.map((step) => `<li>${shortcutStep(step)}</li>`).join("")}
+    </ol>
     <p class="meta">Prüfen-URL</p>
     <code>${shortcuts.check_url}</code>
     <p class="meta">Nach Pumpenlauf verbuchen</p>
@@ -794,7 +915,7 @@ $("#plantForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const submitButton = event.currentTarget.querySelector("button[type='submit']");
   submitButton.disabled = true;
-  const payload = numberFields(formData(event.currentTarget), ["pot_liters"]);
+  const payload = plantPayloadFromForm(event.currentTarget);
   try {
     if (!payload.custom_name) {
       const selected = state.catalog.find((plant) => plant.id === payload.catalog_id);
@@ -807,9 +928,39 @@ $("#plantForm").addEventListener("submit", async (event) => {
     state = response;
     event.currentTarget.reset();
     renderState();
+    updateDerivedWaterPreview(event.currentTarget);
     await evaluateWithPayload(currentManualWeatherPayload());
   } catch (error) {
     $("#result").innerHTML = `<strong>Pflanze konnte nicht angelegt werden</strong><span>${error.message}</span>`;
+  } finally {
+    submitButton.disabled = false;
+  }
+});
+
+$("#addHoseButton").addEventListener("click", () => {
+  const editor = $("#hoseEditor");
+  if (editor.querySelector(".meta")) editor.innerHTML = "";
+  editor.insertAdjacentHTML("beforeend", hoseRow());
+  bindHoseRemoveButtons();
+});
+
+$("#hoseForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const submitButton = event.currentTarget.querySelector("button[type='submit']");
+  submitButton.disabled = true;
+  try {
+    const hoses = Array.from(event.currentTarget.querySelectorAll("[data-hose-row]")).map((row) => ({
+      number: row.querySelector("[name='hose_number']").value,
+      outlet_id: Number(row.querySelector("[name='hose_outlet_id']").value),
+    }));
+    state = await api("/api/hoses", {
+      method: "POST",
+      body: JSON.stringify({ hoses }),
+    });
+    renderState();
+    await evaluateCurrent();
+  } catch (error) {
+    $("#result").innerHTML = `<strong>Schläuche konnten nicht gespeichert werden</strong><span>${error.message}</span>`;
   } finally {
     submitButton.disabled = false;
   }
@@ -889,13 +1040,15 @@ document.addEventListener("keydown", async (event) => {
   const typing = target && ["INPUT", "SELECT", "TEXTAREA"].includes(target.tagName);
   if (typing || event.metaKey || event.ctrlKey || event.altKey) return;
   if (event.key === "1") setActiveView("dashboard");
-  if (event.key === "2") setActiveView("config");
-  if (event.key === "3") setActiveView("info");
+  if (event.key === "2") setActiveView("plants");
+  if (event.key === "3") setActiveView("hoses");
+  if (event.key === "4") setActiveView("settings");
+  if (event.key === "5") setActiveView("info");
   if (event.key.toLowerCase() === "r") await evaluateCurrent();
 });
 
 const initialView = window.location.hash.replace("#", "");
-if (["dashboard", "config", "info"].includes(initialView)) {
+if (["dashboard", "plants", "hoses", "settings", "info"].includes(initialView)) {
   setActiveView(initialView);
 }
 

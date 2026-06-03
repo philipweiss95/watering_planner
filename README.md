@@ -14,7 +14,7 @@ Danach im Browser öffnen:
 http://127.0.0.1:8080
 ```
 
-Die SQLite-Datenbank wird beim ersten Start unter `data/watering.sqlite3` angelegt. Liegt `data/table.xlsx` daneben, wird dieser Bestand als Grundlage importiert: Pflanzenname, Schlauchnummern, Größe und ml pro Pumpzyklus werden übernommen, die Positionen werden zunächst verteilt und können danach in der Draufsicht verschoben werden. Ohne Excel-Datei startet die App mit Beispieldaten.
+Die SQLite-Datenbank wird beim ersten Start unter `data/watering.sqlite3` angelegt. Eine neue leere Datenbank startet mit Beispieldaten. Der anschließend im Webinterface gepflegte Datenbankbestand ist maßgeblich; Excel-Dateien im Datenordner werden nicht importiert.
 
 ## Docker / Synology NAS
 
@@ -32,7 +32,7 @@ Danach öffnen:
 http://NAS-IP:8080
 ```
 
-Die Datenbank bleibt durch das Volume `./data:/app/data` erhalten. Die vollständige Synology-Anleitung steht unter [docs/synology-docker.md](docs/synology-docker.md). Für den Synology Container Manager gibt es zusätzlich eine explizite Datei ohne Variablen: `compose.synology.yaml`.
+Die Datenbank bleibt durch das Volume `./data:/app/data` erhalten. Die vollständige Synology-Anleitung steht unter [docs/synology-docker.md](docs/synology-docker.md). Für Docker Compose und den Synology Container Manager gibt es genau eine Projektdatei: `docker-compose.yml`. Private Werte werden auf der NAS in `.env.synology` hinterlegt.
 
 Für die lokale Pumpensteuerung mit Meross Matter empfiehlt sich Home Assistant OS als VM und der Planer als separater Container auf der NAS. Die Anleitung steht unter [docs/home-assistant-vm.md](docs/home-assistant-vm.md). Direkt nutzbare Vorlagen liegen unter [home-assistant/configuration.yaml](home-assistant/configuration.yaml) und [home-assistant/automations.yaml](home-assistant/automations.yaml).
 
@@ -76,7 +76,7 @@ Die Antwort enthält zwei Entscheidungen:
 - `should_run`: Heute besteht grundsätzlich noch Bewässerungsbedarf.
 - `run_now`: Ein lokaler Automations-Controller wie Home Assistant soll im aktuellen Zeitfenster jetzt einen Zyklus starten.
 
-Der Planer kennt dafür die Tagesfenster `07:00`, `10:00`, `11:00`, `14:00`, `15:00`, `16:00`, `17:00` sowie ein Notfallfenster um `19:00`. Wenn die verbleibenden Zyklen im Tagesverlauf knapp werden, setzt der Planer `run_now` früher auf `true`, damit die Zyklen nicht erst spät am Tag nachgeholt werden müssen.
+Der Planer verteilt die empfohlenen Zyklen gleichmäßig zwischen `07:00` und `19:00`. Bei vier Zyklen entstehen zum Beispiel die Zeitpunkte `07:00`, `11:00`, `15:00`, `19:00`. Manuell verbuchte Läufe zählen dabei mit. Home Assistant fragt den Planer alle 15 Minuten erneut ab. Dadurch geht ein Lauf nicht verloren, wenn eine einzelne Sensoraktualisierung ausfällt; ein verpasster geplanter Lauf wird später nachgeholt. Nach einem verbuchten Pumpenlauf setzt der Planer zusätzlich eine Sicherheitspause von 30 Minuten, damit Zyklen nicht direkt hintereinander starten.
 
 Die Berechnung nutzt Temperatur, Tagesniederschlag, Wind, FAO-Referenzverdunstung ET₀, Sonnenscheindauer, Balkon-/Terrassenausrichtung in Grad, Koordinaten, Pflanzenpositionen und die vier Wandhöhen nach Seite. Wenn Open-Meteo keine ET₀-Werte liefert oder manuelle Wetterdaten genutzt werden, schätzt die App ET₀ aus Temperatur, Sonnenscheindauer und Wind. Zusätzlich wird Wind als Balkon-Expositionsfaktor berechnet: hohe Windgeschwindigkeiten erhöhen Transpiration und Topfverdunstung, niedrige Wände schützen weniger.
 
@@ -88,13 +88,15 @@ Tagesbedarf ≈ ET₀ × Pflanzenkoeffizient × wirksame Kronenfläche
             - wirksam aufgefangener Niederschlag
 ```
 
-Der rohe ET0-Kübelwert wird anschließend mit einem Terrassen-Tropfbewässerungsfaktor kalibriert und zusätzlich saisonal gewichtet. Intern entspricht die Standardkalibrierung 6%. In der Weboberfläche wird sie verständlicher als relative Gießmenge angezeigt: Unter `Konfig. > Bewässerung einstellen` bedeutet `100%` Standardmenge, `120%` gießt 20% mehr. Eine Live-Vorschau zeigt die konkrete Auswirkung auf den täglichen Pflanzenbedarf. Ende Mai liegt der Pflanzenbedarf durch die saisonale Gewichtung unter dem Hochsommerwert; im Juli/August steigt er je nach Pflanzengruppe wieder an. Das bildet die beobachtete Praxis ab, dass die reale Anlage mit wenigen gemeinsamen Pumpzyklen auskommt und der unkalibrierte ET0-Ansatz deutlich zu hohe Tagesmengen liefert. Die Kronenfläche wird aus Pflanzenart, Pflanzengröße und Topfvolumen abgeleitet. Topfarten mit Depot, Überlauf oder geschlossenem Topf verändern die nutzbare Wassermenge und das Überwässerungsrisiko.
+Der rohe ET0-Kübelwert wird anschließend mit einem Terrassen-Tropfbewässerungsfaktor kalibriert und zusätzlich saisonal gewichtet. Intern entspricht die Standardkalibrierung 6%. In der Weboberfläche wird sie verständlicher als relative Gießmenge angezeigt: Unter `Einstellungen > Bewässerung einstellen` bedeutet `100%` Standardmenge, `120%` gießt 20% mehr. Eine Live-Vorschau zeigt die konkrete Auswirkung auf den täglichen Pflanzenbedarf. Ende Mai liegt der Pflanzenbedarf durch die saisonale Gewichtung unter dem Hochsommerwert; im Juli/August steigt er je nach Pflanzengruppe wieder an. Das bildet die beobachtete Praxis ab, dass die reale Anlage mit wenigen gemeinsamen Pumpzyklen auskommt und der unkalibrierte ET0-Ansatz deutlich zu hohe Tagesmengen liefert. Die Kronenfläche wird aus Pflanzenart, Pflanzengröße und Topfvolumen abgeleitet. Topfarten mit Depot, Überlauf oder geschlossenem Topf verändern die nutzbare Wassermenge und das Überwässerungsrisiko.
 
 Der Pflanzenkatalog enthält typische Balkonpflanzen aus Gemüse, Kräutern, Beerenobst, Blühpflanzen, mediterranen Gehölzen, Kletterpflanzen und Sukkulenten.
 
 ## Verschlauchung und Beschattung
 
-Alle Pflanzen werden bei jedem Pumpenzyklus gleichzeitig gegossen. Deshalb berechnet das Tool zuerst einen festen Anschlussplan, der unabhängig vom aktuellen Wetter ist und nur einmal umgesetzt werden soll. Das Wetter verändert danach nur noch die Anzahl gemeinsamer Pumpzyklen, nicht die Verschlauchung. Der feste Plan ist auf einen mittelwarmen Auslegungstag mit 4 gemeinsamen Zyklen kalibriert. Eine Pflanze kann mehrere Schläuche bekommen, zum Beispiel `1x 30 ml + 1x 15 ml` statt `1x 60 ml`, wenn der feste Bedarf pro Zyklus näher bei 45 ml liegt. Der Vorschlag nutzt nie mehr Schläuche als im aktuellen Bestand der Pflanze hinterlegt sind; weniger Schläuche sind möglich. Jeder Ausgang hat maximal 12 Anschlüsse; diese Grenze wird beim Optimieren für die 15-, 30- und 60-ml-Ausgänge einzeln geprüft. Die Oberfläche weist darauf hin, wenn eine Pflanze dauerhaft besser an einem anderen Anschlusstyp oder mit einer anderen Schlauchkombination hängen sollte.
+Alle Pflanzen werden bei jedem Pumpenzyklus gleichzeitig gegossen. Unter `Schläuche` wird jeder physische Schlauch einmal mit seinem 15-, 30- oder 60-ml-Output angelegt. Unter `Pflanzen` werden anschließend ein oder mehrere Schläuche ausgewählt. Daraus berechnet der Planer automatisch die tatsächlich gelieferte Wassermenge pro Pflanze und pro Pumpenzyklus.
+
+Zusätzlich berechnet das Tool einen festen Anschlussvorschlag für einen mittelwarmen Auslegungstag mit 4 gemeinsamen Zyklen. Er dient als Hinweis, wenn eine Pflanze dauerhaft besser an einer anderen Schlauchkombination hängen sollte. Das Wetter verändert nur die Anzahl gemeinsamer Pumpzyklen, nicht die eingetragene Verschlauchung. Jeder Ausgang hat maximal 12 Anschlüsse; diese Grenze wird beim Vorschlag für die 15-, 30- und 60-ml-Ausgänge einzeln geprüft.
 
 Die Pflanzen können in der Draufsicht des Balkons platziert werden. Aus Position, Ausrichtung, Sonnenstand und Wandhöhen wird für jede Pflanze ein eigener Beschattungsfaktor berechnet.
 
@@ -105,6 +107,18 @@ Die Weboberfläche zeigt die Kurzbefehle-Schritte und URLs an. Maschinenlesbar g
 ```text
 GET /api/shortcuts?base_url=https://deine-domain.example
 ```
+
+Ein manueller Sofortlauf kann über die Weboberfläche oder per iPhone-Kurzbefehl angefordert werden:
+
+```text
+POST /api/manual-run
+Content-Type: application/json
+
+{"auto_weather":true}
+```
+
+Der Planer prüft zuerst, ob Tank und Verschlauchung einen vollständigen Zyklus zulassen. Anschließend ruft er den konfigurierten lokalen Home-Assistant-Webhook auf. Home Assistant schaltet die Steckdose und verbucht den Lauf nach dem Ausschalten.
+Der Endpunkt ist für das lokale Heimnetz gedacht. Wenn der Planer über einen Reverse Proxy aus dem Internet erreichbar ist, muss `/api/manual-run` dort zusätzlich geschützt werden.
 
 Nach einem real ausgeführten Pumpenlauf kann HomeKit den Lauf verbuchen:
 
@@ -130,6 +144,7 @@ Die letzten Läufe erscheinen im Dashboard als Protokoll unter `Bewässerungsvor
 - `POST /api/evaluate`: Empfehlung berechnen, mit `{"auto_weather": true}` automatisch
 - `GET /api/homekit/check`: kompakte HomeKit-Entscheidung
 - `GET /api/watering-events`: Protokoll der letzten Bewässerungsläufe
+- `POST /api/manual-run`: vollständigen Pumpzyklus sofort über Home Assistant anfordern
 - `POST /api/homekit/mark-run`: Pumpenlauf verbuchen und Tank reduzieren
 - `POST /api/automation/pause`: Automatik bis morgen pausieren
 - `POST /api/automation/resume`: Automatik wieder aktivieren
