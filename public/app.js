@@ -4,6 +4,8 @@ let shortcuts = null;
 let wateringEvents = [];
 let editingPlantId = null;
 
+const IGNORED_SUGGESTIONS_KEY = "wateringPlannerIgnoredSuggestions";
+
 const $ = (selector) => document.querySelector(selector);
 
 async function api(path, options = {}) {
@@ -127,11 +129,12 @@ function renderPlants() {
           (plant) => {
             if (plant.id === editingPlantId) return renderPlantEditForm(plant);
             const assignment = assignments.find((item) => item.plant_id === plant.id);
+            const ignored = assignment && isSuggestionIgnored(assignment);
             const evaluated = evaluatedPlants.find((item) => item.id === plant.id);
             const outletText = plant.hose_count
               ? `Anschluss: ${hoseLabel(plant.hose_numbers)} · ${plant.outlet_summary} · ${plant.configured_ml_per_cycle} ml/Zyklus`
               : "Noch keine Schläuche angeschlossen";
-            const connectionText = assignment?.connection_note || plant.connection_note || "";
+            const connectionText = ignored ? "" : assignment?.connection_note || plant.connection_note || "";
             const needText = evaluated
               ? `Berechneter Bedarf heute: ${evaluated.need_ml} ml`
               : "Bedarf wird nach Wetterdaten berechnet";
@@ -147,7 +150,7 @@ function renderPlants() {
                     <button class="delete" data-delete="${plant.id}" type="button">Entfernen</button>
                   </div>
                 </div>
-                ${renderConnectionCompare(plant, assignment)}
+                ${renderConnectionCompare(plant, assignment, ignored)}
                 <p class="meta">${outletText}</p>
                 ${connectionText ? `<p class="meta ${connectionClass(assignment)}">${connectionText}</p>` : ""}
                 <p class="meta">${needText}</p>
@@ -202,16 +205,17 @@ function renderPlants() {
     });
   });
   bindDerivedWaterPreviews();
+  bindIgnoreSuggestionButtons();
 }
 
-function renderConnectionCompare(plant, assignment) {
-  const status = assignment?.connection_status || plant.connection_status || "ok";
+function renderConnectionCompare(plant, assignment, ignored = false) {
+  const status = ignored ? "ok" : assignment?.connection_status || plant.connection_status || "ok";
   const currentMl = Math.round(plant.configured_ml_per_cycle || 0);
-  const recommendedMl = Math.round(assignment?.ml_per_cycle || currentMl);
+  const recommendedMl = ignored ? currentMl : Math.round(assignment?.ml_per_cycle || currentMl);
   const currentLabel = plant.hose_numbers
     ? hoseLabel(plant.hose_numbers)
     : "Kein Schlauch";
-  const suggestedLabel = assignment?.tube_label || "Noch kein Vorschlag";
+  const suggestedLabel = ignored ? currentLabel : assignment?.tube_label || "Noch kein Vorschlag";
   return `
     <div class="connection-compare ${status}">
       <div class="connection-side">
@@ -225,6 +229,7 @@ function renderConnectionCompare(plant, assignment) {
         <span>${recommendedMl} ml/Zyklus</span>
       </div>
       <span class="connection-chip ${status}">${connectionStatusLabel(status)}</span>
+      ${assignment && !ignored && assignment.connection_status !== "ok" ? `<button class="secondary small-button ignore-suggestion-button" data-ignore-suggestion="${plant.id}" type="button">Ignorieren</button>` : ""}
     </div>
   `;
 }
@@ -512,8 +517,9 @@ function currentManualWeatherPayload() {
 
 function renderEvaluation(result) {
   if (!result) return;
-  const urgentActions = result.connection_plan?.assignments?.filter((item) => item.connection_status === "urgent") || [];
-  const changeActions = result.connection_plan?.assignments?.filter((item) => item.connection_status === "change") || [];
+  const activeAssignments = visibleConnectionAssignments(result.connection_plan?.assignments || []);
+  const urgentActions = activeAssignments.filter((item) => item.connection_status === "urgent");
+  const changeActions = activeAssignments.filter((item) => item.connection_status === "change");
 
   const status = $("#runStatus");
   status.textContent = `${result.remaining_cycles_today} offen`;
@@ -522,16 +528,22 @@ function renderEvaluation(result) {
 
   $("#dashboardCards").innerHTML = renderDashboardCards(result, urgentActions, changeActions);
   $("#configSummary").innerHTML = renderConfigSummary(result, urgentActions, changeActions);
+  $("#dashboardContext").innerHTML = renderDashboardContext(result, urgentActions, changeActions);
+  $("#calculationFlow").innerHTML = renderCalculationFlow(result, urgentActions, changeActions);
   $("#result").innerHTML = `
-    <div class="decision-copy">
-      <strong>${result.run_now ? "Jetzt pumpen" : result.should_run ? "Bedarf vorhanden" : "Heute pausieren"}</strong>
-      <span>${result.reason}</span>
-      <span>${result.automation?.summary || ""}</span>
+    <div class="decision-layout ${result.run_now ? "go" : result.should_run ? "wait" : "stop"}">
+      <div class="decision-copy">
+        <span class="decision-kicker">${result.run_now ? "Aktion möglich" : result.should_run ? "Heute einplanen" : "Kein Lauf nötig"}</span>
+        <strong>${result.run_now ? "Jetzt pumpen" : result.should_run ? "Bedarf vorhanden" : "Heute pausieren"}</strong>
+        <span>${result.reason}</span>
+        <span>${result.automation?.summary || ""}</span>
+      </div>
+      ${renderAutomationControls(result)}
     </div>
-    ${renderAutomationControls(result)}
     ${renderActionSummary(urgentActions, changeActions)}
   `;
   bindAutomationControls();
+  bindIgnoreSuggestionButtons();
   updateWateringAmountPreview();
   renderWateringLog();
   renderPlants();
@@ -555,6 +567,7 @@ function renderEvaluation(result) {
         .join("")
     : `<p class="meta">Noch keine Verschlauchung berechenbar.</p>`;
   $("#routing").innerHTML = configuredRouting + renderRoutingAssignments(result);
+  bindIgnoreSuggestionButtons();
 }
 
 function renderAutomationControls(result) {
@@ -563,10 +576,106 @@ function renderAutomationControls(result) {
   const manualRun = result.manual_run || {};
   return `
     <div class="automation-controls">
-      <button class="primary small-button" data-manual-run type="button" ${manualRun.available ? "" : "disabled"}>Zyklus jetzt starten</button>
-      <button class="secondary small-button" data-pause-automation type="button" ${paused ? "disabled" : ""}>Heute pausieren</button>
-      <button class="secondary small-button" data-resume-automation type="button" ${paused ? "" : "disabled"}>Pause aufheben</button>
-      <span class="manual-run-hint">${manualRun.reason || ""}</span>
+      <div class="manual-run-card ${manualRun.available ? "available" : "blocked"}">
+        <span class="metric-label">Manueller Durchlauf</span>
+        <button class="primary" data-manual-run type="button" ${manualRun.available ? "" : "disabled"}>Zyklus jetzt starten</button>
+        <span class="manual-run-hint">${manualRun.reason || "Startet sofort einen vollständigen Pumpzyklus."}</span>
+      </div>
+      <div class="automation-secondary">
+        <button class="secondary small-button" data-pause-automation type="button" ${paused ? "disabled" : ""}>Heute pausieren</button>
+        <button class="secondary small-button" data-resume-automation type="button" ${paused ? "" : "disabled"}>Pause aufheben</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderDashboardContext(result, urgentActions, changeActions) {
+  const next = nextDashboardAction(result, urgentActions, changeActions);
+  const automation = result.automation || {};
+  return `
+    <div class="next-action-card ${next.tone}">
+      <span class="metric-label">Nächster Schritt</span>
+      <strong>${next.title}</strong>
+      <p>${next.detail}</p>
+    </div>
+    <div class="schedule-card">
+      <div class="schedule-heading">
+        <span class="metric-label">Tagesplan</span>
+        <strong>${result.cycles_completed_today}/${result.recommended_cycles_today} erledigt</strong>
+      </div>
+      ${renderScheduleRail(automation.windows || [], result.cycles_completed_today, automation.due_cycles || 0)}
+      <p>${automation.summary || "Noch kein Zeitfenster berechnet."}</p>
+    </div>
+  `;
+}
+
+function nextDashboardAction(result, urgentActions, changeActions) {
+  if (result.tank.empty_soon) {
+    return {
+      tone: "urgent",
+      title: "Tank auffüllen",
+      detail: result.tank.warning || "Der nächste vollständige Pumpzyklus ist sonst blockiert.",
+    };
+  }
+  if (urgentActions.length) {
+    return {
+      tone: "urgent",
+      title: "Schläuche prüfen",
+      detail: `${urgentActions[0].plant_name} braucht eine andere feste Verbindung.`,
+    };
+  }
+  if (result.run_now) {
+    return {
+      tone: "go",
+      title: "Zyklus kann starten",
+      detail: result.manual_run?.available ? "Home Assistant ist bereit für einen vollständigen Durchlauf." : result.manual_run?.reason || result.reason,
+    };
+  }
+  if (result.automation?.paused) {
+    return {
+      tone: "wait",
+      title: "Automatik pausiert",
+      detail: "Heb die Pause auf, wenn der Planer heute wieder automatisch laufen soll.",
+    };
+  }
+  if (changeActions.length) {
+    return {
+      tone: "warn",
+      title: "Anschluss optimieren",
+      detail: `${changeActions.length} Empfehlung${changeActions.length === 1 ? "" : "en"} warten auf der Schlauchseite.`,
+    };
+  }
+  if (result.remaining_cycles_today > 0 && !result.automation?.next_window) {
+    return {
+      tone: "wait",
+      title: "Heute kein Fenster mehr",
+      detail: result.automation?.summary || "Offene Zyklen werden erst im nächsten Tagesplan wieder verteilt.",
+    };
+  }
+  if (result.remaining_cycles_today > 0) {
+    return {
+      tone: "wait",
+      title: "Auf nächstes Fenster warten",
+      detail: result.automation?.next_window ? `Der nächste geplante Lauf ist um ${result.automation.next_window}.` : result.reason,
+    };
+  }
+  return {
+    tone: "ok",
+    title: "Heute ist alles ruhig",
+    detail: result.reason,
+  };
+}
+
+function renderScheduleRail(windows, completed, due) {
+  if (!windows.length) return `<div class="schedule-rail empty">Kein Lauf geplant</div>`;
+  return `
+    <div class="schedule-rail">
+      ${windows
+        .map((time, index) => {
+          const status = index < completed ? "done" : index < due ? "due" : "open";
+          return `<span class="schedule-dot ${status}" title="${time}"><small>${time}</small></span>`;
+        })
+        .join("")}
     </div>
   `;
 }
@@ -646,9 +755,104 @@ function renderConfigSummary(result, urgentActions, changeActions) {
   `;
 }
 
+function renderCalculationFlow(result, urgentActions, changeActions) {
+  const weather = result.weather || result.inputs;
+  const wateringAmount = state.settings?.watering_amount_percent ?? 100;
+  const totalNeedMl = result.plants.reduce((sum, plant) => sum + Number(plant.need_ml || 0), 0);
+  const topPlant = result.plants.reduce((current, plant) => Number(plant.need_ml || 0) > Number(current?.need_ml || 0) ? plant : current, null);
+  const connectionsUsed = result.routing.reduce((sum, route) => sum + Number(route.connections_used || 0), 0);
+  const connectionsLimit = result.routing.reduce((sum, route) => sum + Number(route.connections_limit || 0), 0);
+  const issueText = urgentActions.length
+    ? `${urgentActions.length} dringend`
+    : changeActions.length
+      ? `${changeActions.length} empfohlen`
+      : "passt";
+  return `
+    <div class="calc-steps">
+      <article class="calc-step">
+        <span class="step-number">1</span>
+        <div>
+          <strong>Wetter und Lage</strong>
+          <p>${formatWeatherSource(weather)} · ${Math.round(weather.temperature_c)}&deg;C · ${Math.round(Number(weather.rain_mm || 0) * 10) / 10} mm Regen · ${Math.round(weather.wind_kmh)} km/h Wind</p>
+          <small>${formatCompass(result.inputs.orientation_deg)} · ${state.balcony.width_m} x ${state.balcony.depth_m} m · ET0 ${Math.round(Number(result.inputs.et0_mm || 0) * 10) / 10} mm</small>
+        </div>
+      </article>
+      <article class="calc-step">
+        <span class="step-number">2</span>
+        <div>
+          <strong>Pflanzenbedarf</strong>
+          <p>${formatLiters(totalNeedMl)} heute für ${result.plants.length} Pflanze${result.plants.length === 1 ? "" : "n"}</p>
+          <small>${formatPercent(wateringAmount)} % Gießmenge · ${topPlant ? `${topPlant.custom_name}: ${topPlant.need_ml} ml` : "Noch keine Pflanzen angelegt"}</small>
+        </div>
+      </article>
+      <article class="calc-step">
+        <span class="step-number">3</span>
+        <div>
+          <strong>Feste Schläuche</strong>
+          <p>${formatLiters(result.pump.delivered_per_cycle_ml)} pro gemeinsamem Zyklus</p>
+          <small>${connectionsUsed}/${connectionsLimit} Anschlüsse genutzt · Anschlussplan ${issueText}</small>
+        </div>
+      </article>
+      <article class="calc-step final">
+        <span class="step-number">4</span>
+        <div>
+          <strong>Heutige Entscheidung</strong>
+          <p>${result.remaining_cycles_today} von ${result.recommended_cycles_today} Zyklen offen</p>
+          <small>${formatLiters(result.pump.delivered_if_remaining_ml)} noch geplant · Tank danach ${result.tank.after_recommended_percent} %</small>
+        </div>
+      </article>
+    </div>
+    <div class="influence-board">
+      <div>
+        <span class="metric-label">Direkt steuerbar</span>
+        <div class="influence-chips">
+          <span>Gießmenge</span>
+          <span>Pflanzen</span>
+          <span>Positionen</span>
+          <span>Schläuche</span>
+          <span>Tank</span>
+        </div>
+      </div>
+      <div>
+        <span class="metric-label">Automatisch bewertet</span>
+        <div class="influence-chips muted">
+          <span>Wetter</span>
+          <span>Sonne</span>
+          <span>Windschutz</span>
+          <span>Topfmodell</span>
+          <span>ganze Zyklen</span>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function formatWeatherSource(weather) {
+  if (weather.weather_source === "open-meteo" || weather.source === "open-meteo") return "Open-Meteo";
+  if (weather.weather_source === "manual" || weather.source === "manual") return "Manuell";
+  return "Wetter";
+}
+
+function formatCompass(degrees) {
+  const value = Number(degrees || 0);
+  const labels = [
+    [337.5, "Nord"],
+    [292.5, "Nordwest"],
+    [247.5, "West"],
+    [202.5, "Südwest"],
+    [157.5, "Süd"],
+    [112.5, "Südost"],
+    [67.5, "Ost"],
+    [22.5, "Nordost"],
+    [0, "Nord"],
+  ];
+  const label = labels.find(([limit]) => value >= limit)?.[1] || "Nord";
+  return `${label} (${Math.round(value)}°)`;
+}
+
 function renderDashboardCards(result, urgentActions, changeActions) {
   const weather = result.weather || result.inputs;
-  const tankPercent = Math.round((result.tank.current_ml / Math.max(result.tank.capacity_ml, 1)) * 100);
+  const tankPercent = result.tank.percent ?? Math.round((result.tank.current_ml / Math.max(result.tank.capacity_ml, 1)) * 100);
   const remainingLiters = (result.pump.delivered_if_remaining_ml / 1000).toFixed(1);
   const perCycleLiters = (result.pump.delivered_per_cycle_ml / 1000).toFixed(2);
   const wateringAmount = state.settings?.watering_amount_percent ?? 100;
@@ -671,12 +875,12 @@ function renderDashboardCards(result, urgentActions, changeActions) {
         <p class="metric-detail">${perCycleLiters} l je Lauf</p>
       </div>
     </article>
-    <article class="metric-card tank-metric">
+    <article class="metric-card tank-metric ${result.tank.empty_soon ? "urgent" : result.tank.low ? "warn" : ""}">
       ${icon("tank")}
       <div>
         <p class="metric-label">Tank</p>
         <strong>${tankPercent}%</strong>
-        <p class="metric-detail">${Math.round(result.tank.after_recommended_ml / 1000)} l nach Plan</p>
+        <p class="metric-detail">${result.tank.warning || `${Math.round(result.tank.after_recommended_ml / 1000)} l nach Plan`}</p>
       </div>
     </article>
     <article class="metric-card weather-metric">
@@ -715,7 +919,7 @@ function renderDashboardCards(result, urgentActions, changeActions) {
 }
 
 function formatPercent(value) {
-  return Number(value.toFixed(1)).toLocaleString("de-DE");
+  return Number(Number(value).toFixed(1)).toLocaleString("de-DE");
 }
 
 function updateWateringAmountPreview() {
@@ -730,9 +934,10 @@ function updateWateringAmountPreview() {
     ? latestEvaluation.plants.reduce((sum, plant) => sum + Number(plant.daily_need_ml || 0), 0) / savedAmount * 100
     : 0;
   const projectedDailyMl = standardDailyMl * amount / 100;
-  const relativeText = amount === 100
-    ? "Entspricht der empfohlenen Standardmenge"
-    : `${formatPercent(Math.abs(amount - 100))} % ${amount > 100 ? "mehr" : "weniger"} als Standard`;
+  const relativeText = wateringAmountTitle(amount);
+  const adjustmentText = amount === 100
+    ? "Der neue Standard ist bereits höher als zuvor."
+    : `${formatPercent(Math.abs(amount - 100))} % ${amount > 100 ? "mehr" : "weniger"} als neuer Standard.`;
   const litersText = latestEvaluation
     ? `Bei aktuell geladenem Wetter sind das ungefähr ${formatLiters(projectedDailyMl)} statt ${formatLiters(standardDailyMl)} Pflanzenbedarf pro Tag.`
     : "Nach dem Laden der Wetterdaten siehst du hier eine Vorschau in Litern.";
@@ -740,12 +945,22 @@ function updateWateringAmountPreview() {
   label.textContent = `${formatPercent(amount)} %`;
   preview.innerHTML = `
     <strong>${relativeText}</strong>
+    <span>${adjustmentText}</span>
     <span>${litersText}</span>
     <span>Pumpenläufe erfolgen in ganzen Zyklen. Die genaue Anzahl wird nach dem Speichern neu berechnet.</span>
   `;
   document.querySelectorAll("[data-watering-preset]").forEach((button) => {
     button.classList.toggle("active", Number(button.dataset.wateringPreset) === amount);
   });
+}
+
+function wateringAmountTitle(amount) {
+  if (amount < 90) return "Sparsame Korrektur";
+  if (amount < 130) return "Neuer Standardbedarf";
+  if (amount < 170) return "Leicht erhöhte Versorgung";
+  if (amount < 230) return "Trockenheitskorrektur";
+  if (amount < 300) return "Starke Trockenheitskorrektur";
+  return "Akute Trockenheitskorrektur";
 }
 
 function formatLiters(ml) {
@@ -821,7 +1036,7 @@ function sourceLabel(source) {
 
 function renderActionSummary(urgentActions, changeActions) {
   if (!urgentActions.length && !changeActions.length) {
-    return `<div class="action-summary ok">Fester Anschlussplan passt zum aktuellen Bestand.</div>`;
+    return `<div class="action-summary ok">Keine offenen Anschlussmeldungen.</div>`;
   }
   const urgentList = urgentActions.map((item) => item.plant_name).join(", ");
   const changeList = changeActions.slice(0, 4).map((item) => item.plant_name).join(", ");
@@ -829,14 +1044,18 @@ function renderActionSummary(urgentActions, changeActions) {
     <div class="action-summary ${urgentActions.length ? "urgent" : "warn"}">
       ${urgentActions.length ? `<strong>${urgentActions.length} dringende Handlungsempfehlung${urgentActions.length === 1 ? "" : "en"}</strong><span>${urgentList}</span>` : ""}
       ${changeActions.length ? `<strong>${changeActions.length} Anschlussänderung${changeActions.length === 1 ? "" : "en"} empfohlen</strong><span>${changeList}${changeActions.length > 4 ? " ..." : ""}</span>` : ""}
+      <div class="action-buttons">
+        ${[...urgentActions, ...changeActions].map((item) => `<button class="secondary small-button" data-ignore-suggestion="${item.plant_id}" type="button">${item.plant_name} ignorieren</button>`).join("")}
+      </div>
     </div>
   `;
 }
 
 function renderRoutingAssignments(result) {
   if (!result.connection_plan?.assignments?.length) return "";
-  const urgent = result.connection_plan.assignments.filter((item) => item.connection_status === "urgent");
-  const changes = result.connection_plan.assignments.filter((item) => item.connection_status === "change");
+  const assignments = visibleConnectionAssignments(result.connection_plan.assignments);
+  const urgent = assignments.filter((item) => item.connection_status === "urgent");
+  const changes = assignments.filter((item) => item.connection_status === "change");
   const ok = result.connection_plan.assignments.filter((item) => item.connection_status === "ok");
   const sorted = [...urgent, ...changes, ...ok];
   return `
@@ -851,13 +1070,69 @@ function renderRoutingAssignments(result) {
                 <p class="meta">Bestand ${item.current_ml_per_cycle} ml/Zyklus · Vorschlag ${item.tube_label} · Bedarf ${item.need_ml} ml · Differenz ${item.difference_ml} ml</p>
                 ${item.connection_note ? `<p class="meta ${connectionClass(item)}">${item.connection_note}</p>` : ""}
               </div>
-              <span class="connection-chip ${item.connection_status}">${connectionStatusLabel(item.connection_status)}</span>
+              <div class="assignment-actions">
+                <span class="connection-chip ${item.connection_status}">${connectionStatusLabel(item.connection_status)}</span>
+                ${item.connection_status !== "ok" ? `<button class="secondary small-button" data-ignore-suggestion="${item.plant_id}" type="button">Ignorieren</button>` : ""}
+              </div>
             </div>
           `,
         )
         .join("")}
     </div>
   `;
+}
+
+function visibleConnectionAssignments(assignments) {
+  return assignments.filter((item) => !isSuggestionIgnored(item));
+}
+
+function ignoredSuggestionMap() {
+  try {
+    return JSON.parse(localStorage.getItem(IGNORED_SUGGESTIONS_KEY) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function saveIgnoredSuggestionMap(map) {
+  localStorage.setItem(IGNORED_SUGGESTIONS_KEY, JSON.stringify(map));
+}
+
+function plantSuggestionSignature(plant) {
+  if (!plant) return "";
+  return JSON.stringify({
+    catalog_id: plant.catalog_id,
+    size: plant.size,
+    pot_liters: Number(plant.pot_liters),
+    pot_type: plant.pot_type,
+    hose_numbers: hoseNumbers(plant.hose_numbers).join(","),
+    configured_ml_per_cycle: Number(plant.configured_ml_per_cycle || 0),
+    pos_x: Number(plant.pos_x || 0).toFixed(3),
+    pos_y: Number(plant.pos_y || 0).toFixed(3),
+  });
+}
+
+function isSuggestionIgnored(assignment) {
+  if (!assignment || assignment.connection_status === "ok") return false;
+  const plant = state?.plants?.find((item) => item.id === assignment.plant_id);
+  return ignoredSuggestionMap()[assignment.plant_id] === plantSuggestionSignature(plant);
+}
+
+function ignoreSuggestion(plantId) {
+  const plant = state?.plants?.find((item) => item.id === Number(plantId));
+  if (!plant) return;
+  const map = ignoredSuggestionMap();
+  map[plant.id] = plantSuggestionSignature(plant);
+  saveIgnoredSuggestionMap(map);
+  renderEvaluation(latestEvaluation);
+}
+
+function bindIgnoreSuggestionButtons() {
+  document.querySelectorAll("[data-ignore-suggestion]").forEach((button) => {
+    if (button.dataset.ignoreBound) return;
+    button.addEventListener("click", () => ignoreSuggestion(button.dataset.ignoreSuggestion));
+    button.dataset.ignoreBound = "true";
+  });
 }
 
 function sideLabel(side) {

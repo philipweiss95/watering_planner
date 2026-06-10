@@ -155,12 +155,14 @@ CONNECTION_DESIGN = {
 
 # The raw ET0/canopy estimate models open-surface evapotranspiration. The real
 # terrace drip setup needs a much smaller calibrated fraction per day.
-WATER_MODEL_CALIBRATION = 0.06
-LEGACY_WATER_MODEL_CALIBRATION = 0.04
+WATER_MODEL_CALIBRATION = 0.08
+LEGACY_WATER_MODEL_CALIBRATIONS = (0.04, 0.06)
+LEGACY_WATER_MODEL_CALIBRATION = 0.06
 MIN_WATER_MODEL_CALIBRATION_PERCENT = 0.5
-MAX_WATER_MODEL_CALIBRATION_PERCENT = 20.0
-MIN_WATERING_AMOUNT_PERCENT = 25.0
-MAX_WATERING_AMOUNT_PERCENT = 300.0
+MAX_WATER_MODEL_CALIBRATION_PERCENT = 40.0
+MIN_WATERING_AMOUNT_PERCENT = 40.0
+MAX_WATERING_AMOUNT_PERCENT = 500.0
+TANK_LOW_PERCENT = 20
 
 SEASONAL_WATER_CURVES = {
     "warm_annual": [(1, 0.22), (80, 0.25), (130, 0.42), (172, 0.78), (220, 1.0), (280, 0.62), (335, 0.28), (366, 0.22)],
@@ -385,7 +387,7 @@ def water_model_calibration() -> float:
         calibration = float(get_setting("water_model_calibration", str(WATER_MODEL_CALIBRATION)))
     except ValueError:
         return WATER_MODEL_CALIBRATION
-    if math.isclose(calibration, LEGACY_WATER_MODEL_CALIBRATION):
+    if any(math.isclose(calibration, legacy) for legacy in LEGACY_WATER_MODEL_CALIBRATIONS):
         return WATER_MODEL_CALIBRATION
     if not MIN_WATER_MODEL_CALIBRATION_PERCENT / 100 <= calibration <= MAX_WATER_MODEL_CALIBRATION_PERCENT / 100:
         return WATER_MODEL_CALIBRATION
@@ -1954,8 +1956,6 @@ def manual_run_status(result: dict) -> dict:
         reason = "Noch keine nutzbare Verschlauchung vorhanden."
     elif int(result["tank"]["current_ml"]) < delivered_per_cycle:
         reason = "Der Wassertank reicht nicht für einen vollständigen Pumpenlauf."
-    elif result.get("automation", {}).get("cooldown_active"):
-        reason = "Nach dem letzten Pumpenlauf ist noch eine Sicherheitspause aktiv."
     elif not home_assistant_webhook_url():
         reason = "Home-Assistant-Webhook für manuelle Läufe ist noch nicht konfiguriert."
     else:
@@ -2058,6 +2058,11 @@ def evaluate(
     remaining_cycles = max(0, recommended_cycles - cycles_completed)
     delivered_if_remaining = remaining_cycles * total_delivered_per_run
     tank_after = max(0, balcony["tank_current_ml"] - delivered_if_remaining)
+    tank_capacity = max(int(balcony["tank_capacity_ml"]), 1)
+    tank_percent = round(int(balcony["tank_current_ml"]) / tank_capacity * 100)
+    tank_after_percent = round(tank_after / tank_capacity * 100)
+    tank_empty_soon = bool(plants and total_delivered_per_run > 0 and int(balcony["tank_current_ml"]) < total_delivered_per_run)
+    tank_low = tank_percent <= TANK_LOW_PERCENT or tank_empty_soon
 
     hottest_sensitive_need = max((p["need_ml"] for p in plant_results), default=0)
     rain_threshold = round(clamp(2.2 + (temperature_c - 22) * 0.18 + hottest_sensitive_need / 1200, 0.8, 8.0), 1)
@@ -2113,6 +2118,18 @@ def evaluate(
             "current_ml": balcony["tank_current_ml"],
             "after_recommended_ml": tank_after,
             "capacity_ml": balcony["tank_capacity_ml"],
+            "percent": tank_percent,
+            "after_recommended_percent": tank_after_percent,
+            "low_percent_threshold": TANK_LOW_PERCENT,
+            "low": tank_low,
+            "empty_soon": tank_empty_soon,
+            "warning": (
+                "Tank reicht nicht mehr für einen vollständigen Pumpenlauf."
+                if tank_empty_soon
+                else f"Tank unter {TANK_LOW_PERCENT} Prozent."
+                if tank_low
+                else ""
+            ),
         },
         "routing": routing_plan["by_outlet"],
         "routing_plan": routing_plan,

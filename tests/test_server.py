@@ -105,14 +105,14 @@ class WateringPlannerTests(unittest.TestCase):
 
         self.assertEqual(completed, 1)
 
-    def test_water_model_calibration_defaults_to_six_percent(self):
+    def test_water_model_calibration_defaults_to_eight_percent(self):
         state = server.get_state()
         result = server.evaluate(temperature_c=26, rain_mm=0, wind_kmh=8, sunshine_hours=7)
 
         self.assertEqual(state["settings"]["watering_amount_percent"], 100)
-        self.assertEqual(result["plants"][0]["water_model"]["calibration_factor"], 0.06)
+        self.assertEqual(result["plants"][0]["water_model"]["calibration_factor"], 0.08)
 
-    def test_new_standard_increases_sunny_day_need_by_half(self):
+    def test_new_standard_increases_sunny_day_need_by_a_third(self):
         server.save_watering_amount_percent(100 * server.LEGACY_WATER_MODEL_CALIBRATION / server.WATER_MODEL_CALIBRATION)
         legacy = server.evaluate(temperature_c=25, rain_mm=0, wind_kmh=0, sunshine_hours=7)
         server.delete_setting("watering_amount_percent")
@@ -120,18 +120,18 @@ class WateringPlannerTests(unittest.TestCase):
 
         legacy_need = sum(plant["daily_need_ml"] for plant in legacy["plants"])
         adjusted_need = sum(plant["daily_need_ml"] for plant in adjusted["plants"])
-        self.assertAlmostEqual(adjusted_need / legacy_need, 1.5, delta=0.05)
+        self.assertAlmostEqual(adjusted_need / legacy_need, 4 / 3, delta=0.05)
 
     def test_legacy_saved_default_moves_to_new_standard(self):
         server.set_setting("water_model_calibration", "0.04")
 
-        self.assertEqual(server.water_model_calibration(), 0.06)
+        self.assertEqual(server.water_model_calibration(), 0.08)
         self.assertEqual(server.watering_amount_percent(), 100)
 
     def test_legacy_high_value_becomes_new_standard_without_changing_amount(self):
         server.set_setting("water_model_calibration", "0.06")
 
-        self.assertEqual(server.water_model_calibration(), 0.06)
+        self.assertEqual(server.water_model_calibration(), 0.08)
         self.assertEqual(server.watering_amount_percent(), 100)
 
     def test_balcony_save_persists_water_model_calibration(self):
@@ -148,7 +148,7 @@ class WateringPlannerTests(unittest.TestCase):
 
         after = server.evaluate(temperature_c=26, rain_mm=0, wind_kmh=8, sunshine_hours=7)
         self.assertEqual(server.get_state()["settings"]["watering_amount_percent"], 125)
-        self.assertEqual(after["plants"][0]["water_model"]["calibration_factor"], 0.075)
+        self.assertEqual(after["plants"][0]["water_model"]["calibration_factor"], 0.1)
         self.assertGreater(
             sum(plant["need_ml"] for plant in after["plants"]),
             sum(plant["need_ml"] for plant in before["plants"]),
@@ -156,7 +156,7 @@ class WateringPlannerTests(unittest.TestCase):
 
     def test_watering_amount_rejects_extreme_values(self):
         with self.assertRaises(ValueError):
-            server.save_watering_amount_percent(500)
+            server.save_watering_amount_percent(510)
 
     def test_watering_events_are_listed_newest_first(self):
         server.mark_run(delivered_ml=120, temperature_c=24, rain_mm=0.2)
@@ -206,6 +206,17 @@ class WateringPlannerTests(unittest.TestCase):
         self.assertEqual(request.full_url, webhook_url)
         self.assertEqual(request.method, "POST")
         response.read.assert_called_once()
+
+    def test_manual_run_ignores_automation_cooldown(self):
+        webhook_url = "http://home-assistant.test:8123/api/webhook/watering_planner_manual_run"
+        now = datetime(2026, 6, 2, 10, 0, tzinfo=ZoneInfo("Europe/Berlin"))
+        with patch.dict("os.environ", {"HOME_ASSISTANT_WEBHOOK_URL": webhook_url}):
+            with patch("server.local_now", return_value=now):
+                server.mark_run(delivered_ml=120, temperature_c=26, rain_mm=0)
+                result = server.evaluate(temperature_c=26, rain_mm=0, wind_kmh=8, sunshine_hours=7)
+
+        self.assertTrue(result["automation"]["cooldown_active"])
+        self.assertTrue(result["manual_run"]["available"])
 
     def test_add_plant_does_not_require_manual_outlet(self):
         plant_id = server.add_plant(

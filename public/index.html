@@ -4,76 +4,62 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Terrassen-Bewässerungsplaner</title>
-    <link rel="stylesheet" href="/styles.css?v=20260602-1">
+    <link rel="stylesheet" href="/styles.css?v=20260610-water-tuning-1">
   </head>
   <body>
     <header class="topbar">
-      <div class="topbar-head">
-        <div>
-          <p class="eyebrow">Terrasse</p>
-          <h1>Bewässerungsplaner</h1>
+      <div class="topbar-inner">
+        <div class="topbar-head">
+          <div>
+            <p class="eyebrow">Terrasse</p>
+            <h1>Bewässerungsplaner</h1>
+          </div>
+          <div class="tank" id="tankStatus">Tank</div>
         </div>
-        <div class="tank" id="tankStatus">Tank</div>
+        <nav class="app-nav" aria-label="Bereiche">
+          <button class="nav-button active" data-view-target="dashboard" type="button" aria-current="page">
+            <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10.5V20h13v-9.5"/><path d="M9 20v-6h6v6"/></svg>
+            <span>Dashboard</span>
+          </button>
+          <button class="nav-button" data-view-target="plants" type="button">
+            <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 4C12 4 6 8.5 6 15a5 5 0 0 0 5 5c6.5 0 9-8 9-16Z"/><path d="M6 20c2-6 6-9 12-12"/></svg>
+            <span>Pflanzen</span>
+          </button>
+          <button class="nav-button" data-view-target="hoses" type="button">
+            <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 19a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M18 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M8.5 15.5h3.2a3 3 0 0 0 3-3v-1"/><path d="M15.5 8.5h-3.2a3 3 0 0 0-3 3v1"/></svg>
+            <span>Schläuche</span>
+          </button>
+          <button class="nav-button" data-view-target="settings" type="button">
+            <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"/><path d="M4 17h16"/><path d="M8 5v4"/><path d="M16 15v4"/></svg>
+            <span>Setup</span>
+          </button>
+          <button class="nav-button" data-view-target="info" type="button">
+            <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 11v5"/><path d="M12 8h.01"/></svg>
+            <span>Info</span>
+          </button>
+        </nav>
       </div>
-      <nav class="app-nav" aria-label="Bereiche">
-        <button class="nav-button active" data-view-target="dashboard" type="button" aria-current="page">
-          <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10.5V20h13v-9.5"/><path d="M9 20v-6h6v6"/></svg>
-          <span>Dashboard</span>
-        </button>
-        <button class="nav-button" data-view-target="plants" type="button">
-          <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 4C12 4 6 8.5 6 15a5 5 0 0 0 5 5c6.5 0 9-8 9-16Z"/><path d="M6 20c2-6 6-9 12-12"/></svg>
-          <span>Pflanzen</span>
-        </button>
-        <button class="nav-button" data-view-target="hoses" type="button">
-          <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 19a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M18 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M8.5 15.5h3.2a3 3 0 0 0 3-3v-1"/><path d="M15.5 8.5h-3.2a3 3 0 0 0-3 3v1"/></svg>
-          <span>Schläuche</span>
-        </button>
-        <button class="nav-button" data-view-target="settings" type="button">
-          <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"/><path d="M4 17h16"/><path d="M8 5v4"/><path d="M16 15v4"/></svg>
-          <span>Einstell.</span>
-        </button>
-        <button class="nav-button" data-view-target="info" type="button">
-          <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 11v5"/><path d="M12 8h.01"/></svg>
-          <span>Info</span>
-        </button>
-      </nav>
     </header>
 
     <main>
       <div class="view dashboard-view active" data-view="dashboard">
         <section class="panel decision-panel wide-panel">
-          <div class="section-heading">
-            <div>
-              <p class="eyebrow">Heute</p>
-              <h2>Übersicht</h2>
+          <div class="dashboard-command dashboard-overview">
+            <div class="today-panel">
+              <div class="section-heading">
+                <div>
+                  <p class="eyebrow">Heute</p>
+                  <h2>Tagesentscheidung</h2>
+                </div>
+                <span class="status-pill" id="runStatus">Heute</span>
+              </div>
+              <div class="result" id="result">
+                <strong>Wird geladen</strong>
+                <span>Wetter und Tageszyklen werden zusammengefasst.</span>
+              </div>
+              <div class="dashboard-context" id="dashboardContext"></div>
             </div>
-            <span class="status-pill" id="runStatus">Heute</span>
           </div>
-
-          <form id="evaluateForm" class="grid compact-grid">
-            <label class="check-label">
-              <input type="checkbox" name="auto_weather" checked>
-              Wetter automatisch
-            </label>
-            <label>
-              Temperatur
-              <input type="number" step="0.1" name="temperature_c" value="26">
-            </label>
-            <label>
-              Regen mm
-              <input type="number" step="0.1" name="rain_mm" value="0.5">
-            </label>
-            <label>
-              Wind km/h
-              <input type="number" step="1" name="wind_kmh" value="8">
-            </label>
-            <label>
-              Sonne h
-              <input type="number" step="0.1" name="sunshine_hours" value="7">
-            </label>
-            <input type="hidden" name="slot" value="morning">
-            <button type="submit" class="primary">Aktualisieren</button>
-          </form>
 
           <div class="dashboard-cards" id="dashboardCards">
             <article class="metric-card primary-metric">
@@ -83,11 +69,6 @@
                 <strong>--</strong>
               </div>
             </article>
-          </div>
-
-          <div class="result" id="result">
-            <strong>Wird geladen</strong>
-            <span>Wetter und Tageszyklen werden zusammengefasst.</span>
           </div>
         </section>
 
@@ -106,17 +87,66 @@
       <div class="view settings-view" data-view="settings">
         <section class="panel config-intro-panel wide-panel">
           <p class="eyebrow">Konfiguration</p>
-          <h2>Einstellungen für deine Bewässerung</h2>
-          <p class="section-copy">Passe zuerst die Gießmenge und die Grunddaten an. Der Planer berechnet daraus den täglichen Bedarf und zeigt dir darunter, ob die Verschlauchung zu deinen Pflanzen passt.</p>
+          <h2>Setup und Feinabstimmung</h2>
+          <p class="section-copy">Gießmenge, Balkon, Tank und Hardware an einem Ort. Die Zusammenfassung zeigt sofort, ob Pflanzen, Wasser und Anschlüsse zusammenpassen.</p>
         </section>
 
         <div class="config-summary wide-panel" id="configSummary"></div>
+
+        <section class="panel calculation-panel wide-panel">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Berechnung</p>
+              <h2>So entsteht der Tagesplan</h2>
+            </div>
+          </div>
+          <p class="section-copy">Die App rechnet in vier Schritten: Standort und Wetter bestimmen den Tagesbedarf, die Pflanzen korrigieren ihn, die Schläuche liefern feste Mengen, daraus entstehen ganze Pumpzyklen.</p>
+          <div class="calculation-flow" id="calculationFlow">
+            <article class="calc-step">
+              <span class="step-number">1</span>
+              <div>
+                <strong>Wetter wird geladen</strong>
+                <p>Temperatur, Regen, Wind und Sonne werden vorbereitet.</p>
+              </div>
+            </article>
+          </div>
+          <details class="weather-test">
+            <summary>Wetterwerte manuell prüfen</summary>
+            <p class="field-help">Automatisch nutzt der Planer Open-Meteo am gespeicherten Standort. Für Tests kannst du die Werte hier überschreiben.</p>
+            <form id="evaluateForm" class="weather-form">
+              <label class="check-label weather-auto">
+                <input type="checkbox" name="auto_weather" checked>
+                Wetter automatisch
+              </label>
+              <div class="weather-inputs">
+                <label>
+                  Temperatur
+                  <input type="number" step="0.1" name="temperature_c" value="26">
+                </label>
+                <label>
+                  Regen mm
+                  <input type="number" step="0.1" name="rain_mm" value="0.5">
+                </label>
+                <label>
+                  Wind km/h
+                  <input type="number" step="1" name="wind_kmh" value="8">
+                </label>
+                <label>
+                  Sonne h
+                  <input type="number" step="0.1" name="sunshine_hours" value="7">
+                </label>
+              </div>
+              <input type="hidden" name="slot" value="morning">
+              <button type="submit" class="primary">Wetter aktualisieren</button>
+            </form>
+          </details>
+        </section>
 
         <section class="panel config-setup-panel wide-panel">
           <div class="section-heading">
             <div>
               <p class="eyebrow">Grundlagen</p>
-              <h2>Bewässerung einstellen</h2>
+              <h2>Grunddaten bearbeiten</h2>
             </div>
           </div>
           <form id="balconyForm" class="settings-form">
@@ -128,21 +158,24 @@
                 </div>
                 <strong class="setting-value" id="wateringAmountLabel">100 %</strong>
               </div>
-              <p class="field-help">Mit <code>100 %</code> nutzt der Planer die empfohlene Standardmenge. Wenn die Erde regelmäßig zu trocken bleibt, erhöhe den Wert schrittweise, zum Beispiel auf <code>120 %</code>.</p>
+              <p class="field-help">Mit <code>100 %</code> nutzt der Planer jetzt einen höheren Standardbedarf. Wenn die Erde trocken bleibt, kannst du kräftiger nachsteuern; die Vorschau zeigt sofort, was das für den Tagesbedarf bedeutet.</p>
               <label class="range-field">
-                Gießmenge im Vergleich zum Standard
-                <input type="range" name="watering_amount_percent" min="25" max="300" step="5" value="100">
+                Gießmenge im Vergleich zum neuen Standard
+                <input type="range" name="watering_amount_percent" min="40" max="500" step="10" value="100">
               </label>
               <div class="range-scale" aria-hidden="true">
-                <span>Weniger</span>
+                <span>sparsam</span>
                 <span>Standard</span>
-                <span>Mehr</span>
+                <span>trocken</span>
+                <span>sehr trocken</span>
               </div>
               <div class="preset-row" aria-label="Schnellauswahl Gießmenge">
-                <button class="preset-button" data-watering-preset="80" type="button">Etwas weniger</button>
-                <button class="preset-button" data-watering-preset="100" type="button">Standard</button>
-                <button class="preset-button" data-watering-preset="120" type="button">Etwas mehr</button>
-                <button class="preset-button" data-watering-preset="150" type="button">Deutlich mehr</button>
+                <button class="preset-button" data-watering-preset="80" type="button"><span>Sparsam</span><strong>80 %</strong></button>
+                <button class="preset-button" data-watering-preset="100" type="button"><span>Standard</span><strong>100 %</strong></button>
+                <button class="preset-button" data-watering-preset="150" type="button"><span>Etwas trocken</span><strong>150 %</strong></button>
+                <button class="preset-button" data-watering-preset="200" type="button"><span>Trocken</span><strong>200 %</strong></button>
+                <button class="preset-button" data-watering-preset="260" type="button"><span>Sehr trocken</span><strong>260 %</strong></button>
+                <button class="preset-button" data-watering-preset="350" type="button"><span>Akut</span><strong>350 %</strong></button>
               </div>
               <div class="watering-preview" id="wateringAmountPreview"></div>
             </fieldset>
@@ -239,11 +272,11 @@
       </div>
 
       <div class="view hoses-view" data-view="hoses">
-        <section class="panel wide-panel">
+        <section class="panel wide-panel hose-setup-panel">
           <div class="section-heading">
             <div>
               <p class="eyebrow">Hardware</p>
-              <h2>Schläuche und Outputs</h2>
+              <h2>Schläuche verwalten</h2>
             </div>
           </div>
           <p class="section-copy">Lege jeden physischen Schlauch einmal an und wähle den Output, an dem er angeschlossen ist. Die Pflanze ordnest du anschließend auf der Seite Pflanzen zu.</p>
@@ -259,7 +292,7 @@
           <div class="section-heading">
             <div>
               <p class="eyebrow">Anschlüsse</p>
-              <h2>Verschlauchung prüfen</h2>
+              <h2>Verteilung prüfen</h2>
             </div>
           </div>
           <p class="section-copy">Hier siehst du, ob die aktuellen Schläuche zur geplanten Gießmenge passen. Änderungen sind nur nötig, wenn eine Pflanze dauerhaft zu viel oder zu wenig Wasser erhält.</p>
@@ -272,7 +305,7 @@
           <div class="section-heading">
             <div>
               <p class="eyebrow">Standorte</p>
-              <h2>Pflanzen platzieren</h2>
+              <h2>Plan</h2>
             </div>
           </div>
           <p class="section-copy">Ziehe die Pflanzen an ihre ungefähre Position. So kann der Planer Schatten durch Wände und Brüstung berücksichtigen.</p>
@@ -283,7 +316,7 @@
           <div class="section-heading">
             <div>
               <p class="eyebrow">Bestand</p>
-              <h2>Meine Pflanzen</h2>
+              <h2>Pflanzenbestand</h2>
             </div>
           </div>
           <p class="section-copy">Topfgröße, Pflanzenart und Standort bestimmen den individuellen Wasserbedarf. Wähle je Pflanze die angeschlossenen Schläuche; deren Outputs bestimmen automatisch die gelieferte Menge.</p>
@@ -294,7 +327,7 @@
           <div class="section-heading">
             <div>
               <p class="eyebrow">Neu</p>
-              <h2>Pflanze anlegen</h2>
+              <h2>Neue Pflanze</h2>
             </div>
           </div>
           <p class="section-copy">Lege für jeden Topf eine Pflanze an und wähle die angeschlossenen Schläuche. Die Output-Mengen werden aus der Schlauchkonfiguration übernommen.</p>
@@ -358,6 +391,6 @@
       </div>
     </main>
 
-    <script src="/app.js?v=20260602-1"></script>
+    <script src="/app.js?v=20260610-water-tuning-1"></script>
   </body>
 </html>

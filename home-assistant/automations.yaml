@@ -44,3 +44,27 @@
 
   action:
     - action: script.bewaesserung_pumpzyklus
+
+- id: bewaesserung_tank_warnung
+  alias: Bewaesserung - Tankwarnung
+  description: Meldet, wenn der Planner den Wassertank als niedrig oder nicht ausreichend einstuft.
+  mode: single
+
+  trigger:
+    - platform: state
+      entity_id: sensor.bewaesserung_planner
+
+  condition:
+    - condition: template
+      value_template: >
+        {% set tank = state_attr('sensor.bewaesserung_planner', 'tank') or {} %}
+        {{ tank.get('low') or tank.get('empty_soon') }}
+
+  action:
+    - action: persistent_notification.create
+      data:
+        title: Bewaesserung: Tank pruefen
+        message: >
+          {% set tank = state_attr('sensor.bewaesserung_planner', 'tank') or {} %}
+          {{ tank.get('warning') or 'Der Wassertank wird niedrig.' }}
+          Aktueller Stand: {{ tank.get('percent', '?') }} %.
