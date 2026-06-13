@@ -183,6 +183,7 @@ AUTOMATION_TRIGGER_TOLERANCE_MINUTES = 20
 AUTOMATION_RUN_COOLDOWN_MINUTES = 30
 REFILL_RUN_TIMES = ("03:00", "06:00")
 REFILL_TRIGGER_TOLERANCE_MINUTES = 60
+REFILL_TRANSFER_FRACTION = 0.5
 
 
 @contextmanager
@@ -299,6 +300,17 @@ def init_db() -> None:
                 requested_ml INTEGER NOT NULL,
                 transferred_ml INTEGER NOT NULL,
                 duration_seconds INTEGER NOT NULL,
+                window_label TEXT NOT NULL DEFAULT '',
+                source TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS tank_fill_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ran_at TEXT NOT NULL,
+                tank_name TEXT NOT NULL,
+                previous_ml INTEGER NOT NULL,
+                new_ml INTEGER NOT NULL,
+                capacity_ml INTEGER NOT NULL,
                 source TEXT NOT NULL
             );
 
@@ -321,6 +333,7 @@ def init_db() -> None:
         ensure_column(conn, "balcony_settings", "refill_tank_capacity_ml", "INTEGER NOT NULL DEFAULT 30000")
         ensure_column(conn, "balcony_settings", "refill_tank_current_ml", "INTEGER NOT NULL DEFAULT 30000")
         ensure_column(conn, "balcony_settings", "refill_pump_ml_per_min", "INTEGER NOT NULL DEFAULT 1000")
+        ensure_column(conn, "refill_events", "window_label", "TEXT NOT NULL DEFAULT ''")
         ensure_column(conn, "plants", "pos_x", "REAL NOT NULL DEFAULT 0.5")
         ensure_column(conn, "plants", "pos_y", "REAL NOT NULL DEFAULT 0.5")
         ensure_column(conn, "plants", "hose_numbers", "TEXT NOT NULL DEFAULT ''")
@@ -776,18 +789,76 @@ def get_state() -> dict:
 def watering_events(limit: int = 12) -> list[dict]:
     limit = int(clamp(limit, 1, 50))
     with connect() as conn:
-        return [
-            row_to_dict(row)
+        events = [
+            {
+                **row_to_dict(row),
+                "event_type": "watering",
+                "title": "Bewässerung",
+                "amount_ml": int(row["delivered_ml"]),
+                "duration_seconds": 120,
+                "detail": f"{int(row['delivered_ml'])} ml gegossen",
+            }
             for row in conn.execute(
                 """
                 SELECT id, ran_at, delivered_ml, temperature_c, rain_mm, source
                 FROM watering_events
-                ORDER BY ran_at DESC, id DESC
-                LIMIT ?
-                """,
-                (limit,),
+                """
             )
         ]
+        events.extend(
+            {
+                **row_to_dict(row),
+                "event_type": "refill",
+                "title": "Nachfüllung",
+                "amount_ml": int(row["transferred_ml"]),
+                "temperature_c": None,
+                "rain_mm": None,
+                "detail": refill_event_detail(row),
+            }
+            for row in conn.execute(
+                """
+                SELECT id, ran_at, target_date, requested_ml, transferred_ml, duration_seconds, window_label, source
+                FROM refill_events
+                """
+            )
+        )
+        events.extend(
+            {
+                **row_to_dict(row),
+                "event_type": "tank_fill",
+                "title": "Tank voll markiert",
+                "amount_ml": max(0, int(row["new_ml"]) - int(row["previous_ml"])),
+                "duration_seconds": 0,
+                "temperature_c": None,
+                "rain_mm": None,
+                "detail": f"{tank_label(row['tank_name'])}: {format_liters_for_text(row['previous_ml'])} -> {format_liters_for_text(row['new_ml'])}",
+            }
+            for row in conn.execute(
+                """
+                SELECT id, ran_at, tank_name, previous_ml, new_ml, capacity_ml, source
+                FROM tank_fill_events
+                """
+            )
+        )
+    return sorted(events, key=lambda item: (item["ran_at"], int(item["id"])), reverse=True)[:limit]
+
+
+def refill_event_detail(row: sqlite3.Row) -> str:
+    source = str(row["source"])
+    window = str(row["window_label"] or "").strip()
+    parts = [
+        f"{int(row['transferred_ml'])} ml nachgefüllt",
+        f"{int(row['duration_seconds'])} s",
+    ]
+    if source == "manual":
+        parts.append("manuell")
+    elif window:
+        parts.append(window)
+    return " · ".join(parts)
+
+
+def tank_label(tank_name: str) -> str:
+    return {"main": "Haupttank", "refill": "Vorratstank"}.get(str(tank_name), str(tank_name))
 
 
 def completed_cycles_today(timezone_name: str = "Europe/Berlin") -> int:
@@ -818,17 +889,22 @@ def delivered_ml_for_local_date(day: date, timezone_name: str = "Europe/Berlin")
         return int(row["delivered_ml"])
 
 
-def refill_event_for_target_date(target_date: date) -> dict | None:
+def refill_event_for_target_date(target_date: date, window_label: str = "") -> dict | None:
     with connect() as conn:
+        where = "target_date = ?"
+        params: tuple = (target_date.isoformat(),)
+        if window_label:
+            where += " AND window_label = ?"
+            params = (target_date.isoformat(), window_label)
         row = conn.execute(
-            """
-            SELECT id, ran_at, target_date, requested_ml, transferred_ml, duration_seconds, source
+            f"""
+            SELECT id, ran_at, target_date, requested_ml, transferred_ml, duration_seconds, window_label, source
             FROM refill_events
-            WHERE target_date = ?
+            WHERE {where}
             ORDER BY ran_at DESC, id DESC
             LIMIT 1
             """,
-            (target_date.isoformat(),),
+            params,
         ).fetchone()
         return row_to_dict(row) if row else None
 
@@ -1301,6 +1377,7 @@ def evaluate_weather(weather: dict, slot: str = "morning") -> dict:
     )
     result["weather"] = weather
     result["depletion"] = depletion_forecast(result, weather)
+    result["manual_refill"] = manual_refill_status(result)
     return result
 
 
@@ -2077,19 +2154,19 @@ def refill_window_datetimes(today: date, tzinfo) -> list[datetime]:
 def refill_status(balcony: dict) -> dict:
     timezone_name = str(balcony.get("timezone_name", "Europe/Berlin"))
     now = local_now(timezone_name)
-    target_date = now.date() - timedelta(days=1)
+    target_date = now.date()
     enabled = refill_automation_enabled()
-    requested_ml = delivered_ml_for_local_date(target_date, timezone_name)
     main_capacity = max(int(balcony.get("tank_capacity_ml", 0)), 0)
     main_current = max(int(balcony.get("tank_current_ml", 0)), 0)
     refill_capacity = max(int(balcony.get("refill_tank_capacity_ml", 30000)), 1)
     refill_current = max(int(balcony.get("refill_tank_current_ml", 0)), 0)
     pump_ml_per_min = max(int(balcony.get("refill_pump_ml_per_min", 0)), 0)
     main_missing_ml = max(0, main_capacity - main_current)
-    transferable_ml = min(requested_ml, main_missing_ml, refill_current)
+    requested_ml = main_missing_ml
+    target_transfer_ml = math.ceil(requested_ml * REFILL_TRANSFER_FRACTION)
+    transferable_ml = min(target_transfer_ml, main_missing_ml, refill_current)
     duration_seconds = math.ceil(transferable_ml / pump_ml_per_min * 60) if pump_ml_per_min and transferable_ml else 0
     refill_windows = refill_window_datetimes(now.date(), now.tzinfo)
-    already_done = refill_event_for_target_date(target_date)
     active_window = next(
         (
             item
@@ -2098,24 +2175,26 @@ def refill_status(balcony: dict) -> dict:
         ),
         None,
     )
+    last_window = next((item for item in reversed(refill_windows) if item <= now), None)
+    active_window_label = active_window.strftime("%H:%M") if active_window else ""
+    last_window_label = last_window.strftime("%H:%M") if last_window else ""
     next_window = next((item for item in refill_windows if item > now), None)
     if not next_window:
         next_window = refill_window_datetimes(now.date() + timedelta(days=1), now.tzinfo)[0]
+    already_done = refill_event_for_target_date(target_date, active_window_label) if active_window_label else None
     run_now = bool(enabled and active_window and not already_done and transferable_ml > 0 and pump_ml_per_min > 0)
 
     if not enabled:
         summary = "Automatisches Nachfüllen ist deaktiviert."
     elif already_done:
-        summary = f"Nachfüllung für {target_date.strftime('%d.%m.')} ist erledigt."
-    elif requested_ml <= 0:
-        summary = "Gestern wurde kein Wasser verbraucht."
+        summary = f"Nachfüllung um {active_window_label} ist erledigt."
     elif pump_ml_per_min <= 0:
         summary = "Durchsatz der Nachfüllpumpe fehlt."
     elif main_missing_ml <= 0:
         summary = "Haupttank ist voll."
     elif refill_current <= 0:
         summary = "Vorratstank ist leer."
-    elif transferable_ml < requested_ml:
+    elif transferable_ml < target_transfer_ml:
         summary = f"Nachfüllung auf {format_liters_for_text(transferable_ml)} begrenzt."
     elif now < next_window:
         summary = f"Nächste Nachfüllung um {next_window.strftime('%H:%M')}."
@@ -2131,15 +2210,18 @@ def refill_status(balcony: dict) -> dict:
         "target_date": target_date.isoformat(),
         "scheduled_time": (active_window or next_window).strftime("%H:%M"),
         "scheduled_times": list(REFILL_RUN_TIMES),
-        "active_window": active_window.strftime("%H:%M") if active_window else "",
+        "active_window": active_window_label,
+        "last_window": last_window_label,
         "next_window": next_window.strftime("%H:%M") if next_window else "",
         "requested_ml": requested_ml,
+        "target_transfer_ml": target_transfer_ml,
+        "transfer_fraction": REFILL_TRANSFER_FRACTION,
         "planned_transfer_ml": transferable_ml,
         "duration_seconds": duration_seconds,
         "pump_ml_per_min": pump_ml_per_min,
         "main_missing_ml": main_missing_ml,
         "blocked_by_empty_refill_tank": bool(refill_current <= 0),
-        "limited_by_refill_tank": bool(requested_ml > 0 and transferable_ml < min(requested_ml, main_missing_ml)),
+        "limited_by_refill_tank": bool(target_transfer_ml > 0 and transferable_ml < min(target_transfer_ml, main_missing_ml)),
         "already_done": bool(already_done),
         "last_event": already_done or {},
         "refill_tank": {
@@ -2317,6 +2399,14 @@ def home_assistant_webhook_url() -> str:
     return value if parsed.scheme in {"http", "https"} and parsed.netloc else ""
 
 
+def home_assistant_refill_webhook_url() -> str:
+    value = os.environ.get("HOME_ASSISTANT_REFILL_WEBHOOK_URL", "").strip()
+    if not value or "HOME-ASSISTANT-IP" in value:
+        return ""
+    parsed = urlparse(value)
+    return value if parsed.scheme in {"http", "https"} and parsed.netloc else ""
+
+
 def manual_run_status(result: dict) -> dict:
     delivered_per_cycle = int(result["pump"]["delivered_per_cycle_ml"])
     if not result["plants"]:
@@ -2340,6 +2430,91 @@ def manual_run_status(result: dict) -> dict:
     }
 
 
+def manual_refill_status(result: dict) -> dict:
+    manual_plan = manual_refill_plan(result)
+    if int(manual_plan.get("planned_transfer_ml", 0)) <= 0:
+        reason = manual_plan.get("summary") or "Keine Nachfüllung nötig."
+    elif not home_assistant_refill_webhook_url():
+        reason = "Home-Assistant-Webhook für manuelle Nachfüllläufe ist noch nicht konfiguriert."
+    else:
+        return {
+            "available": True,
+            "reason": "Ein Nachfülllauf kann über Home Assistant gestartet werden.",
+            "endpoint": "/api/manual-refill",
+            **manual_plan,
+        }
+    return {
+        "available": False,
+        "reason": reason,
+        "endpoint": "/api/manual-refill",
+        **manual_plan,
+    }
+
+
+def manual_refill_plan(result: dict) -> dict:
+    tank = result.get("tank", {})
+    refill = result.get("refill", {})
+    refill_tank = refill.get("refill_tank", {})
+    main_missing_ml = max(0, int(tank.get("capacity_ml", 0)) - int(tank.get("current_ml", 0)))
+    refill_current = max(0, int(refill_tank.get("current_ml", 0)))
+    pump_ml_per_min = max(0, int(refill.get("pump_ml_per_min", 0)))
+    target_transfer_ml = math.ceil(main_missing_ml * REFILL_TRANSFER_FRACTION)
+    planned_transfer_ml = min(target_transfer_ml, refill_current)
+    duration_seconds = math.ceil(planned_transfer_ml / pump_ml_per_min * 60) if pump_ml_per_min and planned_transfer_ml else 0
+    if pump_ml_per_min <= 0:
+        summary = "Durchsatz der Nachfüllpumpe fehlt."
+    elif main_missing_ml <= 0:
+        summary = "Haupttank ist voll."
+    elif refill_current <= 0:
+        summary = "Vorratstank ist leer."
+    elif planned_transfer_ml < target_transfer_ml:
+        summary = f"Manuelle Nachfüllung auf {format_liters_for_text(planned_transfer_ml)} begrenzt."
+    else:
+        summary = f"Manuelle Nachfüllung: {format_liters_for_text(planned_transfer_ml)}."
+    return {
+        "target_transfer_ml": target_transfer_ml,
+        "planned_transfer_ml": planned_transfer_ml,
+        "duration_seconds": duration_seconds,
+        "main_missing_ml": main_missing_ml,
+        "summary": summary,
+    }
+
+
+def save_pending_refill_request(plan: dict) -> None:
+    set_setting(
+        "pending_refill_request",
+        json.dumps(
+            {
+                "created_at": now_iso(),
+                "source": "manual",
+                "target_date": local_now(get_state()["balcony"].get("timezone_name", "Europe/Berlin")).date().isoformat(),
+                "requested_ml": int(plan.get("main_missing_ml", 0)),
+                "transferred_ml": int(plan.get("planned_transfer_ml", 0)),
+                "duration_seconds": int(plan.get("duration_seconds", 0)),
+                "window_label": "manual",
+            }
+        ),
+    )
+
+
+def pending_refill_request() -> dict | None:
+    raw = get_setting("pending_refill_request", "")
+    if not raw:
+        return None
+    try:
+        payload = json.loads(raw)
+        created_at = datetime.fromisoformat(str(payload.get("created_at", "")))
+    except (ValueError, TypeError, json.JSONDecodeError):
+        delete_setting("pending_refill_request")
+        return None
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    if datetime.now(timezone.utc) - created_at.astimezone(timezone.utc) > timedelta(hours=2):
+        delete_setting("pending_refill_request")
+        return None
+    return payload
+
+
 def trigger_home_assistant_manual_run(result: dict) -> None:
     status = manual_run_status(result)
     if not status["available"]:
@@ -2361,6 +2536,33 @@ def trigger_home_assistant_manual_run(result: dict) -> None:
         with urlopen(request, timeout=5) as response:
             response.read()
     except (OSError, URLError, TimeoutError) as exc:
+        raise ValueError(f"Home Assistant konnte nicht erreicht werden: {exc}") from exc
+
+
+def trigger_home_assistant_manual_refill(result: dict) -> None:
+    status = manual_refill_status(result)
+    if not status["available"]:
+        raise ValueError(status["reason"])
+    save_pending_refill_request(status)
+    payload = json.dumps(
+        {
+            "source": "watering-planner",
+            "requested_at": now_iso(),
+            "planned_transfer_ml": status.get("planned_transfer_ml", 0),
+            "duration_seconds": status.get("duration_seconds", 0),
+        }
+    ).encode("utf-8")
+    request = Request(
+        home_assistant_refill_webhook_url(),
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=5) as response:
+            response.read()
+    except (OSError, URLError, TimeoutError) as exc:
+        delete_setting("pending_refill_request")
         raise ValueError(f"Home Assistant konnte nicht erreicht werden: {exc}") from exc
 
 
@@ -2523,6 +2725,7 @@ def evaluate(
     }
     result["manual_run"] = manual_run_status(result)
     result["depletion"] = depletion_forecast(result, result["inputs"])
+    result["manual_refill"] = manual_refill_status(result)
     return result
 
 
@@ -2635,6 +2838,28 @@ class AppHandler(SimpleHTTPRequestHandler):
                     {
                         "accepted": True,
                         "message": "Manueller Pumpenlauf wurde an Home Assistant übergeben.",
+                        "evaluation": result,
+                    },
+                    HTTPStatus.ACCEPTED,
+                )
+                return
+            if parsed.path == "/api/manual-refill":
+                payload = read_json(self)
+                weather = weather_from_payload(payload)
+                result = evaluate_weather(weather, str(payload.get("slot", "morning")))
+                if not result["manual_refill"]["available"]:
+                    send_json(self, {"error": result["manual_refill"]["reason"]}, HTTPStatus.CONFLICT)
+                    return
+                try:
+                    trigger_home_assistant_manual_refill(result)
+                except ValueError as exc:
+                    send_json(self, {"error": str(exc)}, HTTPStatus.BAD_GATEWAY)
+                    return
+                send_json(
+                    self,
+                    {
+                        "accepted": True,
+                        "message": "Manueller Nachfülllauf wurde an Home Assistant übergeben.",
                         "evaluation": result,
                     },
                     HTTPStatus.ACCEPTED,
@@ -2894,10 +3119,21 @@ def update_plant_position(plant_id: int, payload: dict) -> None:
 
 def mark_refill_run(source: str = "home_assistant") -> dict:
     state = get_state()
+    pending = pending_refill_request()
     refill = refill_status(state["balcony"])
-    if not refill["enabled"]:
+    if pending:
+        refill = {
+            **refill,
+            "target_date": pending.get("target_date", refill.get("target_date", "")),
+            "requested_ml": int(pending.get("requested_ml", 0)),
+            "planned_transfer_ml": int(pending.get("transferred_ml", 0)),
+            "duration_seconds": int(pending.get("duration_seconds", 0)),
+            "window_label": str(pending.get("window_label", "manual")),
+        }
+        source = str(pending.get("source", "manual"))
+    elif not refill["enabled"]:
         raise ValueError("Automatisches Nachfüllen ist deaktiviert")
-    if refill["already_done"]:
+    elif refill["already_done"]:
         raise ValueError("Nachfüllung für diesen Verbrauchstag wurde bereits verbucht")
     transferred_ml = int(refill["planned_transfer_ml"])
     if transferred_ml <= 0:
@@ -2916,8 +3152,8 @@ def mark_refill_run(source: str = "home_assistant") -> dict:
         )
         conn.execute(
             """
-            INSERT INTO refill_events (ran_at, target_date, requested_ml, transferred_ml, duration_seconds, source)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO refill_events (ran_at, target_date, requested_ml, transferred_ml, duration_seconds, window_label, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 now,
@@ -2925,23 +3161,50 @@ def mark_refill_run(source: str = "home_assistant") -> dict:
                 int(refill["requested_ml"]),
                 transferred_ml,
                 int(refill["duration_seconds"]),
+                refill.get("window_label") or refill.get("active_window") or refill.get("last_window") or "",
                 source,
             ),
         )
+    if pending:
+        delete_setting("pending_refill_request")
     return refill
 
 
 def fill_tank(tank_name: str) -> None:
     if tank_name == "main":
         column = "tank_current_ml = tank_capacity_ml"
+        current_column = "tank_current_ml"
+        capacity_column = "tank_capacity_ml"
     elif tank_name == "refill":
         column = "refill_tank_current_ml = refill_tank_capacity_ml"
+        current_column = "refill_tank_current_ml"
+        capacity_column = "refill_tank_capacity_ml"
     else:
         raise ValueError("Unbekannter Tank")
+    now = now_iso()
     with connect() as conn:
+        row = conn.execute(
+            f"SELECT {current_column} AS current_ml, {capacity_column} AS capacity_ml FROM balcony_settings WHERE id = 1"
+        ).fetchone()
+        if row is None:
+            raise ValueError("Tankdaten nicht gefunden")
         conn.execute(
             f"UPDATE balcony_settings SET {column}, updated_at = ? WHERE id = 1",
-            (now_iso(),),
+            (now,),
+        )
+        conn.execute(
+            """
+            INSERT INTO tank_fill_events (ran_at, tank_name, previous_ml, new_ml, capacity_ml, source)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                now,
+                tank_name,
+                int(row["current_ml"]),
+                int(row["capacity_ml"]),
+                int(row["capacity_ml"]),
+                "ui",
+            ),
         )
 
 

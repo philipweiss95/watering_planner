@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Terrassen-Bewässerungsplaner</title>
-    <link rel="stylesheet" href="/styles.css?v=20260610-water-tuning-1">
+    <link rel="stylesheet" href="/styles.css?v=20260613-refill-log-2">
   </head>
   <body>
     <header class="topbar">
@@ -231,9 +231,10 @@
                   Nachfüllpumpe in ml pro Minute
                   <input type="number" name="refill_pump_ml_per_min" min="0" step="1">
                 </label>
-                <label class="check-label">
+                <label class="toggle-field">
+                  <span>Automatisch aus Vorratstank nachfüllen</span>
                   <input type="checkbox" name="refill_automation_enabled" checked>
-                  Automatisch aus Vorratstank nachfüllen
+                  <span class="toggle-switch" aria-hidden="true"></span>
                 </label>
               </div>
             </fieldset>
@@ -388,6 +389,6 @@
       </div>
     </main>
 
-    <script src="/app.js?v=20260610-water-tuning-1"></script>
+    <script src="/app.js?v=20260613-refill-log-2"></script>
   </body>
 </html>

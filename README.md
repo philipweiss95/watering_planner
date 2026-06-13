@@ -78,7 +78,7 @@ Die Antwort enthält zwei Entscheidungen:
 
 Der Planer verteilt die empfohlenen Zyklen gleichmäßig zwischen `07:00` und `19:00`. Bei vier Zyklen entstehen zum Beispiel die Zeitpunkte `07:00`, `11:00`, `15:00`, `19:00`. Manuell verbuchte Läufe zählen dabei mit. Home Assistant fragt den Planer alle 15 Minuten erneut ab. Dadurch geht ein Lauf nicht verloren, wenn eine einzelne Sensoraktualisierung ausfällt; ein verpasster geplanter Lauf wird später nachgeholt. Nach einem verbuchten Pumpenlauf setzt der Planer zusätzlich eine Sicherheitspause von 30 Minuten, damit Zyklen nicht direkt hintereinander starten.
 
-Zusätzlich verwaltet der Planer einen 30-l-Vorratstank mit eigener Nachfüllpumpe. Um `03:00` und `06:00` Uhr berechnet er den Verbrauch des Vortags, begrenzt ihn auf den freien Platz im Haupttank und den rechnerischen Rest im Vorratstank und liefert daraus die Laufzeit der zweiten Pumpe. Ist der Vorratstank leer, der Durchsatz nicht eingetragen oder die Nachfüllautomatik deaktiviert, wird kein Nachfülllauf freigegeben. Haupttank und Vorratstank werden im Dashboard per Button wieder als voll markiert.
+Zusätzlich verwaltet der Planer einen 30-l-Vorratstank mit eigener Nachfüllpumpe. Um `03:00` und `06:00` Uhr prüft er den rechnerischen Füllstand des Haupttanks, pumpt wegen der verbundenen Behälter nur die Hälfte des aktuell fehlenden Wassers nach, begrenzt die Menge auf den rechnerischen Rest im Vorratstank und liefert daraus die Laufzeit der zweiten Pumpe. Dadurch nähert sich der Haupttank an voll an, ohne rechnerisch überlaufen zu können. Ist der Vorratstank leer, der Durchsatz nicht eingetragen oder die Nachfüllautomatik deaktiviert, wird kein automatischer Nachfülllauf freigegeben. Haupttank und Vorratstank werden im Dashboard per Button wieder als voll markiert.
 
 Die Berechnung nutzt Temperatur, Tagesniederschlag, Wind, FAO-Referenzverdunstung ET₀, Sonnenscheindauer, Balkon-/Terrassenausrichtung in Grad, Koordinaten, Pflanzenpositionen und die vier Wandhöhen nach Seite. Wenn Open-Meteo keine ET₀-Werte liefert oder manuelle Wetterdaten genutzt werden, schätzt die App ET₀ aus Temperatur, Sonnenscheindauer und Wind. Zusätzlich wird Wind als Balkon-Expositionsfaktor berechnet: hohe Windgeschwindigkeiten erhöhen Transpiration und Topfverdunstung, niedrige Wände schützen weniger.
 
@@ -145,8 +145,9 @@ Die letzten Läufe erscheinen im Dashboard als Protokoll unter `Bewässerungsvor
 - `DELETE /api/plants/{id}`: Pflanze entfernen
 - `POST /api/evaluate`: Empfehlung berechnen, mit `{"auto_weather": true}` automatisch
 - `GET /api/homekit/check`: kompakte HomeKit-Entscheidung
-- `GET /api/watering-events`: Protokoll der letzten Bewässerungsläufe
+- `GET /api/watering-events`: Protokoll der letzten Bewässerungs-, Nachfüll- und Tankfüllstand-Ereignisse
 - `POST /api/manual-run`: vollständigen Pumpzyklus sofort über Home Assistant anfordern
+- `POST /api/manual-refill`: Nachfülllauf sofort über Home Assistant anfordern
 - `POST /api/homekit/mark-run`: Pumpenlauf verbuchen und Tank reduzieren
 - `POST /api/refill/mark-run`: nächtlichen Nachfülllauf verbuchen und Wasser vom Vorratstank in den Haupttank rechnen
 - `POST /api/tanks/main/fill`: Haupttank als voll markieren

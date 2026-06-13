@@ -22,6 +22,7 @@ sensor:
       - pump
       - tank
       - refill
+      - manual_refill
       - automation
 
 rest_command:
@@ -100,7 +101,7 @@ script:
 
       - alias: Berechnete Nachfuelldauer abwarten
         delay:
-          seconds: "{{ (state_attr('sensor.bewaesserung_planner', 'refill') or {}).get('duration_seconds', 0) | int(0) }}"
+          seconds: "{{ duration_seconds | default((state_attr('sensor.bewaesserung_planner', 'refill') or {}).get('duration_seconds', 0), true) | int(0) }}"
 
       - alias: Nachfuellpumpe ausschalten
         action: switch.turn_off

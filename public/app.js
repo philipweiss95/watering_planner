@@ -596,12 +596,21 @@ function renderAutomationControls(result) {
   if (!result.automation) return "";
   const paused = result.automation.paused;
   const manualRun = result.manual_run || {};
+  const manualRefill = result.manual_refill || {};
+  const manualRefillHint = manualRefill.available
+    ? `${manualRefill.summary || "Nachfülllauf bereit."} Laufzeit ${formatDuration(manualRefill.duration_seconds || 0)}.`
+    : (manualRefill.reason || "Startet die zweite Pumpe über Home Assistant.");
   return `
     <div class="automation-controls">
       <div class="manual-run-card ${manualRun.available ? "available" : "blocked"}">
         <span class="metric-label">Manueller Durchlauf</span>
         <button class="primary" data-manual-run type="button" ${manualRun.available ? "" : "disabled"}>Zyklus jetzt starten</button>
         <span class="manual-run-hint">${manualRun.reason || "Startet sofort einen vollständigen Pumpzyklus."}</span>
+      </div>
+      <div class="manual-run-card ${manualRefill.available ? "available" : "blocked"}">
+        <span class="metric-label">Manuelle Nachfüllung</span>
+        <button class="secondary" data-manual-refill type="button" ${manualRefill.available ? "" : "disabled"}>Nachfüllung starten</button>
+        <span class="manual-run-hint">${manualRefillHint}</span>
       </div>
       <div class="automation-secondary">
         <button class="secondary small-button" data-pause-automation type="button" ${paused ? "disabled" : ""}>Heute pausieren</button>
@@ -730,6 +739,23 @@ function bindAutomationControls() {
       button.disabled = true;
       try {
         const response = await api("/api/manual-run", {
+          method: "POST",
+          body: JSON.stringify({ auto_weather: true }),
+        });
+        window.alert(response.message);
+        await evaluateCurrent();
+      } catch (error) {
+        window.alert(error.message);
+        button.disabled = false;
+      }
+    });
+  });
+  document.querySelectorAll("[data-manual-refill]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      if (!window.confirm("Jetzt einen Nachfülllauf über Home Assistant starten?")) return;
+      button.disabled = true;
+      try {
+        const response = await api("/api/manual-refill", {
           method: "POST",
           body: JSON.stringify({ auto_weather: true }),
         });
@@ -1078,19 +1104,41 @@ function renderWateringLog() {
     .map(
       (event) => `
         <article class="log-row">
-          <div class="log-icon">${icon("drop")}</div>
+          <div class="log-icon ${event.event_type || "watering"}">${icon(eventLogIcon(event))}</div>
           <div class="log-main">
-            <strong>${formatEventTime(event.ran_at)}</strong>
-            <span>${sourceLabel(event.source)} · ${Math.round(event.delivered_ml)} ml</span>
+            <strong>${event.title || "Bewässerung"} · ${formatEventTime(event.ran_at)}</strong>
+            <span>${event.detail || eventLogDetail(event)}</span>
           </div>
           <div class="log-weather">
-            <span>${event.temperature_c === null ? "--" : `${Math.round(Number(event.temperature_c) * 10) / 10}&deg;C`}</span>
-            <span>${event.rain_mm === null ? "--" : `${Math.round(Number(event.rain_mm) * 10) / 10} mm`}</span>
+            <span>${sourceLabel(event.source)}</span>
+            <span>${eventLogMeta(event)}</span>
           </div>
         </article>
       `,
     )
     .join("");
+}
+
+function eventLogIcon(event) {
+  if (event.event_type === "refill" || event.event_type === "tank_fill") return "tank";
+  return "drop";
+}
+
+function eventLogDetail(event) {
+  const amount = Number(event.amount_ml ?? event.delivered_ml ?? event.transferred_ml ?? 0);
+  return `${Math.round(amount)} ml`;
+}
+
+function eventLogMeta(event) {
+  if (event.event_type === "refill" && Number(event.duration_seconds || 0) > 0) {
+    return `${Math.round(Number(event.duration_seconds))} s`;
+  }
+  if (event.event_type === "tank_fill") {
+    return formatLiters(event.amount_ml || 0);
+  }
+  const temperature = event.temperature_c === null ? "--" : `${Math.round(Number(event.temperature_c) * 10) / 10}&deg;C`;
+  const rain = event.rain_mm === null ? "--" : `${Math.round(Number(event.rain_mm) * 10) / 10} mm`;
+  return `${temperature} · ${rain}`;
 }
 
 function formatEventTime(value) {
@@ -1107,9 +1155,12 @@ function formatEventTime(value) {
 
 function sourceLabel(source) {
   return {
+    automatic: "Automatik",
+    home_assistant: "Home Assistant",
     homekit: "Home Assistant",
     shortcut: "Kurzbefehl",
     manual: "Manuell",
+    ui: "Interface",
   }[source] || source;
 }
 
@@ -1377,6 +1428,8 @@ function bindTankFillButtons() {
   document.querySelectorAll("[data-fill-tank]").forEach((button) => {
     button.addEventListener("click", async () => {
       const tank = button.dataset.fillTank;
+      const tankName = tank === "refill" ? "Vorratstank" : "Haupttank";
+      if (!window.confirm(`${tankName} wirklich als vollständig gefüllt markieren? Der rechnerische Füllstand wird auf 100% gesetzt.`)) return;
       button.disabled = true;
       try {
         state = await api(`/api/tanks/${tank}/fill`, { method: "POST", body: JSON.stringify({}) });

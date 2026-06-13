@@ -152,7 +152,8 @@ Die Vorlagen trennen die Aufgaben:
 - `script.bewaesserung_nachfuellen` schaltet die zweite Meross-Steckdose `switch.smart_plug_mini_refill` fuer die vom Planner berechnete Dauer ein und verbucht danach den Nachfuelllauf.
 - `Bewaesserung - Tagesfenster` prüft alle 15 Minuten den Sensor und startet das Skript nur bei `run_now`.
 - `Bewaesserung - Manueller Sofortlauf` nimmt über einen Webhook mit zufälliger ID einen sofortigen manuellen Lauf entgegen und startet dasselbe Skript.
-- `Bewaesserung - Haupttank nachfuellen` prüft um `03:00` und `06:00` Uhr den Verbrauch des Vortags und startet die zweite Pumpe nur, wenn der 30-l-Vorratstank rechnerisch genug Wasser für einen sinnvollen Lauf enthält und die Nachfüllautomatik im Planner aktiv ist.
+- `Bewaesserung - Haupttank nachfuellen` prüft um `03:00` und `06:00` Uhr den rechnerischen Füllstand des Haupttanks und startet die zweite Pumpe nur, wenn der 30-l-Vorratstank rechnerisch genug Wasser für einen sinnvollen Lauf enthält und die Nachfüllautomatik im Planner aktiv ist. Pro Lauf wird wegen der verbundenen Behälter nur die Hälfte des aktuell fehlenden Haupttank-Inhalts gepumpt.
+- `Bewaesserung - Manuelle Nachfuellung` nimmt über einen zweiten Webhook einen vom Dashboard angeforderten Nachfülllauf entgegen und startet dasselbe Nachfüllskript.
 
 Falls die Steckdosen in Home Assistant andere Entity-IDs erhalten haben, `switch.smart_plug_mini` und `switch.smart_plug_mini_refill` in der Vorlage `configuration.yaml` ersetzen.
 
@@ -162,7 +163,7 @@ Der Planer verteilt die empfohlenen Pumpenläufe gleichmäßig zwischen `07:00` 
 
 Der Planer verhindert Überbewässerung, weil nach jedem Lauf `remaining_cycles_today` sinkt. Zusätzlich bleibt `run_now` nach einem verbuchten Lauf 30 Minuten lang gesperrt. Die Skripte und Automationen laufen im Modus `single`, damit ein zweiter Trigger während eines laufenden Pumpenzyklus nicht direkt einen weiteren Lauf startet. Home Assistant muss dadurch keine eigene Verteilungslogik kennen.
 
-Der Haupttank wird nachts rechnerisch aus dem separaten 30-l-Vorratstank nachgefüllt. Die Laufzeit ergibt sich aus dem in den Planner-Einstellungen hinterlegten Durchsatz der Nachfüllpumpe in ml/min. Wenn der Vorratstank leer ist oder die Nachfüllautomatik im Webinterface deaktiviert wurde, gibt der Planner keinen Nachfülllauf frei.
+Der Haupttank wird nachts rechnerisch aus dem separaten 30-l-Vorratstank nachgefüllt. Die Laufzeit ergibt sich aus der Hälfte des aktuell fehlenden Haupttank-Inhalts und dem in den Planner-Einstellungen hinterlegten Durchsatz der Nachfüllpumpe in ml/min. Wenn der Vorratstank leer ist oder die Nachfüllautomatik im Webinterface deaktiviert wurde, gibt der Planner keinen automatischen Nachfülllauf frei. Der manuelle Nachfüllbutton benötigt zusätzlich `HOME_ASSISTANT_REFILL_WEBHOOK_URL` in der Server-Umgebung.
 
 Im Dashboard des Planers wird zusätzlich angezeigt:
 

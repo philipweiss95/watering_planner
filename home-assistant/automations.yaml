@@ -45,9 +45,39 @@
   action:
     - action: script.bewaesserung_pumpzyklus
 
+- id: bewaesserung_manuelle_nachfuellung
+  alias: Bewaesserung - Manuelle Nachfuellung
+  description: Startet einen vom Planner angeforderten Nachfuelllauf.
+  mode: single
+
+  trigger:
+    - platform: webhook
+      webhook_id: 15dbcc8d4b31475289af2fd6ecb0eaf9
+      allowed_methods:
+        - POST
+      local_only: false
+
+  action:
+    - action: homeassistant.update_entity
+      target:
+        entity_id: sensor.bewaesserung_planner
+
+    - delay:
+        seconds: 2
+
+    - condition: template
+      value_template: >
+        {% set manual_refill = state_attr('sensor.bewaesserung_planner', 'manual_refill') or {} %}
+        {{ manual_refill.get('duration_seconds', 0) | int(0) > 0 }}
+
+    - action: script.bewaesserung_nachfuellen
+      data:
+        duration_seconds: >
+          {{ (state_attr('sensor.bewaesserung_planner', 'manual_refill') or {}).get('duration_seconds', 0) | int(0) }}
+
 - id: bewaesserung_haupttank_nachfuellen
   alias: Bewaesserung - Haupttank nachfuellen
-  description: Fuellt um 03:00 oder 06:00 Uhr den Verbrauch des Vortags aus dem 30-l-Vorratstank nach.
+  description: Fuellt um 03:00 oder 06:00 Uhr die Haelfte des fehlenden Haupttank-Inhalts aus dem 30-l-Vorratstank nach.
   mode: single
 
   trigger:
