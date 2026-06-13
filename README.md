@@ -78,6 +78,8 @@ Die Antwort enthält zwei Entscheidungen:
 
 Der Planer verteilt die empfohlenen Zyklen gleichmäßig zwischen `07:00` und `19:00`. Bei vier Zyklen entstehen zum Beispiel die Zeitpunkte `07:00`, `11:00`, `15:00`, `19:00`. Manuell verbuchte Läufe zählen dabei mit. Home Assistant fragt den Planer alle 15 Minuten erneut ab. Dadurch geht ein Lauf nicht verloren, wenn eine einzelne Sensoraktualisierung ausfällt; ein verpasster geplanter Lauf wird später nachgeholt. Nach einem verbuchten Pumpenlauf setzt der Planer zusätzlich eine Sicherheitspause von 30 Minuten, damit Zyklen nicht direkt hintereinander starten.
 
+Zusätzlich verwaltet der Planer einen 30-l-Vorratstank mit eigener Nachfüllpumpe. Um `03:00` und `06:00` Uhr berechnet er den Verbrauch des Vortags, begrenzt ihn auf den freien Platz im Haupttank und den rechnerischen Rest im Vorratstank und liefert daraus die Laufzeit der zweiten Pumpe. Ist der Vorratstank leer, der Durchsatz nicht eingetragen oder die Nachfüllautomatik deaktiviert, wird kein Nachfülllauf freigegeben. Haupttank und Vorratstank werden im Dashboard per Button wieder als voll markiert.
+
 Die Berechnung nutzt Temperatur, Tagesniederschlag, Wind, FAO-Referenzverdunstung ET₀, Sonnenscheindauer, Balkon-/Terrassenausrichtung in Grad, Koordinaten, Pflanzenpositionen und die vier Wandhöhen nach Seite. Wenn Open-Meteo keine ET₀-Werte liefert oder manuelle Wetterdaten genutzt werden, schätzt die App ET₀ aus Temperatur, Sonnenscheindauer und Wind. Zusätzlich wird Wind als Balkon-Expositionsfaktor berechnet: hohe Windgeschwindigkeiten erhöhen Transpiration und Topfverdunstung, niedrige Wände schützen weniger.
 
 Der Wasserbedarf pro Pflanze wird aus einem Pflanzenprofil berechnet:
@@ -88,7 +90,7 @@ Tagesbedarf ≈ ET₀ × Pflanzenkoeffizient × wirksame Kronenfläche
             - wirksam aufgefangener Niederschlag
 ```
 
-Der rohe ET0-Kübelwert wird anschließend mit einem Terrassen-Tropfbewässerungsfaktor kalibriert und zusätzlich saisonal gewichtet. Intern entspricht die Standardkalibrierung 6%. In der Weboberfläche wird sie verständlicher als relative Gießmenge angezeigt: Unter `Einstellungen > Bewässerung einstellen` bedeutet `100%` Standardmenge, `120%` gießt 20% mehr. Eine Live-Vorschau zeigt die konkrete Auswirkung auf den täglichen Pflanzenbedarf. Ende Mai liegt der Pflanzenbedarf durch die saisonale Gewichtung unter dem Hochsommerwert; im Juli/August steigt er je nach Pflanzengruppe wieder an. Das bildet die beobachtete Praxis ab, dass die reale Anlage mit wenigen gemeinsamen Pumpzyklen auskommt und der unkalibrierte ET0-Ansatz deutlich zu hohe Tagesmengen liefert. Die Kronenfläche wird aus Pflanzenart, Pflanzengröße und Topfvolumen abgeleitet. Topfarten mit Depot, Überlauf oder geschlossenem Topf verändern die nutzbare Wassermenge und das Überwässerungsrisiko.
+Der rohe ET0-Kübelwert wird anschließend mit einem Terrassen-Tropfbewässerungsfaktor kalibriert und zusätzlich saisonal gewichtet. In der Weboberfläche wird er als ein einzelner Versorgungsfaktor angezeigt: `100%` ist die aktuelle Standardversorgung, `120%` erhöht den berechneten Tagesbedarf um 20%. Eine Live-Vorschau zeigt die konkrete Auswirkung auf den täglichen Pflanzenbedarf. Ende Mai liegt der Pflanzenbedarf durch die saisonale Gewichtung unter dem Hochsommerwert; im Juli/August steigt er je nach Pflanzengruppe wieder an. Das bildet die beobachtete Praxis ab, dass die reale Anlage mit wenigen gemeinsamen Pumpzyklen auskommt und der unkalibrierte ET0-Ansatz deutlich zu hohe Tagesmengen liefert. Die Kronenfläche wird aus Pflanzenart, Pflanzengröße und Topfvolumen abgeleitet. Topfarten mit Depot, Überlauf oder geschlossenem Topf verändern die nutzbare Wassermenge und das Überwässerungsrisiko.
 
 Der Pflanzenkatalog enthält typische Balkonpflanzen aus Gemüse, Kräutern, Beerenobst, Blühpflanzen, mediterranen Gehölzen, Kletterpflanzen und Sukkulenten.
 
@@ -129,7 +131,7 @@ Content-Type: application/json
 {"auto_weather":true,"slot":"morning"}
 ```
 
-Dadurch zählt der Server die bereits erledigten Tageszyklen und reduziert den Tankstand.
+Dadurch zählt der Server die bereits erledigten Tageszyklen und reduziert den Haupttankstand.
 Die letzten Läufe erscheinen im Dashboard als Protokoll unter `Bewässerungsvorgänge`.
 
 ## API
@@ -146,5 +148,8 @@ Die letzten Läufe erscheinen im Dashboard als Protokoll unter `Bewässerungsvor
 - `GET /api/watering-events`: Protokoll der letzten Bewässerungsläufe
 - `POST /api/manual-run`: vollständigen Pumpzyklus sofort über Home Assistant anfordern
 - `POST /api/homekit/mark-run`: Pumpenlauf verbuchen und Tank reduzieren
+- `POST /api/refill/mark-run`: nächtlichen Nachfülllauf verbuchen und Wasser vom Vorratstank in den Haupttank rechnen
+- `POST /api/tanks/main/fill`: Haupttank als voll markieren
+- `POST /api/tanks/refill/fill`: 30-l-Vorratstank als voll markieren
 - `POST /api/automation/pause`: Automatik bis morgen pausieren
 - `POST /api/automation/resume`: Automatik wieder aktivieren

@@ -40,14 +40,16 @@ async function loadState() {
 }
 
 async function loadWateringEvents() {
-  const response = await api("/api/watering-events?limit=12");
+  const response = await api("/api/watering-events?limit=20");
   wateringEvents = response.events || [];
 }
 
 function renderState() {
   const tank = state.balcony.tank_current_ml;
   const tankMax = state.balcony.tank_capacity_ml;
-  $("#tankStatus").textContent = `${Math.round((tank / tankMax) * 100)}% Tank`;
+  const refillTank = state.balcony.refill_tank_current_ml || 0;
+  const refillTankMax = state.balcony.refill_tank_capacity_ml || 30000;
+  $("#tankStatus").textContent = `${Math.round((tank / tankMax) * 100)}% Haupt · ${Math.round((refillTank / refillTankMax) * 100)}% Vorrat`;
 
   const catalogSelect = $("#catalogSelect");
   catalogSelect.innerHTML = state.catalog
@@ -61,7 +63,8 @@ function renderState() {
     if (field) field.value = value;
   }
   balconyForm.elements.tank_capacity_liters.value = Number(state.balcony.tank_capacity_ml || 0) / 1000;
-  balconyForm.elements.tank_current_liters.value = Number(state.balcony.tank_current_ml || 0) / 1000;
+  balconyForm.elements.refill_pump_ml_per_min.value = Number(state.balcony.refill_pump_ml_per_min || 0);
+  balconyForm.elements.refill_automation_enabled.checked = state.settings?.refill_automation_enabled !== false;
   balconyForm.elements.watering_amount_percent.value = state.settings?.watering_amount_percent ?? 100;
 
   $("#outletEditor").innerHTML = state.outlets
@@ -529,6 +532,7 @@ function renderEvaluation(result) {
   $("#dashboardCards").innerHTML = renderDashboardCards(result, urgentActions, changeActions);
   $("#configSummary").innerHTML = renderConfigSummary(result, urgentActions, changeActions);
   $("#dashboardContext").innerHTML = renderDashboardContext(result, urgentActions, changeActions);
+  $("#tankQuickActions").innerHTML = renderTankQuickActions(result);
   $("#calculationFlow").innerHTML = renderCalculationFlow(result, urgentActions, changeActions);
   $("#result").innerHTML = `
     <div class="decision-layout ${result.run_now ? "go" : result.should_run ? "wait" : "stop"}">
@@ -543,6 +547,7 @@ function renderEvaluation(result) {
     ${renderActionSummary(urgentActions, changeActions)}
   `;
   bindAutomationControls();
+  bindTankFillButtons();
   bindIgnoreSuggestionButtons();
   updateWateringAmountPreview();
   renderWateringLog();
@@ -568,6 +573,23 @@ function renderEvaluation(result) {
     : `<p class="meta">Noch keine Verschlauchung berechenbar.</p>`;
   $("#routing").innerHTML = configuredRouting + renderRoutingAssignments(result);
   bindIgnoreSuggestionButtons();
+}
+
+function renderTankQuickActions(result) {
+  const refill = result.refill || {};
+  const refillTank = refill.refill_tank || {};
+  return `
+    <div class="tank-action-card">
+      <div>
+        <span class="metric-label">Tankstände</span>
+        <strong>${formatLiters(result.tank.current_ml)} Haupt · ${formatLiters(refillTank.current_ml || 0)} Vorrat</strong>
+      </div>
+      <div class="tank-fill-actions">
+        <button class="secondary small-button" data-fill-tank="main" type="button">Haupttank voll</button>
+        <button class="secondary small-button" data-fill-tank="refill" type="button">Vorratstank voll</button>
+      </div>
+    </div>
+  `;
 }
 
 function renderAutomationControls(result) {
@@ -610,11 +632,32 @@ function renderDashboardContext(result, urgentActions, changeActions) {
 }
 
 function nextDashboardAction(result, urgentActions, changeActions) {
+  if (result.refill?.refill_tank?.empty) {
+    return {
+      tone: "urgent",
+      title: "Vorratstank auffüllen",
+      detail: "Die Nachfüllpumpe wird nicht gestartet, solange der 30-l-Tank leer ist.",
+    };
+  }
   if (result.tank.empty_soon) {
     return {
       tone: "urgent",
       title: "Tank auffüllen",
       detail: result.tank.warning || "Der nächste vollständige Pumpzyklus ist sonst blockiert.",
+    };
+  }
+  if (result.refill?.limited_by_refill_tank) {
+    return {
+      tone: "warn",
+      title: "Nachfüllung begrenzt",
+      detail: `${formatLiters(result.refill.planned_transfer_ml)} von ${formatLiters(result.refill.requested_ml)} können aus dem Vorratstank nachlaufen.`,
+    };
+  }
+  if (result.refill?.run_now) {
+    return {
+      tone: "go",
+      title: "Nachfüllpumpe bereit",
+      detail: `Home Assistant kann ${formatLiters(result.refill.planned_transfer_ml)} in ${formatDuration(result.refill.duration_seconds)} nachfüllen.`,
     };
   }
   if (urgentActions.length) {
@@ -798,7 +841,7 @@ function renderCalculationFlow(result, urgentActions, changeActions) {
         <div>
           <strong>Heutige Entscheidung</strong>
           <p>${result.remaining_cycles_today} von ${result.recommended_cycles_today} Zyklen offen</p>
-          <small>${formatLiters(result.pump.delivered_if_remaining_ml)} noch geplant · Tank danach ${result.tank.after_recommended_percent} %</small>
+          <small>${formatLiters(result.pump.delivered_if_remaining_ml)} noch geplant · Nachfüllung ${formatLiters(result.refill?.planned_transfer_ml || 0)} um ${result.refill?.scheduled_time || "03:00"}</small>
         </div>
       </article>
     </div>
@@ -853,10 +896,13 @@ function formatCompass(degrees) {
 function renderDashboardCards(result, urgentActions, changeActions) {
   const weather = result.weather || result.inputs;
   const tankPercent = result.tank.percent ?? Math.round((result.tank.current_ml / Math.max(result.tank.capacity_ml, 1)) * 100);
+  const refill = result.refill || {};
+  const refillTank = refill.refill_tank || {};
+  const depletion = result.depletion || {};
   const remainingLiters = (result.pump.delivered_if_remaining_ml / 1000).toFixed(1);
   const perCycleLiters = (result.pump.delivered_per_cycle_ml / 1000).toFixed(2);
   const wateringAmount = state.settings?.watering_amount_percent ?? 100;
-  const calibrationText = `${formatPercent(wateringAmount)}% der Standardmenge`;
+  const calibrationText = `${formatPercent(wateringAmount)}% Versorgung`;
   const automation = result.automation || {};
   return `
     <article class="metric-card primary-metric ${result.should_run ? "go" : "stop"}">
@@ -878,9 +924,25 @@ function renderDashboardCards(result, urgentActions, changeActions) {
     <article class="metric-card tank-metric ${result.tank.empty_soon ? "urgent" : result.tank.low ? "warn" : ""}">
       ${icon("tank")}
       <div>
-        <p class="metric-label">Tank</p>
+        <p class="metric-label">Haupttank</p>
         <strong>${tankPercent}%</strong>
         <p class="metric-detail">${result.tank.warning || `${Math.round(result.tank.after_recommended_ml / 1000)} l nach Plan`}</p>
+      </div>
+    </article>
+    <article class="metric-card refill-metric ${refillTank.empty ? "urgent" : refill.limited_by_refill_tank || refillTank.low ? "warn" : "ok"}">
+      ${icon("tank")}
+      <div>
+        <p class="metric-label">Vorratstank</p>
+        <strong>${refillTank.percent ?? 0}%</strong>
+        <p class="metric-detail">${refill.summary || `${formatLiters(refill.planned_transfer_ml || 0)} um ${refill.scheduled_time || "03:00"}`}</p>
+      </div>
+    </article>
+    <article class="metric-card depletion-metric ${depletion.all_empty_at ? "warn" : "ok"}">
+      ${icon("clock")}
+      <div>
+        <p class="metric-label">Alles leer</p>
+        <strong>${depletion.all_empty_at ? formatDateTime(depletion.all_empty_at) : "--"}</strong>
+        <p class="metric-detail">${depletion.total_available_ml !== undefined ? `${formatLiters(depletion.total_available_ml)} Gesamtvorrat` : "Noch keine Reichweite"}</p>
       </div>
     </article>
     <article class="metric-card weather-metric">
@@ -936,8 +998,8 @@ function updateWateringAmountPreview() {
   const projectedDailyMl = standardDailyMl * amount / 100;
   const relativeText = wateringAmountTitle(amount);
   const adjustmentText = amount === 100
-    ? "Der neue Standard ist bereits höher als zuvor."
-    : `${formatPercent(Math.abs(amount - 100))} % ${amount > 100 ? "mehr" : "weniger"} als neuer Standard.`;
+    ? "Standardversorgung für deine Anlage."
+    : `${formatPercent(Math.abs(amount - 100))} % ${amount > 100 ? "mehr" : "weniger"} als Standard.`;
   const litersText = latestEvaluation
     ? `Bei aktuell geladenem Wetter sind das ungefähr ${formatLiters(projectedDailyMl)} statt ${formatLiters(standardDailyMl)} Pflanzenbedarf pro Tag.`
     : "Nach dem Laden der Wetterdaten siehst du hier eine Vorschau in Litern.";
@@ -947,11 +1009,8 @@ function updateWateringAmountPreview() {
     <strong>${relativeText}</strong>
     <span>${adjustmentText}</span>
     <span>${litersText}</span>
-    <span>Pumpenläufe erfolgen in ganzen Zyklen. Die genaue Anzahl wird nach dem Speichern neu berechnet.</span>
+    <span>Der Faktor verändert den berechneten Tagesbedarf. Die App macht daraus ganze Pumpzyklen.</span>
   `;
-  document.querySelectorAll("[data-watering-preset]").forEach((button) => {
-    button.classList.toggle("active", Number(button.dataset.wateringPreset) === amount);
-  });
 }
 
 function wateringAmountTitle(amount) {
@@ -965,6 +1024,26 @@ function wateringAmountTitle(amount) {
 
 function formatLiters(ml) {
   return `${Number(ml / 1000).toLocaleString("de-DE", { minimumFractionDigits: 1, maximumFractionDigits: 1 })} l`;
+}
+
+function formatDuration(seconds) {
+  const totalSeconds = Math.max(0, Number(seconds || 0));
+  const minutes = Math.floor(totalSeconds / 60);
+  const rest = totalSeconds % 60;
+  if (minutes && rest) return `${minutes} min ${rest} s`;
+  if (minutes) return `${minutes} min`;
+  return `${rest} s`;
+}
+
+function formatDateTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value || "--";
+  return new Intl.DateTimeFormat("de-DE", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
 }
 
 function icon(name) {
@@ -1250,13 +1329,13 @@ $("#balconyForm").addEventListener("submit", async (event) => {
     "latitude",
     "longitude",
     "tank_capacity_liters",
-    "tank_current_liters",
+    "refill_pump_ml_per_min",
     "watering_amount_percent",
   ]);
   payload.tank_capacity_ml = Math.round(payload.tank_capacity_liters * 1000);
-  payload.tank_current_ml = Math.round(payload.tank_current_liters * 1000);
+  payload.refill_tank_capacity_ml = 30000;
+  payload.refill_automation_enabled = event.currentTarget.elements.refill_automation_enabled.checked;
   delete payload.tank_capacity_liters;
-  delete payload.tank_current_liters;
   payload.timezone_name = payload.timezone_name || Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/Berlin";
   payload.outlets = state.outlets.map((outlet) => ({
     id: outlet.id,
@@ -1284,13 +1363,6 @@ $("#balconyForm").addEventListener("submit", async (event) => {
 
 $("#balconyForm").elements.watering_amount_percent.addEventListener("input", updateWateringAmountPreview);
 
-document.querySelectorAll("[data-watering-preset]").forEach((button) => {
-  button.addEventListener("click", () => {
-    $("#balconyForm").elements.watering_amount_percent.value = button.dataset.wateringPreset;
-    updateWateringAmountPreview();
-  });
-});
-
 $("#locateButton").addEventListener("click", () => {
   if (!navigator.geolocation) return;
   navigator.geolocation.getCurrentPosition((position) => {
@@ -1300,6 +1372,24 @@ $("#locateButton").addEventListener("click", () => {
     form.elements.timezone_name.value = Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/Berlin";
   });
 });
+
+function bindTankFillButtons() {
+  document.querySelectorAll("[data-fill-tank]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const tank = button.dataset.fillTank;
+      button.disabled = true;
+      try {
+        state = await api(`/api/tanks/${tank}/fill`, { method: "POST", body: JSON.stringify({}) });
+        renderState();
+        await evaluateCurrent();
+      } catch (error) {
+        $("#result").innerHTML = `<strong>Tankstand konnte nicht aktualisiert werden</strong><span>${error.message}</span>`;
+      } finally {
+        button.disabled = false;
+      }
+    });
+  });
+}
 
 $("#refreshLogButton").addEventListener("click", async () => {
   await loadWateringEvents();

@@ -149,16 +149,20 @@ Die fertige Vorlage liegt unter [`home-assistant/automations.yaml`](../home-assi
 Die Vorlagen trennen die Aufgaben:
 
 - `script.bewaesserung_pumpzyklus` in `configuration.yaml` schaltet die Meross-Steckdose `switch.smart_plug_mini` für 120 Sekunden ein, schaltet sie wieder aus und verbucht den Lauf.
+- `script.bewaesserung_nachfuellen` schaltet die zweite Meross-Steckdose `switch.smart_plug_mini_refill` fuer die vom Planner berechnete Dauer ein und verbucht danach den Nachfuelllauf.
 - `Bewaesserung - Tagesfenster` prüft alle 15 Minuten den Sensor und startet das Skript nur bei `run_now`.
 - `Bewaesserung - Manueller Sofortlauf` nimmt über einen Webhook mit zufälliger ID einen sofortigen manuellen Lauf entgegen und startet dasselbe Skript.
+- `Bewaesserung - Haupttank nachfuellen` prüft um `03:00` und `06:00` Uhr den Verbrauch des Vortags und startet die zweite Pumpe nur, wenn der 30-l-Vorratstank rechnerisch genug Wasser für einen sinnvollen Lauf enthält und die Nachfüllautomatik im Planner aktiv ist.
 
-Falls die Steckdose in Home Assistant eine andere Entity-ID erhalten hat, `switch.smart_plug_mini` in der Vorlage `configuration.yaml` ersetzen.
+Falls die Steckdosen in Home Assistant andere Entity-IDs erhalten haben, `switch.smart_plug_mini` und `switch.smart_plug_mini_refill` in der Vorlage `configuration.yaml` ersetzen.
 
 Die Sensoraktualisierung muss vor der Bedingung stehen. Der zuvor gespeicherte Sensorzustand stammt sonst möglicherweise noch aus der Zeit zwischen zwei Fenstern und ist dort absichtlich `False`.
 
 Der Planer verteilt die empfohlenen Pumpenläufe gleichmäßig zwischen `07:00` und `19:00`. Bei vier Zyklen sind die geplanten Zeitpunkte zum Beispiel `07:00`, `11:00`, `15:00`, `19:00`. Manuell verbuchte Läufe zählen dabei mit. Ein verpasster Zeitpunkt wird bei einer späteren Prüfung nachgeholt.
 
-Der Planer verhindert Überbewässerung, weil nach jedem Lauf `remaining_cycles_today` sinkt. Zusätzlich bleibt `run_now` nach einem verbuchten Lauf 30 Minuten lang gesperrt. Das Skript und beide Home-Assistant-Automationen laufen im Modus `single`, damit ein zweiter Trigger während eines laufenden Pumpenzyklus nicht direkt einen weiteren Lauf startet. Home Assistant muss dadurch keine eigene Verteilungslogik kennen.
+Der Planer verhindert Überbewässerung, weil nach jedem Lauf `remaining_cycles_today` sinkt. Zusätzlich bleibt `run_now` nach einem verbuchten Lauf 30 Minuten lang gesperrt. Die Skripte und Automationen laufen im Modus `single`, damit ein zweiter Trigger während eines laufenden Pumpenzyklus nicht direkt einen weiteren Lauf startet. Home Assistant muss dadurch keine eigene Verteilungslogik kennen.
+
+Der Haupttank wird nachts rechnerisch aus dem separaten 30-l-Vorratstank nachgefüllt. Die Laufzeit ergibt sich aus dem in den Planner-Einstellungen hinterlegten Durchsatz der Nachfüllpumpe in ml/min. Wenn der Vorratstank leer ist oder die Nachfüllautomatik im Webinterface deaktiviert wurde, gibt der Planner keinen Nachfülllauf frei.
 
 Im Dashboard des Planers wird zusätzlich angezeigt:
 

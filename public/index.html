@@ -44,23 +44,13 @@
     <main>
       <div class="view dashboard-view active" data-view="dashboard">
         <section class="panel decision-panel wide-panel">
-          <div class="dashboard-command dashboard-overview">
-            <div class="today-panel">
-              <div class="section-heading">
-                <div>
-                  <p class="eyebrow">Heute</p>
-                  <h2>Tagesentscheidung</h2>
-                </div>
-                <span class="status-pill" id="runStatus">Heute</span>
-              </div>
-              <div class="result" id="result">
-                <strong>Wird geladen</strong>
-                <span>Wetter und Tageszyklen werden zusammengefasst.</span>
-              </div>
-              <div class="dashboard-context" id="dashboardContext"></div>
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Daten</p>
+              <h2>Wasser und Reichweite</h2>
             </div>
+            <span class="status-pill" id="runStatus">Heute</span>
           </div>
-
           <div class="dashboard-cards" id="dashboardCards">
             <article class="metric-card primary-metric">
               <span class="metric-icon">...</span>
@@ -69,6 +59,23 @@
                 <strong>--</strong>
               </div>
             </article>
+          </div>
+
+          <div class="dashboard-command dashboard-overview">
+            <div class="today-panel">
+              <div class="section-heading">
+                <div>
+                  <p class="eyebrow">Aktionen</p>
+                  <h2>Nächste Schritte</h2>
+                </div>
+              </div>
+              <div class="result" id="result">
+                <strong>Wird geladen</strong>
+                <span>Wetter und Tageszyklen werden zusammengefasst.</span>
+              </div>
+              <div class="dashboard-context" id="dashboardContext"></div>
+              <div class="tank-quick-actions" id="tankQuickActions"></div>
+            </div>
           </div>
         </section>
 
@@ -154,29 +161,15 @@
               <div class="settings-group-heading">
                 <div>
                   <p class="eyebrow">Feinabstimmung</p>
-                  <h3>Wie viel soll gegossen werden?</h3>
+                  <h3>Versorgungsfaktor</h3>
                 </div>
                 <strong class="setting-value" id="wateringAmountLabel">100 %</strong>
               </div>
-              <p class="field-help">Mit <code>100 %</code> nutzt der Planer jetzt einen höheren Standardbedarf. Wenn die Erde trocken bleibt, kannst du kräftiger nachsteuern; die Vorschau zeigt sofort, was das für den Tagesbedarf bedeutet.</p>
-              <label class="range-field">
-                Gießmenge im Vergleich zum neuen Standard
-                <input type="range" name="watering_amount_percent" min="40" max="500" step="10" value="100">
+              <p class="field-help">Mit <code>100 %</code> nutzt der Planer jetzt die höhere Standardversorgung. Ändere nur diesen einen Wert, wenn die Anlage insgesamt sparsamer oder kräftiger laufen soll.</p>
+              <label class="factor-field">
+                Faktor für den Tagesbedarf
+                <input type="number" name="watering_amount_percent" min="40" max="500" step="5" value="100">
               </label>
-              <div class="range-scale" aria-hidden="true">
-                <span>sparsam</span>
-                <span>Standard</span>
-                <span>trocken</span>
-                <span>sehr trocken</span>
-              </div>
-              <div class="preset-row" aria-label="Schnellauswahl Gießmenge">
-                <button class="preset-button" data-watering-preset="80" type="button"><span>Sparsam</span><strong>80 %</strong></button>
-                <button class="preset-button" data-watering-preset="100" type="button"><span>Standard</span><strong>100 %</strong></button>
-                <button class="preset-button" data-watering-preset="150" type="button"><span>Etwas trocken</span><strong>150 %</strong></button>
-                <button class="preset-button" data-watering-preset="200" type="button"><span>Trocken</span><strong>200 %</strong></button>
-                <button class="preset-button" data-watering-preset="260" type="button"><span>Sehr trocken</span><strong>260 %</strong></button>
-                <button class="preset-button" data-watering-preset="350" type="button"><span>Akut</span><strong>350 %</strong></button>
-              </div>
               <div class="watering-preview" id="wateringAmountPreview"></div>
             </fieldset>
 
@@ -225,18 +218,22 @@
               <div class="settings-group-heading">
                 <div>
                   <p class="eyebrow">Wasservorrat</p>
-                  <h3>Tank</h3>
+                  <h3>Tanks</h3>
                 </div>
               </div>
-              <p class="field-help">Der Tankstand verhindert Pumpenläufe, wenn nicht mehr genug Wasser für einen vollständigen Zyklus vorhanden ist.</p>
+              <p class="field-help">Der Haupttank versorgt die Bewässerung. Der 30-l-Vorratstank füllt ihn nachts über die zweite Pumpe nach.</p>
               <div class="settings-grid">
                 <label>
-                  Tankgröße in Litern
+                  Haupttankgröße in Litern
                   <input type="number" name="tank_capacity_liters" min="0" step="0.1">
                 </label>
                 <label>
-                  Aktueller Tankstand in Litern
-                  <input type="number" name="tank_current_liters" min="0" step="0.1">
+                  Nachfüllpumpe in ml pro Minute
+                  <input type="number" name="refill_pump_ml_per_min" min="0" step="1">
+                </label>
+                <label class="check-label">
+                  <input type="checkbox" name="refill_automation_enabled" checked>
+                  Automatisch aus Vorratstank nachfüllen
                 </label>
               </div>
             </fieldset>

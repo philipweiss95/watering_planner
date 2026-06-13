@@ -646,6 +646,36 @@ button {
   background: #f4dcdc;
 }
 
+.refill-metric {
+  border-color: #c9dce8;
+  background: linear-gradient(135deg, #eef7fb, #ffffff);
+}
+
+.refill-metric .metric-icon {
+  color: var(--cyan);
+  background: #dff0f6;
+}
+
+.refill-metric.warn {
+  border-color: #e4c5a6;
+  background: linear-gradient(135deg, #fff3e8, #ffffff);
+}
+
+.refill-metric.warn .metric-icon {
+  color: var(--warn);
+  background: #f5e2ce;
+}
+
+.refill-metric.urgent {
+  border-color: #e7aaaa;
+  background: linear-gradient(135deg, #fff0f0, #ffffff);
+}
+
+.refill-metric.urgent .metric-icon {
+  color: var(--bad);
+  background: #f4dcdc;
+}
+
 .weather-metric {
   border-color: #e8cf99;
   background: linear-gradient(135deg, #fff5d9, #ffffff);
@@ -694,6 +724,26 @@ button {
 .automation-metric.stop .metric-icon {
   color: var(--bad);
   background: #f4dcdc;
+}
+
+.depletion-metric {
+  border-color: #d8ddc8;
+  background: linear-gradient(135deg, #f6f9ed, #ffffff);
+}
+
+.depletion-metric .metric-icon {
+  color: var(--accent-strong);
+  background: #e7efcf;
+}
+
+.depletion-metric.warn {
+  border-color: #e4c5a6;
+  background: linear-gradient(135deg, #fff3e8, #ffffff);
+}
+
+.depletion-metric.warn .metric-icon {
+  color: var(--warn);
+  background: #f5e2ce;
 }
 
 .model-metric {
@@ -1012,6 +1062,16 @@ button {
   color: var(--ink);
 }
 
+.factor-field {
+  margin-top: 14px;
+  max-width: 260px;
+}
+
+.factor-field input {
+  font-size: 1.1rem;
+  font-weight: 800;
+}
+
 .range-scale {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1107,6 +1167,34 @@ button {
 .advanced-settings .field-help,
 .advanced-settings .small-button {
   margin-top: 10px;
+}
+
+.tank-fill-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.tank-action-card {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: #ffffff;
+}
+
+.tank-action-card strong {
+  display: block;
+  margin-top: 2px;
+  color: var(--ink);
+  font-size: 0.98rem;
+}
+
+.tank-action-card .tank-fill-actions {
+  margin-top: 0;
 }
 
 .settings-save-bar {

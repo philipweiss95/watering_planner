@@ -131,6 +131,9 @@ DEFAULT_BALCONY = {
     "wall_height_m": 1.05,
     "tank_capacity_ml": 10000,
     "tank_current_ml": 8000,
+    "refill_tank_capacity_ml": 30000,
+    "refill_tank_current_ml": 30000,
+    "refill_pump_ml_per_min": 1000,
     "outlets": [
         {"name": "S", "ml_per_run": 15},
         {"name": "M", "ml_per_run": 30},
@@ -154,9 +157,11 @@ CONNECTION_DESIGN = {
 }
 
 # The raw ET0/canopy estimate models open-surface evapotranspiration. The real
-# terrace drip setup needs a much smaller calibrated fraction per day.
-WATER_MODEL_CALIBRATION = 0.08
-LEGACY_WATER_MODEL_CALIBRATIONS = (0.04, 0.06)
+# terrace drip setup needs a calibrated fraction per day. The current default
+# reflects the formerly common 250-260% UI setting, so 100% is a useful start.
+WATER_MODEL_CALIBRATION = 0.20
+PREVIOUS_WATER_MODEL_CALIBRATION = 0.08
+LEGACY_WATER_MODEL_CALIBRATIONS = (0.04, 0.06, PREVIOUS_WATER_MODEL_CALIBRATION)
 LEGACY_WATER_MODEL_CALIBRATION = 0.06
 MIN_WATER_MODEL_CALIBRATION_PERCENT = 0.5
 MAX_WATER_MODEL_CALIBRATION_PERCENT = 40.0
@@ -176,6 +181,8 @@ AUTOMATION_DAY_START = "07:00"
 AUTOMATION_DAY_END = "19:00"
 AUTOMATION_TRIGGER_TOLERANCE_MINUTES = 20
 AUTOMATION_RUN_COOLDOWN_MINUTES = 30
+REFILL_RUN_TIMES = ("03:00", "06:00")
+REFILL_TRIGGER_TOLERANCE_MINUTES = 60
 
 
 @contextmanager
@@ -244,6 +251,9 @@ def init_db() -> None:
                 wall_height_m REAL NOT NULL,
                 tank_capacity_ml INTEGER NOT NULL,
                 tank_current_ml INTEGER NOT NULL,
+                refill_tank_capacity_ml INTEGER NOT NULL DEFAULT 30000,
+                refill_tank_current_ml INTEGER NOT NULL DEFAULT 30000,
+                refill_pump_ml_per_min INTEGER NOT NULL DEFAULT 1000,
                 updated_at TEXT NOT NULL
             );
 
@@ -282,6 +292,16 @@ def init_db() -> None:
                 source TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS refill_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ran_at TEXT NOT NULL,
+                target_date TEXT NOT NULL,
+                requested_ml INTEGER NOT NULL,
+                transferred_ml INTEGER NOT NULL,
+                duration_seconds INTEGER NOT NULL,
+                source TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS irrigation_hoses (
                 number TEXT PRIMARY KEY,
                 outlet_id INTEGER NOT NULL REFERENCES pump_outlets(id),
@@ -298,6 +318,9 @@ def init_db() -> None:
         ensure_column(conn, "balcony_settings", "longitude", "REAL NOT NULL DEFAULT 13.405")
         ensure_column(conn, "balcony_settings", "timezone_name", "TEXT NOT NULL DEFAULT 'Europe/Berlin'")
         ensure_column(conn, "balcony_settings", "orientation_deg", "REAL NOT NULL DEFAULT 180")
+        ensure_column(conn, "balcony_settings", "refill_tank_capacity_ml", "INTEGER NOT NULL DEFAULT 30000")
+        ensure_column(conn, "balcony_settings", "refill_tank_current_ml", "INTEGER NOT NULL DEFAULT 30000")
+        ensure_column(conn, "balcony_settings", "refill_pump_ml_per_min", "INTEGER NOT NULL DEFAULT 1000")
         ensure_column(conn, "plants", "pos_x", "REAL NOT NULL DEFAULT 0.5")
         ensure_column(conn, "plants", "pos_y", "REAL NOT NULL DEFAULT 0.5")
         ensure_column(conn, "plants", "hose_numbers", "TEXT NOT NULL DEFAULT ''")
@@ -309,14 +332,16 @@ def init_db() -> None:
 
         upsert_plant_catalog(conn)
         upsert_plant_water_profiles(conn)
+        migrate_watering_amount_standard(conn)
 
         if conn.execute("SELECT COUNT(*) FROM balcony_settings").fetchone()[0] == 0:
             conn.execute(
                 """
                 INSERT INTO balcony_settings
                     (id, orientation, orientation_deg, width_m, depth_m, location, latitude, longitude, timezone_name, wall_height_m,
-                     tank_capacity_ml, tank_current_ml, updated_at)
-                VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    tank_capacity_ml, tank_current_ml, refill_tank_capacity_ml, refill_tank_current_ml,
+                     refill_pump_ml_per_min, updated_at)
+                VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     DEFAULT_BALCONY["orientation"],
@@ -330,6 +355,9 @@ def init_db() -> None:
                     DEFAULT_BALCONY["wall_height_m"],
                     DEFAULT_BALCONY["tank_capacity_ml"],
                     DEFAULT_BALCONY["tank_current_ml"],
+                    DEFAULT_BALCONY["refill_tank_capacity_ml"],
+                    DEFAULT_BALCONY["refill_tank_current_ml"],
+                    DEFAULT_BALCONY["refill_pump_ml_per_min"],
                     now_iso(),
                 ),
             )
@@ -377,6 +405,42 @@ def delete_setting(key: str) -> None:
             conn.execute("DELETE FROM app_settings WHERE key = ?", (key,))
         except sqlite3.OperationalError:
             pass
+
+
+def migrate_watering_amount_standard(conn: sqlite3.Connection) -> None:
+    row = conn.execute("SELECT value FROM app_settings WHERE key = 'watering_amount_percent'").fetchone()
+    basis = conn.execute("SELECT value FROM app_settings WHERE key = 'watering_amount_calibration_basis'").fetchone()
+    if row and not basis:
+        try:
+            amount_percent = float(row["value"])
+        except ValueError:
+            amount_percent = 100
+        migrated_percent = clamp(amount_percent * PREVIOUS_WATER_MODEL_CALIBRATION / WATER_MODEL_CALIBRATION, MIN_WATERING_AMOUNT_PERCENT, MAX_WATERING_AMOUNT_PERCENT)
+        conn.execute(
+            """
+            INSERT INTO app_settings (key, value)
+            VALUES ('watering_amount_percent', ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """,
+            (str(migrated_percent),),
+        )
+    conn.execute(
+        """
+        INSERT INTO app_settings (key, value)
+        VALUES ('watering_amount_calibration_basis', ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        """,
+        (str(WATER_MODEL_CALIBRATION),),
+    )
+
+
+def refill_automation_enabled() -> bool:
+    return get_setting("refill_automation_enabled", "true").lower() not in {"0", "false", "off", "no"}
+
+
+def save_refill_automation_enabled(value: object) -> None:
+    enabled = str(value).lower() in {"1", "true", "on", "yes"}
+    set_setting("refill_automation_enabled", "true" if enabled else "false")
 
 
 def water_model_calibration() -> float:
@@ -703,6 +767,7 @@ def get_state() -> dict:
         "plants": plants,
         "settings": {
             "watering_amount_percent": round(watering_amount_percent(), 1),
+            "refill_automation_enabled": refill_automation_enabled(),
         },
         "cycles_completed_today": completed_cycles_today(str(balcony.get("timezone_name", "Europe/Berlin"))),
     }
@@ -727,16 +792,45 @@ def watering_events(limit: int = 12) -> list[dict]:
 
 def completed_cycles_today(timezone_name: str = "Europe/Berlin") -> int:
     now = local_now(timezone_name)
-    start_local = datetime.combine(now.date(), time(0, 0), tzinfo=now.tzinfo)
-    end_local = start_local + timedelta(days=1)
-    start = start_local.astimezone(timezone.utc)
-    end = end_local.astimezone(timezone.utc)
+    start, end = local_day_utc_bounds(now.date(), now.tzinfo)
     with connect() as conn:
         row = conn.execute(
             "SELECT COUNT(*) AS count FROM watering_events WHERE ran_at >= ? AND ran_at < ?",
             (start.isoformat(), end.isoformat()),
         ).fetchone()
         return int(row["count"])
+
+
+def local_day_utc_bounds(day: date, tzinfo) -> tuple[datetime, datetime]:
+    start_local = datetime.combine(day, time(0, 0), tzinfo=tzinfo)
+    end_local = start_local + timedelta(days=1)
+    return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc)
+
+
+def delivered_ml_for_local_date(day: date, timezone_name: str = "Europe/Berlin") -> int:
+    tzinfo = local_now(timezone_name).tzinfo
+    start, end = local_day_utc_bounds(day, tzinfo)
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(delivered_ml), 0) AS delivered_ml FROM watering_events WHERE ran_at >= ? AND ran_at < ?",
+            (start.isoformat(), end.isoformat()),
+        ).fetchone()
+        return int(row["delivered_ml"])
+
+
+def refill_event_for_target_date(target_date: date) -> dict | None:
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT id, ran_at, target_date, requested_ml, transferred_ml, duration_seconds, source
+            FROM refill_events
+            WHERE target_date = ?
+            ORDER BY ran_at DESC, id DESC
+            LIMIT 1
+            """,
+            (target_date.isoformat(),),
+        ).fetchone()
+        return row_to_dict(row) if row else None
 
 
 def latest_watering_run_at() -> str:
@@ -906,9 +1000,10 @@ def plant_water_need_ml(
     temperature_c: float,
     wind_factor: float,
     calibration_factor: float | None = None,
+    target_date: date | None = None,
 ) -> dict:
     canopy_area = plant_canopy_area_m2(plant)
-    season = seasonal_water_factor(plant)
+    season = seasonal_water_factor(plant, target_date)
     sun_ratio = clamp(plant_sun["sun_hours"] / max(terrace_sun["theoretical_sun_hours"], 1), 0.15, 1.0)
     exposure_multiplier = clamp(0.55 + sun_ratio * 0.75, 0.55, 1.32) * plant_sun["wall_shade_factor"]
     growth_temperature = 0.55 if temperature_c < 12 else 0.82 if temperature_c < 16 else 1.0
@@ -1066,8 +1161,8 @@ def fetch_weather(balcony: dict) -> dict:
         "longitude": longitude,
         "timezone": timezone_name,
         "current": "temperature_2m,precipitation,rain,wind_speed_10m",
-        "daily": "precipitation_sum,temperature_2m_max,sunshine_duration,et0_fao_evapotranspiration",
-        "forecast_days": 1,
+        "daily": "precipitation_sum,temperature_2m_max,sunshine_duration,et0_fao_evapotranspiration,wind_speed_10m_max",
+        "forecast_days": 7,
     }
     url = "https://api.open-meteo.com/v1/forecast?" + urlencode(params)
     tls_verified = True
@@ -1091,6 +1186,7 @@ def fetch_weather(balcony: dict) -> dict:
     current = payload.get("current", {})
     daily = payload.get("daily", {})
     sunshine_seconds = first_value(daily, "sunshine_duration", 0)
+    forecast = daily_forecast_items(daily, current)
     return {
         "source": "open-meteo",
         "latitude": latitude,
@@ -1102,9 +1198,38 @@ def fetch_weather(balcony: dict) -> dict:
         "wind_kmh": float(current.get("wind_speed_10m", 0)),
         "sunshine_hours": round(float(sunshine_seconds) / 3600, 1),
         "et0_mm": float(first_value(daily, "et0_fao_evapotranspiration", 0)),
+        "forecast": forecast,
         "tls_verified": tls_verified,
         "fetched_at": now_iso(),
     }
+
+
+def daily_forecast_items(daily: dict, current: dict | None = None) -> list[dict]:
+    current = current or {}
+    dates = daily.get("time", [])
+    if not isinstance(dates, list):
+        return []
+    items = []
+    for index, day_value in enumerate(dates):
+        sunshine_seconds = indexed_value(daily, "sunshine_duration", index, 0)
+        items.append(
+            {
+                "date": str(day_value),
+                "temperature_c": float(indexed_value(daily, "temperature_2m_max", index, current.get("temperature_2m", 20))),
+                "rain_mm": float(indexed_value(daily, "precipitation_sum", index, current.get("rain", current.get("precipitation", 0)))),
+                "wind_kmh": float(indexed_value(daily, "wind_speed_10m_max", index, current.get("wind_speed_10m", 0))),
+                "sunshine_hours": round(float(sunshine_seconds) / 3600, 1),
+                "et0_mm": float(indexed_value(daily, "et0_fao_evapotranspiration", index, 0)),
+            }
+        )
+    return items
+
+
+def indexed_value(payload: dict, key: str, index: int, default: float) -> float:
+    value = payload.get(key, default)
+    if isinstance(value, list):
+        return value[index] if index < len(value) else default
+    return value
 
 
 def first_value(payload: dict, key: str, default: float) -> float:
@@ -1175,6 +1300,7 @@ def evaluate_weather(weather: dict, slot: str = "morning") -> dict:
         et0_mm=float(weather.get("et0_mm", 0) or 0),
     )
     result["weather"] = weather
+    result["depletion"] = depletion_forecast(result, weather)
     return result
 
 
@@ -1520,10 +1646,12 @@ def calculate_plant_results(
     sunshine_hours: float | None,
     slot: str = "morning",
     et0_mm: float = 0,
+    target_date: date | None = None,
 ) -> dict:
     slot_multiplier = {"morning": 1.0, "midday": 0.72, "evening": 0.92}.get(slot, 1.0)
     orientation_deg = orientation_degrees(balcony)
-    terrace_sun = estimate_sun_hours(balcony, walls)
+    target_date = target_date or local_now(str(balcony.get("timezone_name", "Europe/Berlin"))).date()
+    terrace_sun = estimate_sun_hours(balcony, walls, target_date=target_date)
     reference_et0_mm = et0_mm if et0_mm > 0 else estimate_reference_et0_mm(temperature_c, sunshine_hours, wind_kmh)
     wind_factor = wind_exposure_factor(wind_kmh, walls)
     orientation_multiplier = orientation_exposure_factor(orientation_deg)
@@ -1536,6 +1664,7 @@ def calculate_plant_results(
         plant_sun = estimate_sun_hours(
             balcony,
             walls,
+            target_date=target_date,
             position=(float(plant["pos_x"]), float(plant["pos_y"])),
         )
         water_need = plant_water_need_ml(
@@ -1547,6 +1676,7 @@ def calculate_plant_results(
             temperature_c,
             wind_factor,
             calibration_factor,
+            target_date,
         )
         daily_need = water_need["daily_need_ml"]
         scheduled_need = daily_need * slot_multiplier
@@ -1940,6 +2070,245 @@ def automation_status(
     }
 
 
+def refill_window_datetimes(today: date, tzinfo) -> list[datetime]:
+    return [window_datetime(today, item, tzinfo) for item in REFILL_RUN_TIMES]
+
+
+def refill_status(balcony: dict) -> dict:
+    timezone_name = str(balcony.get("timezone_name", "Europe/Berlin"))
+    now = local_now(timezone_name)
+    target_date = now.date() - timedelta(days=1)
+    enabled = refill_automation_enabled()
+    requested_ml = delivered_ml_for_local_date(target_date, timezone_name)
+    main_capacity = max(int(balcony.get("tank_capacity_ml", 0)), 0)
+    main_current = max(int(balcony.get("tank_current_ml", 0)), 0)
+    refill_capacity = max(int(balcony.get("refill_tank_capacity_ml", 30000)), 1)
+    refill_current = max(int(balcony.get("refill_tank_current_ml", 0)), 0)
+    pump_ml_per_min = max(int(balcony.get("refill_pump_ml_per_min", 0)), 0)
+    main_missing_ml = max(0, main_capacity - main_current)
+    transferable_ml = min(requested_ml, main_missing_ml, refill_current)
+    duration_seconds = math.ceil(transferable_ml / pump_ml_per_min * 60) if pump_ml_per_min and transferable_ml else 0
+    refill_windows = refill_window_datetimes(now.date(), now.tzinfo)
+    already_done = refill_event_for_target_date(target_date)
+    active_window = next(
+        (
+            item
+            for item in refill_windows
+            if item <= now <= item + timedelta(minutes=REFILL_TRIGGER_TOLERANCE_MINUTES)
+        ),
+        None,
+    )
+    next_window = next((item for item in refill_windows if item > now), None)
+    if not next_window:
+        next_window = refill_window_datetimes(now.date() + timedelta(days=1), now.tzinfo)[0]
+    run_now = bool(enabled and active_window and not already_done and transferable_ml > 0 and pump_ml_per_min > 0)
+
+    if not enabled:
+        summary = "Automatisches Nachfüllen ist deaktiviert."
+    elif already_done:
+        summary = f"Nachfüllung für {target_date.strftime('%d.%m.')} ist erledigt."
+    elif requested_ml <= 0:
+        summary = "Gestern wurde kein Wasser verbraucht."
+    elif pump_ml_per_min <= 0:
+        summary = "Durchsatz der Nachfüllpumpe fehlt."
+    elif main_missing_ml <= 0:
+        summary = "Haupttank ist voll."
+    elif refill_current <= 0:
+        summary = "Vorratstank ist leer."
+    elif transferable_ml < requested_ml:
+        summary = f"Nachfüllung auf {format_liters_for_text(transferable_ml)} begrenzt."
+    elif now < next_window:
+        summary = f"Nächste Nachfüllung um {next_window.strftime('%H:%M')}."
+    elif run_now:
+        summary = "Nachfüllpumpe darf jetzt laufen."
+    else:
+        summary = "Nachfüllfenster ist für heute vorbei."
+
+    refill_percent = round(refill_current / refill_capacity * 100)
+    return {
+        "run_now": run_now,
+        "enabled": enabled,
+        "target_date": target_date.isoformat(),
+        "scheduled_time": (active_window or next_window).strftime("%H:%M"),
+        "scheduled_times": list(REFILL_RUN_TIMES),
+        "active_window": active_window.strftime("%H:%M") if active_window else "",
+        "next_window": next_window.strftime("%H:%M") if next_window else "",
+        "requested_ml": requested_ml,
+        "planned_transfer_ml": transferable_ml,
+        "duration_seconds": duration_seconds,
+        "pump_ml_per_min": pump_ml_per_min,
+        "main_missing_ml": main_missing_ml,
+        "blocked_by_empty_refill_tank": bool(refill_current <= 0),
+        "limited_by_refill_tank": bool(requested_ml > 0 and transferable_ml < min(requested_ml, main_missing_ml)),
+        "already_done": bool(already_done),
+        "last_event": already_done or {},
+        "refill_tank": {
+            "current_ml": refill_current,
+            "capacity_ml": refill_capacity,
+            "percent": refill_percent,
+            "low": refill_percent <= TANK_LOW_PERCENT,
+            "empty": refill_current <= 0,
+        },
+        "summary": summary,
+    }
+
+
+def format_liters_for_text(ml: int | float) -> str:
+    return f"{round(float(ml) / 1000, 1):g} l"
+
+
+def depletion_forecast(result: dict, weather: dict | None = None) -> dict:
+    state = get_state()
+    balcony = state["balcony"]
+    timezone_name = str(balcony.get("timezone_name", "Europe/Berlin"))
+    now = local_now(timezone_name)
+    delivered_per_cycle = int(result["pump"]["delivered_per_cycle_ml"])
+    main_ml = max(0, int(result["tank"]["current_ml"]))
+    refill = result.get("refill", {})
+    refill_tank = refill.get("refill_tank", {})
+    refill_ml = max(0, int(refill_tank.get("current_ml", balcony.get("refill_tank_current_ml", 0))))
+    total_ml = main_ml + refill_ml
+    forecast_days = normalized_forecast_days(weather or result.get("weather") or result.get("inputs", {}), now.date())
+    projected_days = projected_consumption_days(state, forecast_days, delivered_per_cycle)
+    cycle_events = projected_cycle_events(projected_days, result, now, timezone_name)
+    main_remaining = main_ml
+    total_remaining = total_ml
+    main_empty_at = ""
+    all_empty_at = ""
+    next_cycle_at = cycle_events[0]["at"].isoformat() if cycle_events else ""
+
+    if delivered_per_cycle <= 0:
+        summary = "Noch kein Wasserverbrauch pro Zyklus berechenbar."
+    else:
+        summary = "Reichweite anhand der Wetterprognose berechnet."
+        for event in cycle_events:
+            amount = int(event["delivered_ml"])
+            if not main_empty_at and main_remaining <= amount:
+                main_empty_at = event["at"].isoformat()
+            if not all_empty_at and total_remaining <= amount:
+                all_empty_at = event["at"].isoformat()
+                break
+            main_remaining = max(0, main_remaining - amount)
+            total_remaining = max(0, total_remaining - amount)
+        if delivered_per_cycle > 0 and not all_empty_at:
+            all_empty_at = estimate_depletion_after_forecast(projected_days, cycle_events, total_remaining, delivered_per_cycle, now, timezone_name)
+        if not main_empty_at and main_remaining <= 0:
+            main_empty_at = cycle_events[-1]["at"].isoformat() if cycle_events else ""
+
+    return {
+        "main_empty_at": main_empty_at,
+        "all_empty_at": all_empty_at,
+        "next_cycle_at": next_cycle_at,
+        "total_available_ml": total_ml,
+        "main_available_ml": main_ml,
+        "refill_available_ml": refill_ml,
+        "projected_days": projected_days,
+        "forecast_days": len(forecast_days),
+        "summary": summary,
+    }
+
+
+def normalized_forecast_days(weather: dict, today: date) -> list[dict]:
+    forecast = weather.get("forecast") if isinstance(weather, dict) else None
+    if isinstance(forecast, list) and forecast:
+        return [item for item in forecast if isinstance(item, dict)]
+    return [
+        {
+            "date": (today + timedelta(days=index)).isoformat(),
+            "temperature_c": forecast_number(weather, "temperature_c", 20),
+            "rain_mm": forecast_number(weather, "rain_mm", 0),
+            "wind_kmh": forecast_number(weather, "wind_kmh", 0),
+            "sunshine_hours": forecast_number(weather, "sunshine_hours", 6),
+            "et0_mm": forecast_number(weather, "et0_mm", 0),
+        }
+        for index in range(7)
+    ]
+
+
+def forecast_number(weather: dict, key: str, default: float) -> float:
+    if not isinstance(weather, dict):
+        return default
+    value = weather.get(key, default)
+    if value is None:
+        return default
+    return float(value)
+
+
+def projected_consumption_days(state: dict, forecast_days: list[dict], delivered_per_cycle: int) -> list[dict]:
+    balcony = state["balcony"]
+    walls = state["walls"]
+    plants = state["plants"]
+    outlets = state["outlets"]
+    projections = []
+    for weather in forecast_days:
+        try:
+            target_date = date.fromisoformat(str(weather.get("date")))
+        except ValueError:
+            target_date = local_now(str(balcony.get("timezone_name", "Europe/Berlin"))).date()
+        calculated = calculate_plant_results(
+            balcony,
+            walls,
+            plants,
+            temperature_c=float(weather.get("temperature_c", 20)),
+            rain_mm=float(weather.get("rain_mm", 0)),
+            wind_kmh=float(weather.get("wind_kmh", 0)),
+            sunshine_hours=float(weather.get("sunshine_hours", 0)),
+            et0_mm=float(weather.get("et0_mm", 0) or 0),
+            target_date=target_date,
+        )
+        routing_plan = apply_fixed_connection_to_weather(configured_connection_plan(plants), calculated["plants"], outlets)
+        cycles = int(routing_plan["cycles"])
+        projections.append(
+            {
+                "date": target_date.isoformat(),
+                "cycles": cycles,
+                "delivered_ml": cycles * delivered_per_cycle,
+                "delivered_per_cycle_ml": delivered_per_cycle,
+                "need_ml": round(calculated["total_need_ml"]),
+                "weather": {
+                    "temperature_c": float(weather.get("temperature_c", 20)),
+                    "rain_mm": float(weather.get("rain_mm", 0)),
+                },
+            }
+        )
+    return projections
+
+
+def projected_cycle_events(projected_days: list[dict], result: dict, now: datetime, timezone_name: str) -> list[dict]:
+    events = []
+    today = now.date()
+    completed_today = int(result.get("cycles_completed_today", 0))
+    for day in projected_days:
+        day_date = date.fromisoformat(day["date"])
+        cycles = int(day["cycles"])
+        windows = distributed_automation_windows(day_date, cycles, now.tzinfo)
+        for index, window in enumerate(windows):
+            if day_date == today and (window <= now or index < completed_today):
+                continue
+            events.append({"at": window, "delivered_ml": int(day["delivered_per_cycle_ml"]), "date": day["date"]})
+    return sorted(events, key=lambda item: item["at"])
+
+
+def estimate_depletion_after_forecast(
+    projected_days: list[dict],
+    cycle_events: list[dict],
+    remaining_ml: int,
+    delivered_per_cycle: int,
+    now: datetime,
+    timezone_name: str,
+) -> str:
+    daily_totals = [int(day["delivered_ml"]) for day in projected_days if int(day.get("delivered_ml", 0)) > 0]
+    if not daily_totals:
+        return ""
+    average_daily_ml = max(1, round(sum(daily_totals) / len(daily_totals)))
+    days_after_forecast = math.ceil(max(0, remaining_ml) / average_daily_ml)
+    last_date = date.fromisoformat(projected_days[-1]["date"]) if projected_days else now.date()
+    estimated_date = last_date + timedelta(days=max(1, days_after_forecast))
+    average_cycles = max(1, round(average_daily_ml / max(delivered_per_cycle, 1)))
+    windows = distributed_automation_windows(estimated_date, average_cycles, now.tzinfo)
+    return (windows[-1] if windows else datetime.combine(estimated_date, parse_hhmm(AUTOMATION_DAY_END), tzinfo=now.tzinfo)).isoformat()
+
+
 def home_assistant_webhook_url() -> str:
     value = os.environ.get("HOME_ASSISTANT_WEBHOOK_URL", "").strip()
     if not value or "HOME-ASSISTANT-IP" in value:
@@ -2097,6 +2466,7 @@ def evaluate(
         recommended_cycles,
         cycles_completed,
     )
+    refill = refill_status(balcony)
 
     result = {
         "should_run": should_run,
@@ -2131,6 +2501,7 @@ def evaluate(
                 else ""
             ),
         },
+        "refill": refill,
         "routing": routing_plan["by_outlet"],
         "routing_plan": routing_plan,
         "connection_plan": connection_plan,
@@ -2151,6 +2522,7 @@ def evaluate(
         "calculated_at": now_iso(),
     }
     result["manual_run"] = manual_run_status(result)
+    result["depletion"] = depletion_forecast(result, result["inputs"])
     return result
 
 
@@ -2268,6 +2640,26 @@ class AppHandler(SimpleHTTPRequestHandler):
                     HTTPStatus.ACCEPTED,
                 )
                 return
+            if parsed.path == "/api/refill/mark-run":
+                refill = mark_refill_run()
+                send_json(
+                    self,
+                    {
+                        "accepted": True,
+                        "message": "Nachfülllauf wurde verbucht.",
+                        "refill": refill,
+                        **get_state(),
+                    },
+                )
+                return
+            if parsed.path == "/api/tanks/main/fill":
+                fill_tank("main")
+                send_json(self, get_state())
+                return
+            if parsed.path == "/api/tanks/refill/fill":
+                fill_tank("refill")
+                send_json(self, get_state())
+                return
             if parsed.path == "/api/automation/pause":
                 payload = read_json(self)
                 timezone_name = get_state()["balcony"].get("timezone_name", "Europe/Berlin")
@@ -2343,7 +2735,7 @@ def save_balcony(payload: dict) -> None:
         "latitude",
         "longitude",
         "tank_capacity_ml",
-        "tank_current_ml",
+        "refill_pump_ml_per_min",
         "outlets",
         "walls",
     ]
@@ -2354,6 +2746,7 @@ def save_balcony(payload: dict) -> None:
     orientation_deg = float(payload["orientation_deg"]) % 360
     amount_percent = payload.get("watering_amount_percent")
     calibration_percent = payload.get("water_model_calibration_percent")
+    refill_enabled = payload.get("refill_automation_enabled")
     if amount_percent is not None:
         amount_percent = float(amount_percent)
         if not MIN_WATERING_AMOUNT_PERCENT <= amount_percent <= MAX_WATERING_AMOUNT_PERCENT:
@@ -2374,7 +2767,8 @@ def save_balcony(payload: dict) -> None:
             UPDATE balcony_settings
             SET orientation = ?, orientation_deg = ?, width_m = ?, depth_m = ?, location = ?, latitude = ?,
                 longitude = ?, timezone_name = ?, wall_height_m = ?,
-                tank_capacity_ml = ?, tank_current_ml = ?, updated_at = ?
+                tank_capacity_ml = ?, tank_current_ml = MIN(tank_current_ml, ?), refill_tank_capacity_ml = ?,
+                refill_tank_current_ml = MIN(refill_tank_current_ml, ?), refill_pump_ml_per_min = ?, updated_at = ?
             WHERE id = 1
             """,
             (
@@ -2388,7 +2782,10 @@ def save_balcony(payload: dict) -> None:
                 payload.get("timezone_name") or "Europe/Berlin",
                 max(float(wall["height_m"]) for wall in payload["walls"]),
                 int(payload["tank_capacity_ml"]),
-                int(payload["tank_current_ml"]),
+                int(payload["tank_capacity_ml"]),
+                int(payload.get("refill_tank_capacity_ml", DEFAULT_BALCONY["refill_tank_capacity_ml"])),
+                int(payload.get("refill_tank_capacity_ml", DEFAULT_BALCONY["refill_tank_capacity_ml"])),
+                int(payload["refill_pump_ml_per_min"]),
                 now_iso(),
             ),
         )
@@ -2412,6 +2809,8 @@ def save_balcony(payload: dict) -> None:
         save_watering_amount_percent(amount_percent)
     elif calibration_percent is not None:
         save_water_model_calibration_percent(calibration_percent)
+    if refill_enabled is not None:
+        save_refill_automation_enabled(refill_enabled)
 
 
 def add_plant(payload: dict) -> int:
@@ -2490,6 +2889,59 @@ def update_plant_position(plant_id: int, payload: dict) -> None:
         conn.execute(
             "UPDATE plants SET pos_x = ?, pos_y = ? WHERE id = ?",
             (clamp(float(payload["pos_x"]), 0, 1), clamp(float(payload["pos_y"]), 0, 1), plant_id),
+        )
+
+
+def mark_refill_run(source: str = "home_assistant") -> dict:
+    state = get_state()
+    refill = refill_status(state["balcony"])
+    if not refill["enabled"]:
+        raise ValueError("Automatisches Nachfüllen ist deaktiviert")
+    if refill["already_done"]:
+        raise ValueError("Nachfüllung für diesen Verbrauchstag wurde bereits verbucht")
+    transferred_ml = int(refill["planned_transfer_ml"])
+    if transferred_ml <= 0:
+        raise ValueError(refill["summary"] or "Keine Nachfüllung nötig")
+    now = now_iso()
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE balcony_settings
+            SET tank_current_ml = MIN(tank_capacity_ml, tank_current_ml + ?),
+                refill_tank_current_ml = MAX(0, refill_tank_current_ml - ?),
+                updated_at = ?
+            WHERE id = 1
+            """,
+            (transferred_ml, transferred_ml, now),
+        )
+        conn.execute(
+            """
+            INSERT INTO refill_events (ran_at, target_date, requested_ml, transferred_ml, duration_seconds, source)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                now,
+                refill["target_date"],
+                int(refill["requested_ml"]),
+                transferred_ml,
+                int(refill["duration_seconds"]),
+                source,
+            ),
+        )
+    return refill
+
+
+def fill_tank(tank_name: str) -> None:
+    if tank_name == "main":
+        column = "tank_current_ml = tank_capacity_ml"
+    elif tank_name == "refill":
+        column = "refill_tank_current_ml = refill_tank_capacity_ml"
+    else:
+        raise ValueError("Unbekannter Tank")
+    with connect() as conn:
+        conn.execute(
+            f"UPDATE balcony_settings SET {column}, updated_at = ? WHERE id = 1",
+            (now_iso(),),
         )
 
 

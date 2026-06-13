@@ -1,5 +1,5 @@
-# Replace switch.smart_plug_mini in configuration.yaml if Home Assistant
-# assigned another entity ID.
+# Replace switch.smart_plug_mini and switch.smart_plug_mini_refill in
+# configuration.yaml if Home Assistant assigned other entity IDs.
 - id: bewaesserung_tagesfenster
   alias: Bewaesserung - Tagesfenster
   description: Prüft regelmäßig, ob der Planner einen Pumpzyklus in einem Tagesfenster freigibt.
@@ -45,6 +45,32 @@
   action:
     - action: script.bewaesserung_pumpzyklus
 
+- id: bewaesserung_haupttank_nachfuellen
+  alias: Bewaesserung - Haupttank nachfuellen
+  description: Fuellt um 03:00 oder 06:00 Uhr den Verbrauch des Vortags aus dem 30-l-Vorratstank nach.
+  mode: single
+
+  trigger:
+    - platform: time
+      at: "03:00:00"
+    - platform: time
+      at: "06:00:00"
+
+  action:
+    - action: homeassistant.update_entity
+      target:
+        entity_id: sensor.bewaesserung_planner
+
+    - delay:
+        seconds: 2
+
+    - condition: template
+      value_template: >
+        {% set refill = state_attr('sensor.bewaesserung_planner', 'refill') or {} %}
+        {{ refill.get('enabled') and refill.get('run_now') and refill.get('duration_seconds', 0) | int(0) > 0 }}
+
+    - action: script.bewaesserung_nachfuellen
+
 - id: bewaesserung_tank_warnung
   alias: Bewaesserung - Tankwarnung
   description: Meldet, wenn der Planner den Wassertank als niedrig oder nicht ausreichend einstuft.
@@ -58,13 +84,17 @@
     - condition: template
       value_template: >
         {% set tank = state_attr('sensor.bewaesserung_planner', 'tank') or {} %}
-        {{ tank.get('low') or tank.get('empty_soon') }}
+        {% set refill = state_attr('sensor.bewaesserung_planner', 'refill') or {} %}
+        {% set refill_tank = refill.get('refill_tank', {}) %}
+        {{ tank.get('low') or tank.get('empty_soon') or refill_tank.get('empty') or refill.get('limited_by_refill_tank') }}
 
   action:
     - action: persistent_notification.create
       data:
-        title: Bewaesserung: Tank pruefen
+        title: Bewaesserung - Tank pruefen
         message: >
           {% set tank = state_attr('sensor.bewaesserung_planner', 'tank') or {} %}
-          {{ tank.get('warning') or 'Der Wassertank wird niedrig.' }}
-          Aktueller Stand: {{ tank.get('percent', '?') }} %.
+          {% set refill = state_attr('sensor.bewaesserung_planner', 'refill') or {} %}
+          {% set refill_tank = refill.get('refill_tank', {}) %}
+          {{ tank.get('warning') or refill.get('summary') or 'Ein Wassertank wird niedrig.' }}
+          Haupttank: {{ tank.get('percent', '?') }} %, Vorratstank: {{ refill_tank.get('percent', '?') }} %.
