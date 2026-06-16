@@ -9,6 +9,8 @@ sensor:
     unique_id: bewaesserung_planner
     resource: "http://192.168.178.116:8080/api/homekit/check?auto=true&slot=morning"
     method: GET
+    headers:
+      Authorization: !secret watering_planner_auth_header
     scan_interval: 900
     timeout: 10
     value_template: "{{ value_json.run_now }}"
@@ -31,12 +33,14 @@ rest_command:
     method: POST
     headers:
       Content-Type: "application/json"
+      Authorization: !secret watering_planner_auth_header
     payload: '{"auto_weather": true, "slot": "morning"}'
   bewaesserung_mark_refill:
     url: "http://192.168.178.116:8080/api/refill/mark-run"
     method: POST
     headers:
       Content-Type: "application/json"
+      Authorization: !secret watering_planner_auth_header
     payload: '{}'
 
 script:

@@ -36,7 +36,14 @@ cd /volume1/docker/watering-planner
 cp .env.synology.example .env.synology
 ```
 
-Bearbeite `.env.synology` auf der NAS und trage dort die private Home-Assistant-Webhook-URL ein. Die Datei wird von Git ignoriert.
+Bearbeite `.env.synology` auf der NAS und trage dort die private Home-Assistant-Webhook-URL ein. Setze außerdem ein langes, zufälliges Planner-Passwort, wenn die App im Netzwerk oder von außen erreichbar ist:
+
+```bash
+WATERING_PLANNER_USERNAME=admin
+WATERING_PLANNER_PASSWORD=LANGES-ZUFAELLIGES-PASSWORT
+```
+
+Die Datei wird von Git ignoriert.
 
 Wichtig: Der Dialog **Container Manager > Projekt > Erstellen** lädt keine vollständige Anwendung hoch. Er zeigt und importiert nur die Compose-Konfiguration. Da `docker-compose.yml` mit `build: .` arbeitet, müssen die Quelldateien vorher über **File Station**, Synology Drive, `scp` oder einen anderen Dateitransfer im ausgewählten NAS-Projektordner liegen.
 
@@ -277,7 +284,7 @@ Die maschinenlesbare Blaupause liefert:
 http://NAS-IP:8080/api/shortcuts?base_url=http://NAS-IP:8080
 ```
 
-Wenn die App außerhalb deines Heimnetzes erreichbar sein soll, verwende HTTPS über einen Reverse Proxy der Synology oder über dein bestehendes Netzwerksetup. Für reine HomeKit-Automationen im Heimnetz reicht in der Regel die lokale HTTP-Adresse.
+Wenn die App außerhalb deines Heimnetzes erreichbar sein soll, verwende HTTPS über einen Reverse Proxy der Synology oder über dein bestehendes Netzwerksetup. Leite nicht ungeschützt den Container-Port `8080` aus dem Internet weiter. HTTP Basic Auth schützt die Oberfläche und API nur zuverlässig, wenn der Transport über HTTPS läuft. Für reine HomeKit-Automationen im Heimnetz reicht in der Regel die lokale HTTP-Adresse.
 
 ## Relevante Environment-Variablen
 
@@ -287,5 +294,7 @@ Wenn die App außerhalb deines Heimnetzes erreichbar sein soll, verwende HTTPS �
 | `PORT` | `8080` | Port im Container |
 | `DATA_DIR` | `/app/data` | Verzeichnis für SQLite-Daten |
 | `TZ` | `Europe/Berlin` | Zeitzone des Containers |
+| `WATERING_PLANNER_USERNAME` | `admin` | Benutzername für HTTP Basic Auth |
+| `WATERING_PLANNER_PASSWORD` | leer | Aktiviert Passwortschutz für Oberfläche und API, wenn gesetzt |
 | `HOME_ASSISTANT_WEBHOOK_URL` | Eintrag in `.env.synology` | Lokaler HA-Webhook für manuelle Sofortläufe |
 | `HOME_ASSISTANT_REFILL_WEBHOOK_URL` | Eintrag in `.env.synology` | Lokaler HA-Webhook für manuelle Nachfüllläufe |

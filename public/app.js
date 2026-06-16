@@ -65,6 +65,8 @@ function renderState() {
   balconyForm.elements.tank_capacity_liters.value = Number(state.balcony.tank_capacity_ml || 0) / 1000;
   balconyForm.elements.refill_pump_ml_per_min.value = Number(state.balcony.refill_pump_ml_per_min || 0);
   balconyForm.elements.refill_automation_enabled.checked = state.settings?.refill_automation_enabled !== false;
+  balconyForm.elements.refill_schedule_times.value = (state.settings?.refill_schedule_times || ["03:00", "06:00"]).join(", ");
+  balconyForm.elements.refill_cooldown_minutes_per_liter.value = state.settings?.refill_cooldown_minutes_per_liter ?? 30;
   balconyForm.elements.watering_amount_percent.value = state.settings?.watering_amount_percent ?? 100;
 
   $("#outletEditor").innerHTML = state.outlets
@@ -1381,11 +1383,16 @@ $("#balconyForm").addEventListener("submit", async (event) => {
     "longitude",
     "tank_capacity_liters",
     "refill_pump_ml_per_min",
+    "refill_cooldown_minutes_per_liter",
     "watering_amount_percent",
   ]);
   payload.tank_capacity_ml = Math.round(payload.tank_capacity_liters * 1000);
   payload.refill_tank_capacity_ml = 30000;
   payload.refill_automation_enabled = event.currentTarget.elements.refill_automation_enabled.checked;
+  payload.refill_schedule_times = String(payload.refill_schedule_times || "")
+    .split(/[;,]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
   delete payload.tank_capacity_liters;
   payload.timezone_name = payload.timezone_name || Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/Berlin";
   payload.outlets = state.outlets.map((outlet) => ({

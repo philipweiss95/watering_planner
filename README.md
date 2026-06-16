@@ -34,6 +34,8 @@ http://NAS-IP:8080
 
 Die Datenbank bleibt durch das Volume `./data:/app/data` erhalten. Die vollständige Synology-Anleitung steht unter [docs/synology-docker.md](docs/synology-docker.md). Für Docker Compose und den Synology Container Manager gibt es genau eine Projektdatei: `docker-compose.yml`. Private Werte werden auf der NAS in `.env.synology` hinterlegt.
 
+Wenn die App außerhalb des Heimnetzes erreichbar ist, setze in `.env.synology` unbedingt `WATERING_PLANNER_PASSWORD` und veröffentliche sie nur über HTTPS, zum Beispiel über den Synology Reverse Proxy. Der eingebaute Schutz ist HTTP Basic Auth; ohne HTTPS wäre das Passwort auf dem Transportweg nicht ausreichend geschützt.
+
 Für die lokale Pumpensteuerung mit Meross Matter empfiehlt sich Home Assistant OS als VM und der Planer als separater Container auf der NAS. Die Anleitung steht unter [docs/home-assistant-vm.md](docs/home-assistant-vm.md). Direkt nutzbare Vorlagen liegen unter [home-assistant/configuration.yaml](home-assistant/configuration.yaml) und [home-assistant/automations.yaml](home-assistant/automations.yaml).
 
 ## Uberspace
@@ -78,9 +80,11 @@ Die Antwort enthält zwei Entscheidungen:
 
 Der Planer verteilt die empfohlenen Zyklen gleichmäßig zwischen `07:00` und `19:00`. Bei vier Zyklen entstehen zum Beispiel die Zeitpunkte `07:00`, `11:00`, `15:00`, `19:00`. Manuell verbuchte Läufe zählen dabei mit. Home Assistant fragt den Planer alle 15 Minuten erneut ab. Dadurch geht ein Lauf nicht verloren, wenn eine einzelne Sensoraktualisierung ausfällt; ein verpasster geplanter Lauf wird später nachgeholt. Nach einem verbuchten Pumpenlauf setzt der Planer zusätzlich eine Sicherheitspause von 30 Minuten, damit Zyklen nicht direkt hintereinander starten.
 
-Zusätzlich verwaltet der Planer einen 30-l-Vorratstank mit eigener Nachfüllpumpe. Um `03:00` und `06:00` Uhr prüft er den rechnerischen Füllstand des Haupttanks, pumpt wegen der verbundenen Behälter nur die Hälfte des aktuell fehlenden Wassers nach, begrenzt die Menge auf den rechnerischen Rest im Vorratstank und liefert daraus die Laufzeit der zweiten Pumpe. Dadurch nähert sich der Haupttank an voll an, ohne rechnerisch überlaufen zu können. Ist der Vorratstank leer, der Durchsatz nicht eingetragen oder die Nachfüllautomatik deaktiviert, wird kein automatischer Nachfülllauf freigegeben. Haupttank und Vorratstank werden im Dashboard per Button wieder als voll markiert.
+Zusätzlich verwaltet der Planer einen 30-l-Vorratstank mit eigener Nachfüllpumpe. Die Nachfüllzeitpunkte und die Sperrzeit pro nachgefülltem Liter sind im Webinterface einstellbar; ab einem erreichten Zeitpunkt meldet die API stabil Nachfüllbedarf, solange Wasser fehlt und keine Sperre aktiv ist. Nach jedem verbuchten Nachfülllauf sperrt der Planer weitere automatische Nachfüllungen für eine aus der übertragenen Wassermenge berechnete Zeit. Pro Lauf pumpt er wegen der verbundenen Behälter nur die Hälfte des aktuell fehlenden Wassers nach, begrenzt die Menge auf den rechnerischen Rest im Vorratstank und liefert daraus die Laufzeit der zweiten Pumpe. Dadurch nähert sich der Haupttank an voll an, ohne rechnerisch überlaufen zu können. Ist der Vorratstank leer, der Durchsatz nicht eingetragen oder die Nachfüllautomatik deaktiviert, wird kein automatischer Nachfülllauf freigegeben. Haupttank und Vorratstank werden im Dashboard per Button wieder als voll markiert.
 
 Die Berechnung nutzt Temperatur, Tagesniederschlag, Wind, FAO-Referenzverdunstung ET₀, Sonnenscheindauer, Balkon-/Terrassenausrichtung in Grad, Koordinaten, Pflanzenpositionen und die vier Wandhöhen nach Seite. Wenn Open-Meteo keine ET₀-Werte liefert oder manuelle Wetterdaten genutzt werden, schätzt die App ET₀ aus Temperatur, Sonnenscheindauer und Wind. Zusätzlich wird Wind als Balkon-Expositionsfaktor berechnet: hohe Windgeschwindigkeiten erhöhen Transpiration und Topfverdunstung, niedrige Wände schützen weniger.
+
+Für die Tank-Reichweite nutzt die App die längste reguläre Open-Meteo-Vorhersage von 16 Tagen. Erst wenn beide Tanks laut Prognose länger reichen, wird der mittlere Tagesverbrauch dieser Vorhersage für die weitere Schätzung verwendet.
 
 Der Wasserbedarf pro Pflanze wird aus einem Pflanzenprofil berechnet:
 

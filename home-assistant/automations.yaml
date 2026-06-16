@@ -77,14 +77,12 @@
 
 - id: bewaesserung_haupttank_nachfuellen
   alias: Bewaesserung - Haupttank nachfuellen
-  description: Fuellt um 03:00 oder 06:00 Uhr die Haelfte des fehlenden Haupttank-Inhalts aus dem 30-l-Vorratstank nach.
+  description: Prueft alle 15 Minuten den Planner und fuellt bei freigegebenem Nachfuellbedarf aus dem Vorratstank nach.
   mode: single
 
   trigger:
-    - platform: time
-      at: "03:00:00"
-    - platform: time
-      at: "06:00:00"
+    - platform: time_pattern
+      minutes: "/15"
 
   action:
     - action: homeassistant.update_entity

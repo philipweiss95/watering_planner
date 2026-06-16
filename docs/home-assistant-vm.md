@@ -94,6 +94,18 @@ Verwende möglichst die feste LAN-IP von Home Assistant statt `homeassistant.loc
 Verwende für `WEBHOOK-ID` eine zufällige, nicht erratbare Zeichenfolge und trage exakt denselben Wert in `home-assistant/automations.yaml` unter `webhook_id` ein. Eine neue ID erzeugst du zum Beispiel mit `uuidgen | tr '[:upper:]' '[:lower:]' | tr -d '-'`.
 Alternativ öffnest du nach dem Import in Home Assistant die Automation **Bewaesserung - Manueller Sofortlauf**, bearbeitest den Webhook-Trigger und verwendest die dort angezeigte bzw. neu erzeugte Webhook-ID. Trage genau diese private ID anschließend in `.env.synology` auf der NAS ein. Eine ID aus einer README, einem öffentlichen Repository oder einem Chat nicht übernehmen.
 
+Wenn du `WATERING_PLANNER_PASSWORD` gesetzt hast, braucht Home Assistant ebenfalls den Basic-Auth-Header für Planner-Anfragen. Erzeuge ihn mit demselben Benutzer und Passwort:
+
+```bash
+printf 'admin:DEIN-PLANNER-PASSWORT' | base64
+```
+
+Trage den Wert in Home Assistant unter `/config/secrets.yaml` ein:
+
+```yaml
+watering_planner_auth_header: "Basic BASE64-WERT"
+```
+
 4. Compose-Datei: `docker-compose.yml`
 5. Projekt starten
 
@@ -152,7 +164,7 @@ Die Vorlagen trennen die Aufgaben:
 - `script.bewaesserung_nachfuellen` schaltet die zweite Meross-Steckdose `switch.smart_plug_mini_refill` fuer die vom Planner berechnete Dauer ein und verbucht danach den Nachfuelllauf.
 - `Bewaesserung - Tagesfenster` prüft alle 15 Minuten den Sensor und startet das Skript nur bei `run_now`.
 - `Bewaesserung - Manueller Sofortlauf` nimmt über einen Webhook mit zufälliger ID einen sofortigen manuellen Lauf entgegen und startet dasselbe Skript.
-- `Bewaesserung - Haupttank nachfuellen` prüft um `03:00` und `06:00` Uhr den rechnerischen Füllstand des Haupttanks und startet die zweite Pumpe nur, wenn der 30-l-Vorratstank rechnerisch genug Wasser für einen sinnvollen Lauf enthält und die Nachfüllautomatik im Planner aktiv ist. Pro Lauf wird wegen der verbundenen Behälter nur die Hälfte des aktuell fehlenden Haupttank-Inhalts gepumpt.
+- `Bewaesserung - Haupttank nachfuellen` prüft alle 15 Minuten den Planner und startet die zweite Pumpe nur, wenn der 30-l-Vorratstank rechnerisch genug Wasser für einen sinnvollen Lauf enthält, ein konfigurierter Nachfüllzeitpunkt erreicht wurde, keine Nachfüllsperre aktiv ist und die Nachfüllautomatik im Planner aktiv ist. Nach einem Lauf sperrt der Planner weitere Nachfüllungen für eine aus der übertragenen Menge berechnete Zeit. Pro Lauf wird wegen der verbundenen Behälter nur die Hälfte des aktuell fehlenden Haupttank-Inhalts gepumpt.
 - `Bewaesserung - Manuelle Nachfuellung` nimmt über einen zweiten Webhook einen vom Dashboard angeforderten Nachfülllauf entgegen und startet dasselbe Nachfüllskript.
 
 Falls die Steckdosen in Home Assistant andere Entity-IDs erhalten haben, `switch.smart_plug_mini` und `switch.smart_plug_mini_refill` in der Vorlage `configuration.yaml` ersetzen.
@@ -163,7 +175,9 @@ Der Planer verteilt die empfohlenen Pumpenläufe gleichmäßig zwischen `07:00` 
 
 Der Planer verhindert Überbewässerung, weil nach jedem Lauf `remaining_cycles_today` sinkt. Zusätzlich bleibt `run_now` nach einem verbuchten Lauf 30 Minuten lang gesperrt. Die Skripte und Automationen laufen im Modus `single`, damit ein zweiter Trigger während eines laufenden Pumpenzyklus nicht direkt einen weiteren Lauf startet. Home Assistant muss dadurch keine eigene Verteilungslogik kennen.
 
-Der Haupttank wird nachts rechnerisch aus dem separaten 30-l-Vorratstank nachgefüllt. Die Laufzeit ergibt sich aus der Hälfte des aktuell fehlenden Haupttank-Inhalts und dem in den Planner-Einstellungen hinterlegten Durchsatz der Nachfüllpumpe in ml/min. Wenn der Vorratstank leer ist oder die Nachfüllautomatik im Webinterface deaktiviert wurde, gibt der Planner keinen automatischen Nachfülllauf frei. Der manuelle Nachfüllbutton benötigt zusätzlich `HOME_ASSISTANT_REFILL_WEBHOOK_URL` in der Server-Umgebung.
+Der Haupttank wird rechnerisch aus dem separaten 30-l-Vorratstank nachgefüllt. Die Laufzeit ergibt sich aus der Hälfte des aktuell fehlenden Haupttank-Inhalts und dem in den Planner-Einstellungen hinterlegten Durchsatz der Nachfüllpumpe in ml/min. Die automatischen Nachfüllzeitpunkte und die Sperrzeit pro nachgefülltem Liter werden im Webinterface gepflegt; nach einem erreichten Zeitpunkt bleibt die Freigabe stabil, solange Bedarf besteht. Wenn der Vorratstank leer ist, eine berechnete Nachfüllsperre aktiv ist oder die Nachfüllautomatik im Webinterface deaktiviert wurde, gibt der Planner keinen automatischen Nachfülllauf frei. Der manuelle Nachfüllbutton benötigt zusätzlich `HOME_ASSISTANT_REFILL_WEBHOOK_URL` in der Server-Umgebung.
+
+Die Anzeige, wann Haupttank und Vorratstank leer sind, nutzt bis zu 16 Tage Open-Meteo-Vorhersage. Nur wenn die rechnerische Reichweite darüber hinausgeht, extrapoliert der Planner mit dem Durchschnittsverbrauch dieser Prognosetage.
 
 Im Dashboard des Planers wird zusätzlich angezeigt:
 

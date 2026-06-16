@@ -221,7 +221,7 @@
                   <h3>Tanks</h3>
                 </div>
               </div>
-              <p class="field-help">Der Haupttank versorgt die Bewässerung. Der 30-l-Vorratstank füllt ihn nachts über die zweite Pumpe nach.</p>
+              <p class="field-help">Der Haupttank versorgt die Bewässerung. Der 30-l-Vorratstank füllt ihn über die zweite Pumpe nach.</p>
               <div class="settings-grid">
                 <label>
                   Haupttankgröße in Litern
@@ -230,6 +230,14 @@
                 <label>
                   Nachfüllpumpe in ml pro Minute
                   <input type="number" name="refill_pump_ml_per_min" min="0" step="1">
+                </label>
+                <label>
+                  Nachfüllzeiten
+                  <input type="text" name="refill_schedule_times" inputmode="numeric" placeholder="03:00, 06:00">
+                </label>
+                <label>
+                  Sperre pro Liter in Minuten
+                  <input type="number" name="refill_cooldown_minutes_per_liter" min="1" max="720" step="1">
                 </label>
                 <label class="toggle-field">
                   <span>Automatisch aus Vorratstank nachfüllen</span>
@@ -389,6 +397,6 @@
       </div>
     </main>
 
-    <script src="/app.js?v=20260613-refill-log-2"></script>
+    <script src="/app.js?v=20260616-refill-cooldown-1"></script>
   </body>
 </html>

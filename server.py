@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import base64
+import binascii
+import hmac
 import json
 import math
 import os
@@ -184,6 +187,10 @@ AUTOMATION_RUN_COOLDOWN_MINUTES = 30
 REFILL_RUN_TIMES = ("03:00", "06:00")
 REFILL_TRIGGER_TOLERANCE_MINUTES = 60
 REFILL_TRANSFER_FRACTION = 0.5
+REFILL_COOLDOWN_MINUTES_PER_LITER = 30
+REFILL_MIN_COOLDOWN_MINUTES = 15
+REFILL_MAX_COOLDOWN_MINUTES = 12 * 60
+WEATHER_FORECAST_DAYS = 16
 
 
 @contextmanager
@@ -454,6 +461,63 @@ def refill_automation_enabled() -> bool:
 def save_refill_automation_enabled(value: object) -> None:
     enabled = str(value).lower() in {"1", "true", "on", "yes"}
     set_setting("refill_automation_enabled", "true" if enabled else "false")
+
+
+def normalize_refill_schedule_times(value: object) -> list[str]:
+    if isinstance(value, str):
+        raw_items = [item.strip() for item in value.replace(";", ",").split(",")]
+    elif isinstance(value, (list, tuple)):
+        raw_items = [str(item).strip() for item in value]
+    else:
+        raw_items = []
+    times = []
+    seen = set()
+    for item in raw_items:
+        if not item:
+            continue
+        parsed = parse_hhmm(item)
+        label = f"{parsed.hour:02d}:{parsed.minute:02d}"
+        if label not in seen:
+            seen.add(label)
+            times.append(label)
+    if not times:
+        raise ValueError("Mindestens eine Nachfüllzeit muss angegeben werden")
+    return sorted(times, key=lambda item: parse_hhmm(item))
+
+
+def refill_schedule_times() -> list[str]:
+    raw = get_setting("refill_schedule_times", "")
+    if not raw:
+        return list(REFILL_RUN_TIMES)
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        value = raw
+    try:
+        return normalize_refill_schedule_times(value)
+    except (TypeError, ValueError):
+        return list(REFILL_RUN_TIMES)
+
+
+def save_refill_schedule_times(value: object) -> None:
+    set_setting("refill_schedule_times", json.dumps(normalize_refill_schedule_times(value)))
+
+
+def refill_cooldown_minutes_per_liter() -> float:
+    try:
+        value = float(get_setting("refill_cooldown_minutes_per_liter", str(REFILL_COOLDOWN_MINUTES_PER_LITER)))
+    except ValueError:
+        return float(REFILL_COOLDOWN_MINUTES_PER_LITER)
+    if value <= 0:
+        return float(REFILL_COOLDOWN_MINUTES_PER_LITER)
+    return value
+
+
+def save_refill_cooldown_minutes_per_liter(value: object) -> None:
+    minutes = float(value)
+    if minutes <= 0 or minutes > REFILL_MAX_COOLDOWN_MINUTES:
+        raise ValueError(f"Nachfüllsperre pro Liter muss zwischen 1 und {REFILL_MAX_COOLDOWN_MINUTES} Minuten liegen")
+    set_setting("refill_cooldown_minutes_per_liter", f"{minutes:g}")
 
 
 def water_model_calibration() -> float:
@@ -781,6 +845,8 @@ def get_state() -> dict:
         "settings": {
             "watering_amount_percent": round(watering_amount_percent(), 1),
             "refill_automation_enabled": refill_automation_enabled(),
+            "refill_schedule_times": refill_schedule_times(),
+            "refill_cooldown_minutes_per_liter": refill_cooldown_minutes_per_liter(),
         },
         "cycles_completed_today": completed_cycles_today(str(balcony.get("timezone_name", "Europe/Berlin"))),
     }
@@ -1238,7 +1304,7 @@ def fetch_weather(balcony: dict) -> dict:
         "timezone": timezone_name,
         "current": "temperature_2m,precipitation,rain,wind_speed_10m",
         "daily": "precipitation_sum,temperature_2m_max,sunshine_duration,et0_fao_evapotranspiration,wind_speed_10m_max",
-        "forecast_days": 7,
+        "forecast_days": WEATHER_FORECAST_DAYS,
     }
     url = "https://api.open-meteo.com/v1/forecast?" + urlencode(params)
     tls_verified = True
@@ -1263,17 +1329,20 @@ def fetch_weather(balcony: dict) -> dict:
     daily = payload.get("daily", {})
     sunshine_seconds = first_value(daily, "sunshine_duration", 0)
     forecast = daily_forecast_items(daily, current)
+    fallback_temperature = number_or_default(first_value(daily, "temperature_2m_max", 20), 20)
+    fallback_rain = number_or_default(first_value(daily, "precipitation_sum", 0), 0)
+    fallback_et0 = number_or_default(first_value(daily, "et0_fao_evapotranspiration", 0), 0)
     return {
         "source": "open-meteo",
         "latitude": latitude,
         "longitude": longitude,
         "timezone": timezone_name,
-        "temperature_c": float(current.get("temperature_2m", first_value(daily, "temperature_2m_max", 20))),
-        "rain_mm": float(first_value(daily, "precipitation_sum", current.get("rain", current.get("precipitation", 0)))),
-        "current_rain_mm": float(current.get("rain", current.get("precipitation", 0))),
-        "wind_kmh": float(current.get("wind_speed_10m", 0)),
+        "temperature_c": number_or_default(current.get("temperature_2m"), fallback_temperature),
+        "rain_mm": fallback_rain,
+        "current_rain_mm": number_or_default(current.get("rain", current.get("precipitation")), 0),
+        "wind_kmh": number_or_default(current.get("wind_speed_10m"), 0),
         "sunshine_hours": round(float(sunshine_seconds) / 3600, 1),
-        "et0_mm": float(first_value(daily, "et0_fao_evapotranspiration", 0)),
+        "et0_mm": fallback_et0,
         "forecast": forecast,
         "tls_verified": tls_verified,
         "fetched_at": now_iso(),
@@ -1285,34 +1354,52 @@ def daily_forecast_items(daily: dict, current: dict | None = None) -> list[dict]
     dates = daily.get("time", [])
     if not isinstance(dates, list):
         return []
+    fallback_temperature = number_or_default(current.get("temperature_2m"), 20)
+    fallback_rain = number_or_default(current.get("rain", current.get("precipitation")), 0)
+    fallback_wind = number_or_default(current.get("wind_speed_10m"), 0)
     items = []
     for index, day_value in enumerate(dates):
-        sunshine_seconds = indexed_value(daily, "sunshine_duration", index, 0)
+        sunshine_seconds = indexed_number(daily, "sunshine_duration", index, 0)
         items.append(
             {
                 "date": str(day_value),
-                "temperature_c": float(indexed_value(daily, "temperature_2m_max", index, current.get("temperature_2m", 20))),
-                "rain_mm": float(indexed_value(daily, "precipitation_sum", index, current.get("rain", current.get("precipitation", 0)))),
-                "wind_kmh": float(indexed_value(daily, "wind_speed_10m_max", index, current.get("wind_speed_10m", 0))),
-                "sunshine_hours": round(float(sunshine_seconds) / 3600, 1),
-                "et0_mm": float(indexed_value(daily, "et0_fao_evapotranspiration", index, 0)),
+                "temperature_c": indexed_number(daily, "temperature_2m_max", index, fallback_temperature),
+                "rain_mm": indexed_number(daily, "precipitation_sum", index, fallback_rain),
+                "wind_kmh": indexed_number(daily, "wind_speed_10m_max", index, fallback_wind),
+                "sunshine_hours": round(sunshine_seconds / 3600, 1),
+                "et0_mm": indexed_number(daily, "et0_fao_evapotranspiration", index, 0),
             }
         )
     return items
 
 
+def indexed_number(payload: dict, key: str, index: int, default: float) -> float:
+    return number_or_default(indexed_value(payload, key, index, default), default)
+
+
 def indexed_value(payload: dict, key: str, index: int, default: float) -> float:
     value = payload.get(key, default)
     if isinstance(value, list):
-        return value[index] if index < len(value) else default
-    return value
+        if index < len(value) and value[index] is not None:
+            return value[index]
+        return default
+    return default if value is None else value
+
+
+def number_or_default(value, default: float) -> float:
+    if value is None:
+        return float(default)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
 
 
 def first_value(payload: dict, key: str, default: float) -> float:
     value = payload.get(key, default)
     if isinstance(value, list):
-        return value[0] if value else default
-    return value
+        return value[0] if value and value[0] is not None else default
+    return default if value is None else value
 
 
 def current_weather_or_params(params: dict[str, list[str]] | dict, balcony: dict) -> dict:
@@ -2147,8 +2234,38 @@ def automation_status(
     }
 
 
-def refill_window_datetimes(today: date, tzinfo) -> list[datetime]:
-    return [window_datetime(today, item, tzinfo) for item in REFILL_RUN_TIMES]
+def refill_window_datetimes(today: date, tzinfo, schedule_times: list[str] | None = None) -> list[datetime]:
+    return [window_datetime(today, item, tzinfo) for item in (schedule_times or refill_schedule_times())]
+
+
+def refill_cooldown_minutes(transferred_ml: int | float) -> int:
+    if transferred_ml <= 0:
+        return 0
+    minutes = math.ceil(float(transferred_ml) / 1000 * refill_cooldown_minutes_per_liter())
+    return int(clamp(minutes, REFILL_MIN_COOLDOWN_MINUTES, REFILL_MAX_COOLDOWN_MINUTES))
+
+
+def latest_refill_event() -> dict | None:
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT id, ran_at, target_date, requested_ml, transferred_ml, duration_seconds, window_label, source
+            FROM refill_events
+            ORDER BY ran_at DESC, id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        return row_to_dict(row) if row else None
+
+
+def parse_event_datetime(value: str) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
 
 
 def refill_status(balcony: dict) -> dict:
@@ -2156,6 +2273,7 @@ def refill_status(balcony: dict) -> dict:
     now = local_now(timezone_name)
     target_date = now.date()
     enabled = refill_automation_enabled()
+    schedule_times = refill_schedule_times()
     main_capacity = max(int(balcony.get("tank_capacity_ml", 0)), 0)
     main_current = max(int(balcony.get("tank_current_ml", 0)), 0)
     refill_capacity = max(int(balcony.get("refill_tank_capacity_ml", 30000)), 1)
@@ -2166,51 +2284,51 @@ def refill_status(balcony: dict) -> dict:
     target_transfer_ml = math.ceil(requested_ml * REFILL_TRANSFER_FRACTION)
     transferable_ml = min(target_transfer_ml, main_missing_ml, refill_current)
     duration_seconds = math.ceil(transferable_ml / pump_ml_per_min * 60) if pump_ml_per_min and transferable_ml else 0
-    refill_windows = refill_window_datetimes(now.date(), now.tzinfo)
-    active_window = next(
-        (
-            item
-            for item in refill_windows
-            if item <= now <= item + timedelta(minutes=REFILL_TRIGGER_TOLERANCE_MINUTES)
-        ),
-        None,
-    )
+    refill_windows = refill_window_datetimes(now.date(), now.tzinfo, schedule_times)
     last_window = next((item for item in reversed(refill_windows) if item <= now), None)
-    active_window_label = active_window.strftime("%H:%M") if active_window else ""
     last_window_label = last_window.strftime("%H:%M") if last_window else ""
     next_window = next((item for item in refill_windows if item > now), None)
     if not next_window:
-        next_window = refill_window_datetimes(now.date() + timedelta(days=1), now.tzinfo)[0]
-    already_done = refill_event_for_target_date(target_date, active_window_label) if active_window_label else None
-    run_now = bool(enabled and active_window and not already_done and transferable_ml > 0 and pump_ml_per_min > 0)
+        next_window = refill_window_datetimes(now.date() + timedelta(days=1), now.tzinfo, schedule_times)[0]
+    last_event = latest_refill_event()
+    last_event_at = parse_event_datetime(str(last_event.get("ran_at", ""))) if last_event else None
+    cooldown_minutes = refill_cooldown_minutes(int(last_event.get("transferred_ml", 0))) if last_event else 0
+    cooldown_until_dt = last_event_at + timedelta(minutes=cooldown_minutes) if last_event_at and cooldown_minutes else None
+    cooldown_active = bool(cooldown_until_dt and now < cooldown_until_dt.astimezone(now.tzinfo))
+    cooldown_until = cooldown_until_dt.astimezone(now.tzinfo).isoformat() if cooldown_until_dt else ""
+    schedule_due = bool(last_window)
+    need_exists = bool(transferable_ml > 0 and pump_ml_per_min > 0)
+    run_now = bool(enabled and schedule_due and need_exists and not cooldown_active)
+    catch_up = bool(schedule_due and now > last_window + timedelta(minutes=REFILL_TRIGGER_TOLERANCE_MINUTES))
 
     if not enabled:
         summary = "Automatisches Nachfüllen ist deaktiviert."
-    elif already_done:
-        summary = f"Nachfüllung um {active_window_label} ist erledigt."
     elif pump_ml_per_min <= 0:
         summary = "Durchsatz der Nachfüllpumpe fehlt."
     elif main_missing_ml <= 0:
         summary = "Haupttank ist voll."
     elif refill_current <= 0:
         summary = "Vorratstank ist leer."
+    elif cooldown_active:
+        summary = f"Nachfüllung bis {cooldown_until_dt.astimezone(now.tzinfo).strftime('%H:%M')} gesperrt."
     elif transferable_ml < target_transfer_ml:
         summary = f"Nachfüllung auf {format_liters_for_text(transferable_ml)} begrenzt."
+    elif run_now:
+        summary = "Nachfüllbedarf besteht, Nachfüllpumpe darf laufen."
     elif now < next_window:
         summary = f"Nächste Nachfüllung um {next_window.strftime('%H:%M')}."
-    elif run_now:
-        summary = "Nachfüllpumpe darf jetzt laufen."
     else:
-        summary = "Nachfüllfenster ist für heute vorbei."
+        summary = "Nachfüllung wartet auf den nächsten geplanten Zeitpunkt."
 
     refill_percent = round(refill_current / refill_capacity * 100)
     return {
         "run_now": run_now,
         "enabled": enabled,
         "target_date": target_date.isoformat(),
-        "scheduled_time": (active_window or next_window).strftime("%H:%M"),
-        "scheduled_times": list(REFILL_RUN_TIMES),
-        "active_window": active_window_label,
+        "scheduled_time": (last_window or next_window).strftime("%H:%M"),
+        "scheduled_times": schedule_times,
+        "active_window": last_window_label,
+        "window_label": last_window_label if run_now else "",
         "last_window": last_window_label,
         "next_window": next_window.strftime("%H:%M") if next_window else "",
         "requested_ml": requested_ml,
@@ -2222,8 +2340,14 @@ def refill_status(balcony: dict) -> dict:
         "main_missing_ml": main_missing_ml,
         "blocked_by_empty_refill_tank": bool(refill_current <= 0),
         "limited_by_refill_tank": bool(target_transfer_ml > 0 and transferable_ml < min(target_transfer_ml, main_missing_ml)),
-        "already_done": bool(already_done),
-        "last_event": already_done or {},
+        "already_done": False,
+        "cooldown_active": cooldown_active,
+        "cooldown_minutes": cooldown_minutes,
+        "cooldown_until": cooldown_until,
+        "need_exists": need_exists,
+        "schedule_due": schedule_due,
+        "catch_up": catch_up,
+        "last_event": last_event or {},
         "refill_tank": {
             "current_ml": refill_current,
             "capacity_ml": refill_capacity,
@@ -2303,7 +2427,7 @@ def normalized_forecast_days(weather: dict, today: date) -> list[dict]:
             "sunshine_hours": forecast_number(weather, "sunshine_hours", 6),
             "et0_mm": forecast_number(weather, "et0_mm", 0),
         }
-        for index in range(7)
+        for index in range(WEATHER_FORECAST_DAYS)
     ]
 
 
@@ -2741,6 +2865,47 @@ def send_json(handler: SimpleHTTPRequestHandler, payload: dict, status: HTTPStat
     body = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json; charset=utf-8")
+    handler.send_header("Cache-Control", "no-store")
+    handler.send_header("Content-Length", str(len(body)))
+    handler.end_headers()
+    handler.wfile.write(body)
+
+
+def auth_username() -> str:
+    return os.environ.get("WATERING_PLANNER_USERNAME", "admin").strip() or "admin"
+
+
+def auth_password() -> str:
+    return os.environ.get("WATERING_PLANNER_PASSWORD", "").strip()
+
+
+def auth_enabled() -> bool:
+    return bool(auth_password())
+
+
+def request_authenticated(headers) -> bool:
+    password = auth_password()
+    if not password:
+        return True
+    header = str(headers.get("Authorization", "")).strip()
+    if not header.lower().startswith("basic "):
+        return False
+    try:
+        decoded = base64.b64decode(header.split(" ", 1)[1], validate=True).decode("utf-8")
+    except (binascii.Error, ValueError, UnicodeDecodeError):
+        return False
+    username, separator, supplied_password = decoded.partition(":")
+    if not separator:
+        return False
+    return hmac.compare_digest(username, auth_username()) and hmac.compare_digest(supplied_password, password)
+
+
+def send_auth_required(handler: SimpleHTTPRequestHandler) -> None:
+    body = b"Authentication required\n"
+    handler.send_response(HTTPStatus.UNAUTHORIZED)
+    handler.send_header("WWW-Authenticate", 'Basic realm="Watering Planner", charset="UTF-8"')
+    handler.send_header("Content-Type", "text/plain; charset=utf-8")
+    handler.send_header("Cache-Control", "no-store")
     handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
     handler.wfile.write(body)
@@ -2753,8 +2918,28 @@ class AppHandler(SimpleHTTPRequestHandler):
     def log_message(self, format: str, *args) -> None:
         print(f"[{self.log_date_time_string()}] {format % args}")
 
+    def end_headers(self) -> None:
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "same-origin")
+        self.send_header("Permissions-Policy", "geolocation=(self)")
+        super().end_headers()
+
+    def require_auth(self, parsed) -> bool:
+        if parsed.path == "/api/health":
+            return True
+        if request_authenticated(self.headers):
+            return True
+        send_auth_required(self)
+        return False
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path == "/api/health":
+            send_json(self, {"ok": True, "auth_enabled": auth_enabled()})
+            return
+        if not self.require_auth(parsed):
+            return
         if parsed.path == "/api/state":
             send_json(self, get_state())
             return
@@ -2785,6 +2970,8 @@ class AppHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
+        if not self.require_auth(parsed):
+            return
         try:
             if parsed.path == "/api/balcony":
                 payload = read_json(self)
@@ -2909,6 +3096,8 @@ class AppHandler(SimpleHTTPRequestHandler):
 
     def do_PUT(self) -> None:
         parsed = urlparse(self.path)
+        if not self.require_auth(parsed):
+            return
         try:
             if parsed.path.startswith("/api/plants/"):
                 plant_id = int(parsed.path.rsplit("/", 1)[1])
@@ -2922,6 +3111,8 @@ class AppHandler(SimpleHTTPRequestHandler):
 
     def do_DELETE(self) -> None:
         parsed = urlparse(self.path)
+        if not self.require_auth(parsed):
+            return
         if parsed.path.startswith("/api/plants/"):
             plant_id = int(parsed.path.rsplit("/", 1)[1])
             with connect() as conn:
@@ -2972,6 +3163,8 @@ def save_balcony(payload: dict) -> None:
     amount_percent = payload.get("watering_amount_percent")
     calibration_percent = payload.get("water_model_calibration_percent")
     refill_enabled = payload.get("refill_automation_enabled")
+    refill_times = payload.get("refill_schedule_times")
+    refill_cooldown = payload.get("refill_cooldown_minutes_per_liter")
     if amount_percent is not None:
         amount_percent = float(amount_percent)
         if not MIN_WATERING_AMOUNT_PERCENT <= amount_percent <= MAX_WATERING_AMOUNT_PERCENT:
@@ -3036,6 +3229,10 @@ def save_balcony(payload: dict) -> None:
         save_water_model_calibration_percent(calibration_percent)
     if refill_enabled is not None:
         save_refill_automation_enabled(refill_enabled)
+    if refill_times is not None:
+        save_refill_schedule_times(refill_times)
+    if refill_cooldown is not None:
+        save_refill_cooldown_minutes_per_liter(refill_cooldown)
 
 
 def add_plant(payload: dict) -> int:
@@ -3133,12 +3330,12 @@ def mark_refill_run(source: str = "home_assistant") -> dict:
         source = str(pending.get("source", "manual"))
     elif not refill["enabled"]:
         raise ValueError("Automatisches Nachfüllen ist deaktiviert")
-    elif refill["already_done"]:
-        raise ValueError("Nachfüllung für diesen Verbrauchstag wurde bereits verbucht")
+    elif refill["cooldown_active"]:
+        raise ValueError(refill["summary"] or "Nachfüllung ist vorübergehend gesperrt")
     transferred_ml = int(refill["planned_transfer_ml"])
     if transferred_ml <= 0:
         raise ValueError(refill["summary"] or "Keine Nachfüllung nötig")
-    now = now_iso()
+    now = local_now(str(state["balcony"].get("timezone_name", "Europe/Berlin"))).astimezone(timezone.utc).isoformat()
     with connect() as conn:
         conn.execute(
             """
