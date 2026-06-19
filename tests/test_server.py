@@ -1,4 +1,3 @@
-import base64
 import tempfile
 import unittest
 from datetime import datetime
@@ -22,25 +21,6 @@ class WateringPlannerTests(unittest.TestCase):
         server.DATA_DIR = self.original_data_dir
         server.DB_PATH = self.original_db_path
         self.tmp.cleanup()
-
-    def test_auth_is_disabled_without_password(self):
-        with patch.dict("os.environ", {"WATERING_PLANNER_PASSWORD": ""}):
-            self.assertFalse(server.auth_enabled())
-            self.assertTrue(server.request_authenticated({}))
-
-    def test_auth_accepts_only_configured_basic_credentials(self):
-        correct = base64.b64encode(b"admin:secret").decode("ascii")
-        wrong = base64.b64encode(b"admin:wrong").decode("ascii")
-
-        with patch.dict(
-            "os.environ",
-            {"WATERING_PLANNER_USERNAME": "admin", "WATERING_PLANNER_PASSWORD": "secret"},
-        ):
-            self.assertTrue(server.auth_enabled())
-            self.assertFalse(server.request_authenticated({}))
-            self.assertFalse(server.request_authenticated({"Authorization": f"Basic {wrong}"}))
-            self.assertFalse(server.request_authenticated({"Authorization": "Basic not-base64"}))
-            self.assertTrue(server.request_authenticated({"Authorization": f"Basic {correct}"}))
 
     def test_homekit_evaluation_contains_remaining_cycles(self):
         result = server.evaluate(temperature_c=26, rain_mm=0.5, wind_kmh=8, slot="morning", sunshine_hours=7)

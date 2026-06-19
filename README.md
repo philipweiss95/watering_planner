@@ -34,7 +34,7 @@ http://NAS-IP:8080
 
 Die Datenbank bleibt durch das Volume `./data:/app/data` erhalten. Die vollständige Synology-Anleitung steht unter [docs/synology-docker.md](docs/synology-docker.md). Für Docker Compose und den Synology Container Manager gibt es genau eine Projektdatei: `docker-compose.yml`. Private Werte werden auf der NAS in `.env.synology` hinterlegt.
 
-Wenn die App außerhalb des Heimnetzes erreichbar ist, setze in `.env.synology` unbedingt `WATERING_PLANNER_PASSWORD` und veröffentliche sie nur über HTTPS, zum Beispiel über den Synology Reverse Proxy. Der eingebaute Schutz ist HTTP Basic Auth; ohne HTTPS wäre das Passwort auf dem Transportweg nicht ausreichend geschützt.
+Wenn die App außerhalb des Heimnetzes erreichbar ist, veröffentliche sie nur über HTTPS und mit Zugriffsschutz deines Reverse Proxys oder Netzwerks. Der Planner selbst hat keinen eingebauten Passwortschutz mehr.
 
 Für die lokale Pumpensteuerung mit Meross Matter empfiehlt sich Home Assistant OS als VM und der Planer als separater Container auf der NAS. Die Anleitung steht unter [docs/home-assistant-vm.md](docs/home-assistant-vm.md). Direkt nutzbare Vorlagen liegen unter [home-assistant/configuration.yaml](home-assistant/configuration.yaml) und [home-assistant/automations.yaml](home-assistant/automations.yaml).
 

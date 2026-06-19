@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import base64
-import binascii
-import hmac
 import json
 import math
 import os
@@ -2871,46 +2868,6 @@ def send_json(handler: SimpleHTTPRequestHandler, payload: dict, status: HTTPStat
     handler.wfile.write(body)
 
 
-def auth_username() -> str:
-    return os.environ.get("WATERING_PLANNER_USERNAME", "admin").strip() or "admin"
-
-
-def auth_password() -> str:
-    return os.environ.get("WATERING_PLANNER_PASSWORD", "").strip()
-
-
-def auth_enabled() -> bool:
-    return bool(auth_password())
-
-
-def request_authenticated(headers) -> bool:
-    password = auth_password()
-    if not password:
-        return True
-    header = str(headers.get("Authorization", "")).strip()
-    if not header.lower().startswith("basic "):
-        return False
-    try:
-        decoded = base64.b64decode(header.split(" ", 1)[1], validate=True).decode("utf-8")
-    except (binascii.Error, ValueError, UnicodeDecodeError):
-        return False
-    username, separator, supplied_password = decoded.partition(":")
-    if not separator:
-        return False
-    return hmac.compare_digest(username, auth_username()) and hmac.compare_digest(supplied_password, password)
-
-
-def send_auth_required(handler: SimpleHTTPRequestHandler) -> None:
-    body = b"Authentication required\n"
-    handler.send_response(HTTPStatus.UNAUTHORIZED)
-    handler.send_header("WWW-Authenticate", 'Basic realm="Watering Planner", charset="UTF-8"')
-    handler.send_header("Content-Type", "text/plain; charset=utf-8")
-    handler.send_header("Cache-Control", "no-store")
-    handler.send_header("Content-Length", str(len(body)))
-    handler.end_headers()
-    handler.wfile.write(body)
-
-
 class AppHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(PUBLIC_DIR), **kwargs)
@@ -2925,20 +2882,10 @@ class AppHandler(SimpleHTTPRequestHandler):
         self.send_header("Permissions-Policy", "geolocation=(self)")
         super().end_headers()
 
-    def require_auth(self, parsed) -> bool:
-        if parsed.path == "/api/health":
-            return True
-        if request_authenticated(self.headers):
-            return True
-        send_auth_required(self)
-        return False
-
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/api/health":
-            send_json(self, {"ok": True, "auth_enabled": auth_enabled()})
-            return
-        if not self.require_auth(parsed):
+            send_json(self, {"ok": True})
             return
         if parsed.path == "/api/state":
             send_json(self, get_state())
@@ -2970,8 +2917,6 @@ class AppHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
-        if not self.require_auth(parsed):
-            return
         try:
             if parsed.path == "/api/balcony":
                 payload = read_json(self)
@@ -3096,8 +3041,6 @@ class AppHandler(SimpleHTTPRequestHandler):
 
     def do_PUT(self) -> None:
         parsed = urlparse(self.path)
-        if not self.require_auth(parsed):
-            return
         try:
             if parsed.path.startswith("/api/plants/"):
                 plant_id = int(parsed.path.rsplit("/", 1)[1])
@@ -3111,8 +3054,6 @@ class AppHandler(SimpleHTTPRequestHandler):
 
     def do_DELETE(self) -> None:
         parsed = urlparse(self.path)
-        if not self.require_auth(parsed):
-            return
         if parsed.path.startswith("/api/plants/"):
             plant_id = int(parsed.path.rsplit("/", 1)[1])
             with connect() as conn:

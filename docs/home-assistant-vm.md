@@ -94,18 +94,6 @@ Verwende möglichst die feste LAN-IP von Home Assistant statt `homeassistant.loc
 Verwende für `WEBHOOK-ID` eine zufällige, nicht erratbare Zeichenfolge und trage exakt denselben Wert in `home-assistant/automations.yaml` unter `webhook_id` ein. Eine neue ID erzeugst du zum Beispiel mit `uuidgen | tr '[:upper:]' '[:lower:]' | tr -d '-'`.
 Alternativ öffnest du nach dem Import in Home Assistant die Automation **Bewaesserung - Manueller Sofortlauf**, bearbeitest den Webhook-Trigger und verwendest die dort angezeigte bzw. neu erzeugte Webhook-ID. Trage genau diese private ID anschließend in `.env.synology` auf der NAS ein. Eine ID aus einer README, einem öffentlichen Repository oder einem Chat nicht übernehmen.
 
-Wenn du `WATERING_PLANNER_PASSWORD` gesetzt hast, braucht Home Assistant ebenfalls den Basic-Auth-Header für Planner-Anfragen. Erzeuge ihn mit demselben Benutzer und Passwort:
-
-```bash
-printf 'admin:DEIN-PLANNER-PASSWORT' | base64
-```
-
-Trage den Wert in Home Assistant unter `/config/secrets.yaml` ein:
-
-```yaml
-watering_planner_auth_header: "Basic BASE64-WERT"
-```
-
 4. Compose-Datei: `docker-compose.yml`
 5. Projekt starten
 
