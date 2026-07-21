@@ -1141,21 +1141,6 @@ def delivered_ml_for_local_date(day: date, timezone_name: str = "Europe/Berlin")
         return int(row["delivered_ml"])
 
 
-def consumed_ml_for_local_date(day: date, timezone_name: str = "Europe/Berlin") -> int:
-    tzinfo = local_now(timezone_name).tzinfo
-    start, end = local_day_utc_bounds(day, tzinfo)
-    factor = main_pump_calibration_factor()
-    with connect() as conn:
-        row = conn.execute(
-            """
-            SELECT COALESCE(SUM(COALESCE(actual_consumed_ml, ROUND(delivered_ml * ?))), 0) AS consumed_ml
-            FROM watering_events WHERE ran_at >= ? AND ran_at < ?
-            """,
-            (factor, start.isoformat(), end.isoformat()),
-        ).fetchone()
-        return int(row["consumed_ml"])
-
-
 def refill_event_for_target_date(target_date: date, window_label: str = "") -> dict | None:
     with connect() as conn:
         where = "target_date = ?"
@@ -2473,7 +2458,6 @@ def refill_status(balcony: dict) -> dict:
     timezone_name = str(balcony.get("timezone_name", "Europe/Berlin"))
     now = local_now(timezone_name)
     target_date = now.date()
-    consumption_date = target_date - timedelta(days=1)
     enabled = refill_automation_enabled()
     schedule_times = refill_schedule_times()
     main_capacity = max(int(balcony.get("tank_capacity_ml", 0)), 0)
@@ -2482,7 +2466,7 @@ def refill_status(balcony: dict) -> dict:
     refill_current = max(int(balcony.get("refill_tank_current_ml", 0)), 0)
     pump_ml_per_min = max(int(balcony.get("refill_pump_ml_per_min", 0)), 0)
     main_missing_ml = max(0, main_capacity - main_current)
-    requested_ml = consumed_ml_for_local_date(consumption_date, timezone_name)
+    requested_ml = main_missing_ml
     target_transfer_ml = math.ceil(requested_ml * REFILL_TRANSFER_FRACTION)
     transferable_ml = min(target_transfer_ml, main_missing_ml, refill_current)
     duration_seconds = math.ceil(transferable_ml / pump_ml_per_min * 60) if pump_ml_per_min and transferable_ml else 0
@@ -2507,8 +2491,6 @@ def refill_status(balcony: dict) -> dict:
         summary = "Automatisches Nachfüllen ist deaktiviert."
     elif pump_ml_per_min <= 0:
         summary = "Durchsatz der Nachfüllpumpe fehlt."
-    elif requested_ml <= 0:
-        summary = f"Für {consumption_date.strftime('%d.%m.')} wurde kein Verbrauch verbucht."
     elif main_missing_ml <= 0:
         summary = "Haupttank ist voll."
     elif refill_current <= 0:
@@ -2527,7 +2509,6 @@ def refill_status(balcony: dict) -> dict:
         "run_now": run_now,
         "enabled": enabled,
         "target_date": target_date.isoformat(),
-        "consumption_date": consumption_date.isoformat(),
         "scheduled_time": (active_window or next_window).strftime("%H:%M"),
         "scheduled_times": schedule_times,
         "active_window": active_window_label,

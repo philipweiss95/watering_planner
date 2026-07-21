@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Terrassen-Bewässerungsplaner</title>
-    <link rel="stylesheet" href="/styles.css?v=1.0.0">
+    <link rel="stylesheet" href="/styles.css?v=1.0.1">
   </head>
   <body>
     <header class="topbar">
@@ -241,7 +241,7 @@
                   <span class="toggle-switch" aria-hidden="true"></span>
                 </label>
               </div>
-              <p class="field-help">Die Automatik läuft fest um <code>01:00</code> und <code>06:00</code>. Jeder Lauf ersetzt die Hälfte des am Vortag verbuchten, geeichten Haupttankverbrauchs.</p>
+              <p class="field-help">Die Automatik läuft fest um <code>01:00</code> und <code>06:00</code>. Jeder Lauf füllt die Hälfte des zu diesem Zeitpunkt im Haupttank fehlenden Wassers nach.</p>
             </fieldset>
 
             <fieldset class="settings-group calibration-settings">
@@ -273,7 +273,7 @@
                   <p class="eyebrow">System</p>
                   <h3>Updates</h3>
                 </div>
-                <strong class="setting-value" id="appVersion">v1.0.0</strong>
+                <strong class="setting-value" id="appVersion">v1.0.1</strong>
               </div>
               <p class="field-help" id="updateNotice">Der interne Update-Dienst wird geprüft.</p>
               <div class="settings-grid" id="updateSetup">
@@ -445,6 +445,6 @@
       </div>
     </main>
 
-    <script src="/app.js?v=1.0.0"></script>
+    <script src="/app.js?v=1.0.1"></script>
   </body>
 </html>

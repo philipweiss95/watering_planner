@@ -22,18 +22,6 @@ class WateringPlannerTests(unittest.TestCase):
         server.DB_PATH = self.original_db_path
         self.tmp.cleanup()
 
-    def record_previous_day_consumption(self, consumed_ml=2000, nominal_ml=None):
-        nominal_ml = consumed_ml if nominal_ml is None else nominal_ml
-        with server.connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO watering_events
-                    (ran_at, delivered_ml, actual_consumed_ml, temperature_c, rain_mm, source)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                ("2026-06-02T10:00:00+00:00", nominal_ml, consumed_ml, 24, 0, "test"),
-            )
-
     def test_homekit_evaluation_contains_remaining_cycles(self):
         result = server.evaluate(temperature_c=26, rain_mm=0.5, wind_kmh=8, slot="morning", sunshine_hours=7)
 
@@ -132,19 +120,25 @@ class WateringPlannerTests(unittest.TestCase):
         self.assertEqual(state["balcony"]["refill_pump_ml_per_min"], 2000)
         self.assertEqual(state["balcony"]["refill_tank_current_ml"], 28000)
 
-    def test_refill_uses_actual_calibrated_consumption_not_plant_ml(self):
-        self.record_previous_day_consumption(consumed_ml=2400, nominal_ml=2000)
+    def test_refill_uses_current_main_tank_gap_not_previous_consumption(self):
         with server.connect() as conn:
             conn.execute("UPDATE balcony_settings SET tank_current_ml = tank_capacity_ml - 3000 WHERE id = 1")
+            conn.execute(
+                """
+                INSERT INTO watering_events
+                    (ran_at, delivered_ml, actual_consumed_ml, temperature_c, rain_mm, source)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                ("2026-06-02T10:00:00+00:00", 2000, 2400, 24, 0, "test"),
+            )
         with patch("server.local_now", return_value=datetime(2026, 6, 3, 1, 5, tzinfo=ZoneInfo("Europe/Berlin"))):
             refill = server.refill_status(server.get_state()["balcony"])
 
-        self.assertEqual(refill["requested_ml"], 2400)
-        self.assertEqual(refill["target_transfer_ml"], 1200)
+        self.assertEqual(refill["requested_ml"], 3000)
+        self.assertEqual(refill["target_transfer_ml"], 1500)
 
-    def test_refill_status_uses_half_previous_day_consumption_at_one(self):
+    def test_refill_status_uses_half_current_main_tank_gap_at_one(self):
         now = datetime(2026, 6, 3, 1, 5, tzinfo=ZoneInfo("Europe/Berlin"))
-        self.record_previous_day_consumption(2000)
         with server.connect() as conn:
             conn.execute("UPDATE balcony_settings SET tank_current_ml = tank_capacity_ml - 2000 WHERE id = 1")
 
@@ -153,7 +147,6 @@ class WateringPlannerTests(unittest.TestCase):
 
         self.assertTrue(result["refill"]["run_now"])
         self.assertEqual(result["refill"]["target_date"], "2026-06-03")
-        self.assertEqual(result["refill"]["consumption_date"], "2026-06-02")
         self.assertEqual(result["refill"]["requested_ml"], 2000)
         self.assertEqual(result["refill"]["target_transfer_ml"], 1000)
         self.assertEqual(result["refill"]["planned_transfer_ml"], 1000)
@@ -161,7 +154,6 @@ class WateringPlannerTests(unittest.TestCase):
         self.assertFalse(result["refill"]["cooldown_active"])
 
     def test_refill_status_also_runs_at_six(self):
-        self.record_previous_day_consumption(2000)
         now = datetime(2026, 6, 3, 6, 5, tzinfo=ZoneInfo("Europe/Berlin"))
         with server.connect() as conn:
             conn.execute("UPDATE balcony_settings SET tank_current_ml = tank_capacity_ml - 2000 WHERE id = 1")
@@ -181,7 +173,6 @@ class WateringPlannerTests(unittest.TestCase):
         self.assertEqual(result["refill"]["active_window"], "06:00")
 
     def test_refill_window_is_idempotent_and_second_window_remains_available(self):
-        self.record_previous_day_consumption(2000)
         with server.connect() as conn:
             conn.execute("UPDATE balcony_settings SET tank_current_ml = tank_capacity_ml - 2000 WHERE id = 1")
 
@@ -196,7 +187,7 @@ class WateringPlannerTests(unittest.TestCase):
         self.assertEqual(first["planned_transfer_ml"], 1000)
         self.assertTrue(released["run_now"])
         self.assertEqual(released["active_window"], "06:00")
-        self.assertEqual(second["planned_transfer_ml"], 1000)
+        self.assertEqual(second["planned_transfer_ml"], 500)
 
     def test_refill_schedule_times_are_fixed(self):
         server.save_refill_schedule_times(["05:30", "21:15"])
@@ -217,7 +208,6 @@ class WateringPlannerTests(unittest.TestCase):
         self.assertFalse(result["refill"]["run_now"])
 
     def test_mark_refill_moves_water_between_tanks_once(self):
-        self.record_previous_day_consumption(2000)
         now = datetime(2026, 6, 3, 1, 5, tzinfo=ZoneInfo("Europe/Berlin"))
         with server.connect() as conn:
             conn.execute("UPDATE balcony_settings SET tank_current_ml = tank_capacity_ml - 2000 WHERE id = 1")
@@ -234,7 +224,6 @@ class WateringPlannerTests(unittest.TestCase):
         self.assertEqual(after["refill_tank_current_ml"], before["refill_tank_current_ml"] - 1000)
 
     def test_refill_is_limited_by_reservoir_tank(self):
-        self.record_previous_day_consumption(2000)
         now = datetime(2026, 6, 3, 1, 5, tzinfo=ZoneInfo("Europe/Berlin"))
         with server.connect() as conn:
             conn.execute(
@@ -307,7 +296,6 @@ class WateringPlannerTests(unittest.TestCase):
         self.assertTrue(result["manual_refill"]["available"])
 
     def test_refill_status_catches_up_missed_window(self):
-        self.record_previous_day_consumption(2000)
         now = datetime(2026, 6, 3, 4, 30, tzinfo=ZoneInfo("Europe/Berlin"))
         with server.connect() as conn:
             conn.execute("UPDATE balcony_settings SET tank_current_ml = tank_capacity_ml - 2000 WHERE id = 1")
@@ -324,7 +312,6 @@ class WateringPlannerTests(unittest.TestCase):
         self.assertIn("Nachfüllbedarf besteht", status["summary"])
 
     def test_refill_status_allows_second_window_after_first_refill(self):
-        self.record_previous_day_consumption(2000)
         first_window = datetime(2026, 6, 3, 1, 5, tzinfo=ZoneInfo("Europe/Berlin"))
         second_window = datetime(2026, 6, 3, 6, 15, tzinfo=ZoneInfo("Europe/Berlin"))
         with server.connect() as conn:
@@ -339,8 +326,8 @@ class WateringPlannerTests(unittest.TestCase):
         self.assertTrue(status["run_now"])
         self.assertFalse(status["catch_up"])
         self.assertEqual(status["window_label"], "06:00")
-        self.assertEqual(status["planned_transfer_ml"], 1000)
-        self.assertEqual(status["duration_seconds"], 60)
+        self.assertEqual(status["planned_transfer_ml"], 500)
+        self.assertEqual(status["duration_seconds"], 30)
 
     def test_depletion_forecast_reports_when_all_tanks_run_empty(self):
         now = datetime(2026, 6, 3, 6, 30, tzinfo=ZoneInfo("Europe/Berlin"))
@@ -520,7 +507,7 @@ class WateringPlannerTests(unittest.TestCase):
         events = server.watering_events(limit=3)
         self.assertEqual(events[0]["event_type"], "tank_fill")
         self.assertEqual(events[1]["event_type"], "refill")
-        self.assertEqual(events[1]["amount_ml"], 60)
+        self.assertEqual(events[1]["amount_ml"], 500)
         self.assertIn("nachgefüllt", events[1]["detail"])
 
     def test_manual_weather_payload_does_not_fetch_network(self):
