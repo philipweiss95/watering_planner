@@ -2,6 +2,11 @@
 
 Alle stabilen Änderungen am Watering Planner werden in dieser Datei dokumentiert.
 
+## [1.0.3] - 2026-07-21
+
+- Synology-Updater erkennt die tatsächliche Compose-Projektkennung der laufenden Container aus deren Docker-Labels.
+- Konflikte mit den fest benannten Containern `watering-planner` und `watering-planner-updater` beim Update und beim Rollback behoben.
+
 ## [1.0.2] - 2026-07-21
 
 - Updater aus den Einstellungen auf die Info-Seite verschoben.

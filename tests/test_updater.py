@@ -3,6 +3,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 
 UPDATER_PATH = Path(__file__).resolve().parents[1] / "updater" / "updater.py"
@@ -40,6 +41,25 @@ class UpdaterTests(unittest.TestCase):
         self.assertIn("/volume1/docker/watering-planner/data:/app/data", content)
         self.assertIn("/volume1/docker/watering-planner:/project", content)
         self.assertIn("/var/run/docker.sock:/var/run/docker.sock", content)
+
+    def test_compose_uses_project_label_from_synology_container(self):
+        commands = []
+
+        def fake_run(command, timeout=600):
+            commands.append(command)
+            if command[:3] == ["docker", "inspect", "--format"]:
+                return "container-manager-project"
+            return ""
+
+        with patch.object(updater, "run", side_effect=fake_run):
+            updater.compose(["up", "-d", "watering-planner"], Path("/data/update/runtime.yml"))
+
+        compose_command = commands[-1]
+        self.assertEqual(compose_command[compose_command.index("--project-name") + 1], "container-manager-project")
+
+    def test_compose_project_falls_back_when_containers_have_no_project_label(self):
+        with patch.object(updater, "run", return_value=""):
+            self.assertEqual(updater.compose_project_name(), "watering-planner")
 
     def test_release_notes_use_only_requested_changelog_version(self):
         changelog = """# Changelog

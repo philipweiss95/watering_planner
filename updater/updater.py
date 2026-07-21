@@ -23,7 +23,9 @@ from urllib.request import Request, urlopen
 PORT = int(os.environ.get("UPDATER_PORT", "3188"))
 DATA_DIR = Path(os.environ.get("UPDATER_DATA_DIR", "/data/update"))
 PROJECT_DIR = Path(os.environ.get("UPDATER_PROJECT_DIR", "/project"))
-CONTAINER_NAME = os.environ.get("UPDATER_CONTAINER_NAME", "watering-planner-updater")
+UPDATER_CONTAINER_NAME = os.environ.get("UPDATER_CONTAINER_NAME", "watering-planner-updater")
+PLANNER_CONTAINER_NAME = os.environ.get("PLANNER_CONTAINER_NAME", "watering-planner")
+DEFAULT_COMPOSE_PROJECT = os.environ.get("COMPOSE_PROJECT_NAME", "watering-planner")
 CONFIG_PATH = DATA_DIR / "config.json"
 STATE_PATH = DATA_DIR / "status.json"
 SHARED_TOKEN_PATH = Path("/data/.updater-token")
@@ -156,12 +158,25 @@ def run(command: list[str], timeout: int = 600) -> str:
 
 
 def host_project_dir() -> str:
-    raw = run(["docker", "inspect", "--format", "{{json .Mounts}}", CONTAINER_NAME])
+    raw = run(["docker", "inspect", "--format", "{{json .Mounts}}", UPDATER_CONTAINER_NAME])
     mounts = json.loads(raw)
     for mount in mounts:
         if mount.get("Type") == "bind" and mount.get("Destination") == "/project":
             return str(mount["Source"])
     raise RuntimeError("updater_host_project_mount_missing")
+
+
+def compose_project_name() -> str:
+    """Use the Compose project that owns the running Synology containers."""
+    label_format = '{{ index .Config.Labels "com.docker.compose.project" }}'
+    for container_name in (UPDATER_CONTAINER_NAME, PLANNER_CONTAINER_NAME):
+        try:
+            project_name = run(["docker", "inspect", "--format", label_format, container_name]).strip()
+        except RuntimeError:
+            continue
+        if re.fullmatch(r"[a-z0-9][a-z0-9_-]*", project_name):
+            return project_name
+    return DEFAULT_COMPOSE_PROJECT
 
 
 def runtime_override(host_dir: str, path: Path) -> None:
@@ -181,7 +196,7 @@ def runtime_override(host_dir: str, path: Path) -> None:
 
 def compose(arguments: list[str], runtime_file: Path, timeout: int = 900) -> str:
     return run([
-        "docker", "compose", "--project-name", "watering-planner", "--project-directory", str(PROJECT_DIR),
+        "docker", "compose", "--project-name", compose_project_name(), "--project-directory", str(PROJECT_DIR),
         "-f", str(COMPOSE_FILE), "-f", str(runtime_file), *arguments,
     ], timeout=timeout)
 

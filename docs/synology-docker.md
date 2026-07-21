@@ -219,7 +219,7 @@ Im Synology **Container Manager** reicht ein normaler Neustart nicht aus, wenn s
 Du erkennst Version 1.0 an der ausgelieferten HTML-Datei:
 
 ```html
-<link rel="stylesheet" href="/styles.css?v=1.0.2">
+<link rel="stylesheet" href="/styles.css?v=1.0.3">
 ```
 
 Wenn im Browser oder per `curl http://NAS-IP:8080/` noch eine ältere `styles.css` ohne Versionsparameter oder ohne `app-nav` auftaucht, läuft auf der NAS noch ein altes Image oder ein Container aus einem anderen Projektordner.
@@ -227,7 +227,7 @@ Wenn im Browser oder per `curl http://NAS-IP:8080/` noch eine ältere `styles.cs
 Die Synology-Projektdatei verwendet deshalb ein versioniertes Image:
 
 ```yaml
-image: watering-planner:1.0.2
+image: watering-planner:1.0.3
 ```
 
 Wenn nach dem Kopieren der neuen Dateien weiter ein 5964-Byte-HTML ohne `app-nav` ausgeliefert wird, wurde die neue Compose-Datei noch nicht verwendet. In dem Fall im Container Manager:
@@ -239,7 +239,7 @@ Wenn nach dem Kopieren der neuen Dateien weiter ein 5964-Byte-HTML ohne `app-nav
 
 ```bash
 curl http://NAS-IP:8080/ | grep app-nav
-curl http://NAS-IP:8080/ | grep 'styles.css?v=1.0.2'
+curl http://NAS-IP:8080/ | grep 'styles.css?v=1.0.3'
 ```
 
 ## Verwaisten Container-Manager-Eintrag reparieren
