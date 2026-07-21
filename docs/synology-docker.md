@@ -101,7 +101,7 @@ Wenn Port `8080` schon belegt ist, ändere die linke Portnummer in `docker-compo
 2. Öffne **Projekt > Erstellen**. Verwende nicht den Bereich **Container > Erstellen**.
 3. Wähle als Projektpfad den bereits vollständig befüllten Ordner, zum Beispiel `/volume1/docker/watering-planner`.
 4. Verwende als Quelle die Datei `docker-compose.yml`.
-5. Kontrolliere in der YAML-Vorschau, dass `image: watering-planner:20260602-ui13` enthalten ist.
+5. Kontrolliere in der YAML-Vorschau, dass die Dienste `watering-planner` und `updater` enthalten sind.
 6. Starte das Projekt.
 
 Die übrigen Dateien müssen in diesem Assistenten nicht einzeln angezeigt werden. Entscheidend ist, dass sie vorher im Projektpfad liegen: Docker verwendet diesen Ordner als Build-Kontext für `build: .`.
@@ -185,7 +185,19 @@ cp data/watering.sqlite3 data/watering.sqlite3.backup
 docker compose -f docker-compose.yml up -d
 ```
 
-## Updates
+## Updates ab Version 1.0
+
+Der Compose-Stack startet einen zweiten, ausschließlich intern erreichbaren Dienst `watering-planner-updater`. Öffne in der Weboberfläche **Einstellungen > Updates**, trage `philipweiss95/watering_planner` und einen GitHub-Token mit Leserechten auf das Repository ein und speichere den Zugang. Danach kann die Oberfläche das neueste stabile Release prüfen und installieren.
+
+Der Updater benötigt `/var/run/docker.sock`, weil er die Planner-Images auf der NAS neu baut und Container austauscht. Wer einem Container keinen Docker-Zugriff geben möchte, entfernt den Dienst `updater` und aktualisiert weiterhin manuell. Datenbank, Updater-Konfiguration und Rollback-Sicherungen bleiben in `./data` erhalten.
+
+Beim einmaligen Umstieg von einer älteren Compose-Datei muss das komplette Projekt mit beiden Diensten neu bereitgestellt werden:
+
+```bash
+docker compose -f docker-compose.yml up -d --build
+```
+
+Danach erfolgen stabile Updates über die Weboberfläche. Als manuelle Alternative gilt weiterhin:
 
 Nach Codeänderungen oder nach dem Kopieren einer neuen Version:
 
@@ -204,10 +216,10 @@ Im Synology **Container Manager** reicht ein normaler Neustart nicht aus, wenn s
 4. Falls Container Manager weiter die alte Oberfläche zeigt: das alte `watering-planner`-Image löschen und das Projekt danach erneut erstellen.
 5. Im Browser hart neu laden.
 
-Du erkennst die aktuelle Oberfläche daran, dass die ausgelieferte HTML-Datei diese Zeile enthält:
+Du erkennst Version 1.0 an der ausgelieferten HTML-Datei:
 
 ```html
-<link rel="stylesheet" href="/styles.css?v=20260602-1">
+<link rel="stylesheet" href="/styles.css?v=1.0.0">
 ```
 
 Wenn im Browser oder per `curl http://NAS-IP:8080/` noch eine ältere `styles.css` ohne Versionsparameter oder ohne `app-nav` auftaucht, läuft auf der NAS noch ein altes Image oder ein Container aus einem anderen Projektordner.
@@ -215,7 +227,7 @@ Wenn im Browser oder per `curl http://NAS-IP:8080/` noch eine ältere `styles.cs
 Die Synology-Projektdatei verwendet deshalb ein versioniertes Image:
 
 ```yaml
-image: watering-planner:20260602-ui13
+image: watering-planner:1.0.0
 ```
 
 Wenn nach dem Kopieren der neuen Dateien weiter ein 5964-Byte-HTML ohne `app-nav` ausgeliefert wird, wurde die neue Compose-Datei noch nicht verwendet. In dem Fall im Container Manager:
@@ -227,7 +239,7 @@ Wenn nach dem Kopieren der neuen Dateien weiter ein 5964-Byte-HTML ohne `app-nav
 
 ```bash
 curl http://NAS-IP:8080/ | grep app-nav
-curl http://NAS-IP:8080/ | grep 'styles.css?v=20260602-1'
+curl http://NAS-IP:8080/ | grep 'styles.css?v=1.0.0'
 ```
 
 ## Verwaisten Container-Manager-Eintrag reparieren

@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Terrassen-Bewässerungsplaner</title>
-    <link rel="stylesheet" href="/styles.css?v=20260613-refill-log-2">
+    <link rel="stylesheet" href="/styles.css?v=1.0.0">
   </head>
   <body>
     <header class="topbar">
@@ -232,12 +232,8 @@
                   <input type="number" name="refill_pump_ml_per_min" min="0" step="1">
                 </label>
                 <label>
-                  Nachfüllzeiten
-                  <input type="text" name="refill_schedule_times" inputmode="numeric" placeholder="03:00, 06:00">
-                </label>
-                <label>
-                  Sperre pro Liter in Minuten
-                  <input type="number" name="refill_cooldown_minutes_per_liter" min="1" max="720" step="1">
+                  Verbrauchsfaktor der Wasserpumpe
+                  <input type="number" name="main_pump_calibration_factor" min="0.1" max="10" step="0.001">
                 </label>
                 <label class="toggle-field">
                   <span>Automatisch aus Vorratstank nachfüllen</span>
@@ -245,6 +241,58 @@
                   <span class="toggle-switch" aria-hidden="true"></span>
                 </label>
               </div>
+              <p class="field-help">Die Automatik läuft fest um <code>01:00</code> und <code>06:00</code>. Jeder Lauf ersetzt die Hälfte des am Vortag verbuchten, geeichten Haupttankverbrauchs.</p>
+            </fieldset>
+
+            <fieldset class="settings-group calibration-settings">
+              <div class="settings-group-heading">
+                <div>
+                  <p class="eyebrow">Messung</p>
+                  <h3>Pumpen eichen</h3>
+                </div>
+              </div>
+              <p class="field-help">Vor der ersten Messreihe den jeweiligen Tank oben im Dashboard als voll markieren. Danach einige Zyklen laufen lassen, den echten Stand ablesen und hier eintragen.</p>
+              <div class="settings-grid">
+                <label>
+                  Gemessener Haupttankstand in Litern
+                  <input id="mainCalibrationLevel" type="number" min="0" step="0.001" placeholder="z. B. 7,850">
+                  <button id="calibrateMainButton" class="secondary small-button" type="button">Wasserpumpe eichen</button>
+                </label>
+                <label>
+                  Gemessener Vorratstankstand in Litern
+                  <input id="refillCalibrationLevel" type="number" min="0" max="30" step="0.001" placeholder="z. B. 27,400">
+                  <button id="calibrateRefillButton" class="secondary small-button" type="button">Nachfüllpumpe eichen</button>
+                </label>
+              </div>
+              <p class="field-help calibration-result" id="calibrationResult" aria-live="polite"></p>
+            </fieldset>
+
+            <fieldset class="settings-group update-settings">
+              <div class="settings-group-heading">
+                <div>
+                  <p class="eyebrow">System</p>
+                  <h3>Updates</h3>
+                </div>
+                <strong class="setting-value" id="appVersion">v1.0.0</strong>
+              </div>
+              <p class="field-help" id="updateNotice">Der interne Update-Dienst wird geprüft.</p>
+              <div class="settings-grid" id="updateSetup">
+                <label>
+                  GitHub-Repository
+                  <input id="updateRepository" type="text" value="philipweiss95/watering_planner" autocomplete="off">
+                </label>
+                <label>
+                  GitHub-Token
+                  <input id="updateGithubToken" type="password" autocomplete="new-password" placeholder="github_pat_…">
+                </label>
+              </div>
+              <div class="update-actions">
+                <button id="updateSetupButton" class="secondary" type="button">Updater einrichten</button>
+                <button id="updateCheckButton" class="secondary" type="button">Nach Updates suchen</button>
+                <button id="updateInstallButton" class="primary" type="button" disabled>Update installieren</button>
+              </div>
+              <p class="field-help" id="updateResult" aria-live="polite"></p>
+              <pre class="update-release-notes" id="updateReleaseNotes" hidden></pre>
             </fieldset>
 
             <fieldset class="settings-group">
@@ -397,6 +445,6 @@
       </div>
     </main>
 
-    <script src="/app.js?v=20260616-refill-cooldown-1"></script>
+    <script src="/app.js?v=1.0.0"></script>
   </body>
 </html>

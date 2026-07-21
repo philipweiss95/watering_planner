@@ -3,6 +3,10 @@ let latestEvaluation = null;
 let shortcuts = null;
 let wateringEvents = [];
 let editingPlantId = null;
+let updaterStatus = null;
+let updateCheck = null;
+let updatePollTimer = null;
+let updatePollAttempts = 0;
 
 const IGNORED_SUGGESTIONS_KEY = "wateringPlannerIgnoredSuggestions";
 
@@ -37,6 +41,7 @@ async function loadState() {
   await loadWateringEvents();
   renderState();
   await evaluateCurrent();
+  void refreshUpdaterStatus();
 }
 
 async function loadWateringEvents() {
@@ -65,9 +70,10 @@ function renderState() {
   balconyForm.elements.tank_capacity_liters.value = Number(state.balcony.tank_capacity_ml || 0) / 1000;
   balconyForm.elements.refill_pump_ml_per_min.value = Number(state.balcony.refill_pump_ml_per_min || 0);
   balconyForm.elements.refill_automation_enabled.checked = state.settings?.refill_automation_enabled !== false;
-  balconyForm.elements.refill_schedule_times.value = (state.settings?.refill_schedule_times || ["03:00", "06:00"]).join(", ");
-  balconyForm.elements.refill_cooldown_minutes_per_liter.value = state.settings?.refill_cooldown_minutes_per_liter ?? 30;
+  balconyForm.elements.main_pump_calibration_factor.value = state.settings?.main_pump_calibration_factor ?? 1;
   balconyForm.elements.watering_amount_percent.value = state.settings?.watering_amount_percent ?? 100;
+  $("#appVersion").textContent = `v${state.version || "1.0.0"}`;
+  renderCalibrationStatus();
 
   $("#outletEditor").innerHTML = state.outlets
     .map(
@@ -107,6 +113,87 @@ function renderState() {
   renderBalconyPlan();
   renderEvaluation(latestEvaluation);
   updateDerivedWaterPreview($("#plantForm"));
+}
+
+function renderCalibrationStatus(message = "") {
+  const main = state?.calibration?.main || {};
+  const refill = state?.calibration?.refill || {};
+  const latestMain = main.latest || {};
+  const latestRefill = refill.latest || {};
+  const parts = [
+    `Wasserpumpe: Faktor ${Number(main.factor || 1).toLocaleString("de-DE", { maximumFractionDigits: 4 })}`,
+    `Nachfüllpumpe: ${Number(state?.balcony?.refill_pump_ml_per_min || 0).toLocaleString("de-DE")} ml/min`,
+  ];
+  if (latestMain.calibrated_at) parts.push(`letzte Verbrauchsmessung ${formatDateTime(latestMain.calibrated_at)}`);
+  if (latestRefill.calibrated_at) parts.push(`letzte Durchflussmessung ${formatDateTime(latestRefill.calibrated_at)}`);
+  $("#calibrationResult").textContent = message || parts.join(" · ");
+}
+
+async function refreshUpdaterStatus() {
+  try {
+    updaterStatus = await api("/api/update/status");
+    renderUpdater();
+  } catch (error) {
+    updaterStatus = null;
+    $("#updateNotice").textContent = `Updater nicht erreichbar: ${formatUpdateError(error.message)}`;
+    $("#updateResult").textContent = "In Synology Container Manager muss der Dienst „updater“ gemeinsam mit dem Planner gestartet sein.";
+  }
+}
+
+function renderUpdater() {
+  const configured = Boolean(updaterStatus?.configured);
+  $("#updateRepository").value = updaterStatus?.repository || $("#updateRepository").value || "philipweiss95/watering_planner";
+  $("#updateNotice").textContent = configured
+    ? `Stabile GitHub-Releases aus ${updaterStatus.repository}; das Token bleibt ausschließlich im Datenvolume des Updaters.`
+    : "GitHub-Zugang noch nicht eingerichtet. Benötigt wird ein Token mit Lesezugriff auf das Repository.";
+  $("#updateSetupButton").textContent = configured ? "GitHub-Zugang speichern" : "Updater einrichten";
+  const release = updateCheck?.release;
+  const operation = updaterStatus?.lastOperation;
+  if (release) {
+    $("#updateResult").textContent = updateCheck.updateAvailable
+      ? `Stabile Version ${release.version} ist verfügbar.`
+      : `Installiert ist bereits die aktuelle stabile Version ${updateCheck.currentVersion}.`;
+  } else if (operation?.message) {
+    $("#updateResult").textContent = operation.message;
+  } else {
+    $("#updateResult").textContent = configured ? "Noch nicht nach Updates gesucht." : "";
+  }
+  $("#updateReleaseNotes").hidden = !release?.notes || !updateCheck?.updateAvailable;
+  $("#updateReleaseNotes").textContent = release?.notes || "";
+  const installing = operation?.status === "running";
+  $("#updateCheckButton").disabled = !configured || installing;
+  $("#updateInstallButton").disabled = !updateCheck?.updateAvailable || installing;
+}
+
+function formatUpdateError(message) {
+  const labels = {
+    updater_unavailable: "interner Update-Dienst nicht erreichbar",
+    updater_not_configured: "GitHub-Zugang fehlt",
+    updater_auth_required: "interne Updater-Authentifizierung fehlt",
+    github_token_invalid: "GitHub-Token ist ungültig oder abgelaufen",
+    github_access_forbidden: "GitHub-Token darf das Repository nicht lesen",
+    github_stable_release_missing_or_access_denied: "kein stabiles Release gefunden oder kein Zugriff",
+    release_assets_missing: "Release-Paket oder Prüfsumme fehlt",
+  };
+  return labels[message] || message;
+}
+
+function startUpdatePolling() {
+  if (updatePollTimer) window.clearTimeout(updatePollTimer);
+  updatePollAttempts = 0;
+  const poll = async () => {
+    updatePollAttempts += 1;
+    await refreshUpdaterStatus();
+    const operation = updaterStatus?.lastOperation;
+    if (operation?.status === "ok") {
+      window.location.reload();
+      return;
+    }
+    if ((!updaterStatus || operation?.status === "running") && updatePollAttempts < 120) {
+      updatePollTimer = window.setTimeout(poll, 2000);
+    }
+  };
+  updatePollTimer = window.setTimeout(poll, 1500);
 }
 
 function setActiveView(viewName) {
@@ -869,7 +956,7 @@ function renderCalculationFlow(result, urgentActions, changeActions) {
         <div>
           <strong>Heutige Entscheidung</strong>
           <p>${result.remaining_cycles_today} von ${result.recommended_cycles_today} Zyklen offen</p>
-          <small>${formatLiters(result.pump.delivered_if_remaining_ml)} noch geplant · Nachfüllung ${formatLiters(result.refill?.planned_transfer_ml || 0)} um ${result.refill?.scheduled_time || "03:00"}</small>
+          <small>${formatLiters(result.pump.delivered_if_remaining_ml)} noch geplant · Nachfüllung ${formatLiters(result.refill?.planned_transfer_ml || 0)} um ${result.refill?.scheduled_time || "01:00"}</small>
         </div>
       </article>
     </div>
@@ -962,7 +1049,7 @@ function renderDashboardCards(result, urgentActions, changeActions) {
       <div>
         <p class="metric-label">Vorratstank</p>
         <strong>${refillTank.percent ?? 0}%</strong>
-        <p class="metric-detail">${refill.summary || `${formatLiters(refill.planned_transfer_ml || 0)} um ${refill.scheduled_time || "03:00"}`}</p>
+        <p class="metric-detail">${refill.summary || `${formatLiters(refill.planned_transfer_ml || 0)} um ${refill.scheduled_time || "01:00"}`}</p>
       </div>
     </article>
     <article class="metric-card depletion-metric ${depletion.all_empty_at ? "warn" : "ok"}">
@@ -1383,16 +1470,12 @@ $("#balconyForm").addEventListener("submit", async (event) => {
     "longitude",
     "tank_capacity_liters",
     "refill_pump_ml_per_min",
-    "refill_cooldown_minutes_per_liter",
+    "main_pump_calibration_factor",
     "watering_amount_percent",
   ]);
   payload.tank_capacity_ml = Math.round(payload.tank_capacity_liters * 1000);
   payload.refill_tank_capacity_ml = 30000;
   payload.refill_automation_enabled = event.currentTarget.elements.refill_automation_enabled.checked;
-  payload.refill_schedule_times = String(payload.refill_schedule_times || "")
-    .split(/[;,]/)
-    .map((item) => item.trim())
-    .filter(Boolean);
   delete payload.tank_capacity_liters;
   payload.timezone_name = payload.timezone_name || Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/Berlin";
   payload.outlets = state.outlets.map((outlet) => ({
@@ -1420,6 +1503,80 @@ $("#balconyForm").addEventListener("submit", async (event) => {
 });
 
 $("#balconyForm").elements.watering_amount_percent.addEventListener("input", updateWateringAmountPreview);
+
+async function submitCalibration(kind) {
+  const isMain = kind === "main";
+  const input = $(isMain ? "#mainCalibrationLevel" : "#refillCalibrationLevel");
+  const button = $(isMain ? "#calibrateMainButton" : "#calibrateRefillButton");
+  const liters = Number(input.value);
+  if (!Number.isFinite(liters) || liters < 0) {
+    renderCalibrationStatus("Bitte einen gültigen gemessenen Füllstand in Litern eingeben.");
+    return;
+  }
+  button.disabled = true;
+  try {
+    state = await api(`/api/calibration/${kind}`, {
+      method: "POST",
+      body: JSON.stringify({ measured_level_ml: Math.round(liters * 1000) }),
+    });
+    input.value = "";
+    renderState();
+    await evaluateCurrent();
+    renderCalibrationStatus(isMain ? "Verbrauchsfaktor wurde aus der Messreihe neu berechnet." : "Fördermenge pro Minute wurde aus der Messreihe neu berechnet.");
+  } catch (error) {
+    renderCalibrationStatus(`Eichung nicht möglich: ${error.message}`);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+$("#calibrateMainButton").addEventListener("click", () => submitCalibration("main"));
+$("#calibrateRefillButton").addEventListener("click", () => submitCalibration("refill"));
+
+$("#updateSetupButton").addEventListener("click", async () => {
+  const button = $("#updateSetupButton");
+  button.disabled = true;
+  try {
+    await api("/api/update/setup", {
+      method: "POST",
+      body: JSON.stringify({
+        repository: $("#updateRepository").value.trim(),
+        githubToken: $("#updateGithubToken").value.trim(),
+      }),
+    });
+    $("#updateGithubToken").value = "";
+    await refreshUpdaterStatus();
+  } catch (error) {
+    $("#updateResult").textContent = `Einrichtung fehlgeschlagen: ${formatUpdateError(error.message)}`;
+  } finally {
+    button.disabled = false;
+  }
+});
+
+$("#updateCheckButton").addEventListener("click", async () => {
+  const button = $("#updateCheckButton");
+  button.disabled = true;
+  try {
+    updateCheck = await api("/api/update/check", { method: "POST", body: "{}" });
+    renderUpdater();
+  } catch (error) {
+    $("#updateResult").textContent = `Update-Prüfung fehlgeschlagen: ${formatUpdateError(error.message)}`;
+  } finally {
+    button.disabled = false;
+  }
+});
+
+$("#updateInstallButton").addEventListener("click", async () => {
+  if (!window.confirm(`Version ${updateCheck?.release?.version || ""} installieren? Der Planner-Container wird neu gestartet.`)) return;
+  try {
+    await api("/api/update/install", { method: "POST", body: JSON.stringify({ confirm: true }) });
+    $("#updateResult").textContent = "Update wurde gestartet. Der Planner wird nach der Installation automatisch neu verbunden.";
+    updateCheck = null;
+    startUpdatePolling();
+  } catch (error) {
+    $("#updateResult").textContent = `Installation fehlgeschlagen: ${formatUpdateError(error.message)}`;
+  }
+});
 
 $("#locateButton").addEventListener("click", () => {
   if (!navigator.geolocation) return;

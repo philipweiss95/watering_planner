@@ -1,0 +1,384 @@
+from __future__ import annotations
+
+import hashlib
+import hmac
+import json
+import os
+import re
+import shutil
+import subprocess
+import tarfile
+import tempfile
+import threading
+import time
+import zipfile
+from datetime import datetime, timezone
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path, PurePosixPath
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
+
+PORT = int(os.environ.get("UPDATER_PORT", "3188"))
+DATA_DIR = Path(os.environ.get("UPDATER_DATA_DIR", "/data/update"))
+PROJECT_DIR = Path(os.environ.get("UPDATER_PROJECT_DIR", "/project"))
+CONTAINER_NAME = os.environ.get("UPDATER_CONTAINER_NAME", "watering-planner-updater")
+CONFIG_PATH = DATA_DIR / "config.json"
+STATE_PATH = DATA_DIR / "status.json"
+SHARED_TOKEN_PATH = Path("/data/.updater-token")
+COMPOSE_FILE = PROJECT_DIR / "docker-compose.yml"
+ASSET_PREFIX = "watering-planner"
+MANAGED_PATHS = (
+    "server.py", "public", "updater", "home-assistant", "docs", "scripts", ".github",
+    "Dockerfile", "docker-compose.yml", ".dockerignore", ".gitignore", ".env.synology.example",
+    "README.md", "VERSION",
+)
+INSTALL_RUNNING = threading.Event()
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def read_json_file(path: Path, default):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return default
+
+
+def write_json_file(path: Path, value: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(f"{path.suffix}.tmp")
+    temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    temporary.chmod(0o600)
+    temporary.replace(path)
+
+
+def read_token() -> str:
+    try:
+        return SHARED_TOKEN_PATH.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def authorized(headers) -> bool:
+    expected = read_token()
+    received = str(headers.get("X-Watering-Planner-Updater-Token", ""))
+    return bool(expected and received and hmac.compare_digest(expected, received))
+
+
+def normalize_version(value: object) -> str:
+    version = str(value or "").strip().removeprefix("v")
+    return version if re.fullmatch(r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?", version) else ""
+
+
+def version_key(value: str) -> tuple:
+    base, _, prerelease = normalize_version(value).partition("-")
+    parts = tuple(int(item) for item in base.split(".")) if base else (0, 0, 0)
+    return (*parts, 1 if not prerelease else 0, prerelease)
+
+
+def github_request(url: str, token: str, accept: str = "application/vnd.github+json") -> bytes:
+    request = Request(
+        url,
+        headers={
+            "Accept": accept,
+            "Authorization": f"Bearer {token}",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "watering-planner-updater",
+        },
+    )
+    try:
+        with urlopen(request, timeout=120) as response:
+            return response.read()
+    except HTTPError as exc:
+        if exc.code == 401:
+            raise ValueError("github_token_invalid") from exc
+        if exc.code == 403:
+            raise ValueError("github_access_forbidden") from exc
+        if exc.code == 404:
+            raise ValueError("github_stable_release_missing_or_access_denied") from exc
+        raise ValueError(f"github_request_failed_{exc.code}") from exc
+    except URLError as exc:
+        raise ValueError("github_unavailable") from exc
+
+
+def github_json(url: str, token: str) -> dict:
+    return json.loads(github_request(url, token).decode("utf-8"))
+
+
+def latest_release() -> dict:
+    config = read_json_file(CONFIG_PATH, {})
+    repository = config.get("repository", "")
+    token = config.get("githubToken", "")
+    if not repository or not token:
+        raise ValueError("updater_not_configured")
+    release = github_json(f"https://api.github.com/repos/{repository}/releases/latest", token)
+    if release.get("draft") or release.get("prerelease"):
+        raise ValueError("latest_release_is_not_stable")
+    version = normalize_version(release.get("tag_name"))
+    if not version:
+        raise ValueError("invalid_release_version")
+    archive_name = f"{ASSET_PREFIX}-{version}.zip"
+    checksum_name = f"{archive_name}.sha256"
+    assets = {item.get("name"): item for item in release.get("assets", [])}
+    if archive_name not in assets or checksum_name not in assets:
+        raise ValueError("release_assets_missing")
+    return {
+        "version": version,
+        "tag": release.get("tag_name"),
+        "name": release.get("name") or f"v{version}",
+        "publishedAt": release.get("published_at"),
+        "notes": release.get("body") or "",
+        "archive": assets[archive_name],
+        "checksum": assets[checksum_name],
+    }
+
+
+def public_release(release: dict) -> dict:
+    return {key: release[key] for key in ("version", "tag", "name", "publishedAt", "notes")}
+
+
+def update_state(**values) -> dict:
+    state = read_json_file(STATE_PATH, {})
+    state.update(values, updatedAt=now_iso())
+    write_json_file(STATE_PATH, state)
+    return state
+
+
+def run(command: list[str], timeout: int = 600) -> str:
+    result = subprocess.run(command, check=False, capture_output=True, text=True, timeout=timeout)
+    if result.returncode:
+        raise RuntimeError(f"{' '.join(command)}: {result.stderr.strip()}")
+    return result.stdout.strip()
+
+
+def host_project_dir() -> str:
+    raw = run(["docker", "inspect", "--format", "{{json .Mounts}}", CONTAINER_NAME])
+    mounts = json.loads(raw)
+    for mount in mounts:
+        if mount.get("Type") == "bind" and mount.get("Destination") == "/project":
+            return str(mount["Source"])
+    raise RuntimeError("updater_host_project_mount_missing")
+
+
+def runtime_override(host_dir: str, path: Path) -> None:
+    content = (
+        "services:\n"
+        "  watering-planner:\n"
+        "    volumes:\n"
+        f"      - {json.dumps(host_dir + '/data:/app/data')}\n"
+        "  updater:\n"
+        "    volumes:\n"
+        f"      - {json.dumps(host_dir + ':/project')}\n"
+        f"      - {json.dumps(host_dir + '/data:/data')}\n"
+        "      - /var/run/docker.sock:/var/run/docker.sock\n"
+    )
+    path.write_text(content, encoding="utf-8")
+
+
+def compose(arguments: list[str], runtime_file: Path, timeout: int = 900) -> str:
+    return run([
+        "docker", "compose", "--project-name", "watering-planner", "--project-directory", str(PROJECT_DIR),
+        "-f", str(COMPOSE_FILE), "-f", str(runtime_file), *arguments,
+    ], timeout=timeout)
+
+
+def safe_zip_members(archive: zipfile.ZipFile, expected_root: str) -> list[zipfile.ZipInfo]:
+    members = archive.infolist()
+    prefix = f"{expected_root}/"
+    if not members:
+        raise ValueError("invalid_release_archive_layout")
+    for member in members:
+        path = PurePosixPath(member.filename)
+        if member.filename.startswith("/") or ".." in path.parts or not member.filename.startswith(prefix):
+            raise ValueError("invalid_release_archive_layout")
+    names = {member.filename.rstrip("/") for member in members}
+    for required in ("server.py", "public/index.html", "updater/Dockerfile", "docker-compose.yml", "VERSION"):
+        if f"{expected_root}/{required}" not in names:
+            raise ValueError(f"release_archive_missing_{required}")
+    return members
+
+
+def download_asset(asset: dict, token: str, destination: Path) -> None:
+    destination.write_bytes(github_request(asset["url"], token, "application/octet-stream"))
+
+
+def install_update(current_version: str) -> None:
+    try:
+        backup_path = None
+        runtime_file = None
+        try:
+            update_state(type="install", status="running", phase="release", step=1, totalSteps=8, currentVersion=current_version, message="Suche nach dem neuesten stabilen Release.")
+            release = latest_release()
+            if version_key(release["version"]) <= version_key(current_version):
+                update_state(status="ok", phase="complete", step=8, targetVersion=release["version"], message="Die installierte Version ist bereits aktuell.", finishedAt=now_iso())
+                return
+            config = read_json_file(CONFIG_PATH, {})
+            DATA_DIR.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(prefix="watering-update-", dir=DATA_DIR) as temporary:
+                work = Path(temporary)
+                archive_path = work / release["archive"]["name"]
+                checksum_path = work / release["checksum"]["name"]
+                update_state(phase="download", step=2, targetVersion=release["version"], message=f"Lade Release {release['version']} herunter.")
+                download_asset(release["archive"], config["githubToken"], archive_path)
+                download_asset(release["checksum"], config["githubToken"], checksum_path)
+                expected = re.search(r"[a-fA-F0-9]{64}", checksum_path.read_text(encoding="utf-8"))
+                actual = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+                if not expected or not hmac.compare_digest(expected.group(0).lower(), actual):
+                    raise ValueError("release_checksum_mismatch")
+                update_state(phase="verify", step=3, message="Prüfsumme und Paketinhalt sind gültig.")
+                expected_root = f"{ASSET_PREFIX}-{release['version']}"
+                extract_dir = work / "extract"
+                with zipfile.ZipFile(archive_path) as archive:
+                    safe_zip_members(archive, expected_root)
+                    archive.extractall(extract_dir)
+                source = extract_dir / expected_root
+                if (source / "VERSION").read_text(encoding="utf-8").strip() != release["version"]:
+                    raise ValueError("release_version_mismatch")
+                backups = DATA_DIR / "backups"
+                backups.mkdir(exist_ok=True)
+                backup_path = backups / f"watering-planner-{current_version or 'unknown'}-{int(time.time())}.tar.gz"
+                update_state(phase="backup", step=4, message="Sichere die bisherige Programmversion.")
+                with tarfile.open(backup_path, "w:gz") as tar:
+                    for entry in MANAGED_PATHS:
+                        candidate = PROJECT_DIR / entry
+                        if candidate.exists():
+                            tar.add(candidate, arcname=entry)
+                update_state(phase="files", step=5, message="Übernehme neue Programmdateien; Daten und Einstellungen bleiben erhalten.")
+                for entry in MANAGED_PATHS:
+                    target = PROJECT_DIR / entry
+                    incoming = source / entry
+                    if target.is_dir():
+                        shutil.rmtree(target)
+                    elif target.exists():
+                        target.unlink()
+                    if incoming.exists():
+                        shutil.copytree(incoming, target) if incoming.is_dir() else shutil.copy2(incoming, target)
+                runtime_file = DATA_DIR / f"runtime-{int(time.time())}.yml"
+                runtime_override(host_project_dir(), runtime_file)
+                update_state(phase="build", step=6, message="Baue das neue Container-Image.")
+                compose(["build", "--no-cache", "watering-planner", "updater"], runtime_file)
+                update_state(phase="restart", step=7, message="Starte den Planner neu und prüfe seinen Zustand.")
+                compose(["up", "-d", "--no-deps", "--force-recreate", "watering-planner"], runtime_file)
+                container_id = compose(["ps", "-q", "watering-planner"], runtime_file)
+                deadline = time.time() + 120
+                while time.time() < deadline:
+                    status = run(["docker", "inspect", "--format", "{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}", container_id])
+                    if status in {"healthy", "running"}:
+                        break
+                    if status in {"unhealthy", "exited", "dead"}:
+                        raise RuntimeError(f"watering_planner_container_{status}")
+                    time.sleep(2)
+                else:
+                    raise RuntimeError("watering_planner_health_timeout")
+                update_state(status="ok", phase="complete", step=8, message=f"Update auf {release['version']} erfolgreich installiert.", finishedAt=now_iso())
+                compose(["up", "-d", "--no-deps", "--force-recreate", "updater"], runtime_file)
+        except Exception as exc:
+            if backup_path and backup_path.exists():
+                try:
+                    for entry in MANAGED_PATHS:
+                        target = PROJECT_DIR / entry
+                        if target.is_dir():
+                            shutil.rmtree(target)
+                        elif target.exists():
+                            target.unlink()
+                    with tarfile.open(backup_path, "r:gz") as tar:
+                        tar.extractall(PROJECT_DIR, filter="data")
+                    if runtime_file and runtime_file.exists():
+                        compose(["build", "--no-cache", "watering-planner"], runtime_file)
+                        compose(["up", "-d", "--no-deps", "--force-recreate", "watering-planner"], runtime_file)
+                except Exception as rollback_error:
+                    exc = RuntimeError(f"{exc}; rollback_failed: {rollback_error}")
+            update_state(status="error", phase="error", message=str(exc), finishedAt=now_iso())
+        finally:
+            if runtime_file:
+                runtime_file.unlink(missing_ok=True)
+    finally:
+        INSTALL_RUNNING.clear()
+
+
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, format: str, *args) -> None:
+        print(f"[{self.log_date_time_string()}] {format % args}")
+
+    def send_json(self, status: int, payload: dict) -> None:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def payload(self) -> dict:
+        length = int(self.headers.get("Content-Length", "0"))
+        return json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+
+    def do_GET(self) -> None:
+        if self.path == "/health":
+            self.send_json(HTTPStatus.OK, {"ok": True})
+            return
+        if self.path == "/api/status":
+            config = read_json_file(CONFIG_PATH, {})
+            state = read_json_file(STATE_PATH, None)
+            self.send_json(HTTPStatus.OK, {"ok": True, "configured": bool(config.get("repository") and config.get("githubToken")), "repository": config.get("repository"), "channel": "stable", "lastOperation": state})
+            return
+        self.send_json(HTTPStatus.NOT_FOUND, {"reason": "not_found"})
+
+    def do_POST(self) -> None:
+        try:
+            if self.path == "/api/setup":
+                existing_token = read_token()
+                if existing_token and not authorized(self.headers):
+                    self.send_json(HTTPStatus.UNAUTHORIZED, {"reason": "updater_auth_required"})
+                    return
+                payload = self.payload()
+                repository = str(payload.get("repository", "")).strip()
+                github_token = str(payload.get("githubToken", "")).strip()
+                if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
+                    raise ValueError("invalid_repository")
+                if len(github_token) < 20:
+                    raise ValueError("invalid_github_token")
+                github_json(f"https://api.github.com/repos/{repository}", github_token)
+                write_json_file(CONFIG_PATH, {"repository": repository, "githubToken": github_token, "channel": "stable"})
+                if not existing_token:
+                    SHARED_TOKEN_PATH.write_text(os.urandom(32).hex() + "\n", encoding="utf-8")
+                    SHARED_TOKEN_PATH.chmod(0o600)
+                update_state(type="setup", status="ok", message="GitHub-Zugang eingerichtet.", finishedAt=now_iso())
+                self.send_json(HTTPStatus.OK, {"ok": True, "configured": True, "repository": repository})
+                return
+            if not authorized(self.headers):
+                self.send_json(HTTPStatus.UNAUTHORIZED, {"reason": "updater_auth_required"})
+                return
+            payload = self.payload()
+            current = normalize_version(payload.get("currentVersion"))
+            if self.path == "/api/check":
+                release = latest_release()
+                self.send_json(HTTPStatus.OK, {"ok": True, "currentVersion": current, "updateAvailable": version_key(release["version"]) > version_key(current), "release": public_release(release)})
+                return
+            if self.path == "/api/install":
+                if INSTALL_RUNNING.is_set():
+                    raise ValueError("update_already_running")
+                INSTALL_RUNNING.set()
+                threading.Thread(target=install_update, args=(current,), daemon=True).start()
+                self.send_json(HTTPStatus.ACCEPTED, {"ok": True, "accepted": True})
+                return
+            self.send_json(HTTPStatus.NOT_FOUND, {"reason": "not_found"})
+        except (ValueError, KeyError, json.JSONDecodeError) as exc:
+            self.send_json(HTTPStatus.BAD_REQUEST, {"reason": str(exc)})
+        except Exception as exc:
+            self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"reason": str(exc)})
+
+
+def main() -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
+    print(f"Watering Planner updater listening on {PORT}")
+    server.serve_forever()
+
+
+if __name__ == "__main__":
+    main()

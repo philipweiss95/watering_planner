@@ -13,7 +13,7 @@ from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Iterator
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from urllib.parse import parse_qs, urlencode, urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -23,6 +23,10 @@ ROOT = Path(__file__).parent
 PUBLIC_DIR = ROOT / "public"
 DATA_DIR = Path(os.environ.get("DATA_DIR", ROOT / "data"))
 DB_PATH = Path(os.environ.get("DB_PATH", DATA_DIR / "watering.sqlite3"))
+VERSION_PATH = ROOT / "VERSION"
+APP_VERSION = VERSION_PATH.read_text(encoding="utf-8").strip() if VERSION_PATH.exists() else "0.0.0"
+UPDATER_URL = os.environ.get("UPDATER_URL", "http://updater:3188").rstrip("/")
+UPDATER_TOKEN_FILE = Path(os.environ.get("UPDATER_TOKEN_FILE", DATA_DIR / ".updater-token"))
 
 
 PLANT_CATALOG = [
@@ -181,7 +185,7 @@ AUTOMATION_DAY_START = "07:00"
 AUTOMATION_DAY_END = "19:00"
 AUTOMATION_TRIGGER_TOLERANCE_MINUTES = 20
 AUTOMATION_RUN_COOLDOWN_MINUTES = 30
-REFILL_RUN_TIMES = ("03:00", "06:00")
+REFILL_RUN_TIMES = ("01:00", "06:00")
 REFILL_TRIGGER_TOLERANCE_MINUTES = 60
 REFILL_TRANSFER_FRACTION = 0.5
 REFILL_COOLDOWN_MINUTES_PER_LITER = 30
@@ -297,6 +301,19 @@ def init_db() -> None:
                 source TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS pump_calibration_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                calibrated_at TEXT NOT NULL,
+                pump_name TEXT NOT NULL,
+                measured_level_ml INTEGER NOT NULL,
+                baseline_at TEXT NOT NULL,
+                baseline_level_ml INTEGER NOT NULL,
+                cycles INTEGER NOT NULL,
+                nominal_ml INTEGER NOT NULL,
+                measured_ml INTEGER NOT NULL,
+                result_value REAL NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS refill_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 ran_at TEXT NOT NULL,
@@ -338,6 +355,7 @@ def init_db() -> None:
         ensure_column(conn, "balcony_settings", "refill_tank_current_ml", "INTEGER NOT NULL DEFAULT 30000")
         ensure_column(conn, "balcony_settings", "refill_pump_ml_per_min", "INTEGER NOT NULL DEFAULT 1000")
         ensure_column(conn, "refill_events", "window_label", "TEXT NOT NULL DEFAULT ''")
+        ensure_column(conn, "watering_events", "actual_consumed_ml", "INTEGER")
         ensure_column(conn, "plants", "pos_x", "REAL NOT NULL DEFAULT 0.5")
         ensure_column(conn, "plants", "pos_y", "REAL NOT NULL DEFAULT 0.5")
         ensure_column(conn, "plants", "hose_numbers", "TEXT NOT NULL DEFAULT ''")
@@ -460,6 +478,25 @@ def save_refill_automation_enabled(value: object) -> None:
     set_setting("refill_automation_enabled", "true" if enabled else "false")
 
 
+def main_pump_calibration_factor() -> float:
+    try:
+        factor = float(get_setting("main_pump_calibration_factor", "1"))
+    except ValueError:
+        return 1.0
+    return factor if 0.1 <= factor <= 10 else 1.0
+
+
+def save_main_pump_calibration_factor(value: object) -> None:
+    factor = float(value)
+    if not 0.1 <= factor <= 10:
+        raise ValueError("Der Verbrauchsfaktor muss zwischen 0,1 und 10 liegen")
+    set_setting("main_pump_calibration_factor", f"{factor:.6g}")
+
+
+def calibrated_consumption_ml(nominal_ml: int | float) -> int:
+    return max(0, round(float(nominal_ml) * main_pump_calibration_factor()))
+
+
 def normalize_refill_schedule_times(value: object) -> list[str]:
     if isinstance(value, str):
         raw_items = [item.strip() for item in value.replace(";", ",").split(",")]
@@ -483,21 +520,12 @@ def normalize_refill_schedule_times(value: object) -> list[str]:
 
 
 def refill_schedule_times() -> list[str]:
-    raw = get_setting("refill_schedule_times", "")
-    if not raw:
-        return list(REFILL_RUN_TIMES)
-    try:
-        value = json.loads(raw)
-    except json.JSONDecodeError:
-        value = raw
-    try:
-        return normalize_refill_schedule_times(value)
-    except (TypeError, ValueError):
-        return list(REFILL_RUN_TIMES)
+    return list(REFILL_RUN_TIMES)
 
 
 def save_refill_schedule_times(value: object) -> None:
-    set_setting("refill_schedule_times", json.dumps(normalize_refill_schedule_times(value)))
+    # Seit Version 1.0 sind die zwei sicheren NAS-Zeitfenster fest definiert.
+    set_setting("refill_schedule_times", json.dumps(list(REFILL_RUN_TIMES)))
 
 
 def refill_cooldown_minutes_per_liter() -> float:
@@ -800,6 +828,161 @@ def row_to_dict(row: sqlite3.Row) -> dict:
     return {key: row[key] for key in row.keys()}
 
 
+def calibration_baseline(conn: sqlite3.Connection, pump_name: str) -> dict | None:
+    tank_name = "main" if pump_name == "main" else "refill"
+    calibration = conn.execute(
+        """
+        SELECT calibrated_at AS baseline_at, measured_level_ml AS baseline_level_ml
+        FROM pump_calibration_events
+        WHERE pump_name = ?
+        ORDER BY calibrated_at DESC, id DESC
+        LIMIT 1
+        """,
+        (pump_name,),
+    ).fetchone()
+    tank_fill = conn.execute(
+        """
+        SELECT ran_at AS baseline_at, new_ml AS baseline_level_ml
+        FROM tank_fill_events
+        WHERE tank_name = ?
+        ORDER BY ran_at DESC, id DESC
+        LIMIT 1
+        """,
+        (tank_name,),
+    ).fetchone()
+    candidates = [row_to_dict(row) for row in (calibration, tank_fill) if row]
+    return max(candidates, key=lambda item: str(item["baseline_at"])) if candidates else None
+
+
+def latest_calibration(pump_name: str) -> dict | None:
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT calibrated_at, measured_level_ml, baseline_at, baseline_level_ml,
+                   cycles, nominal_ml, measured_ml, result_value
+            FROM pump_calibration_events
+            WHERE pump_name = ?
+            ORDER BY calibrated_at DESC, id DESC
+            LIMIT 1
+            """,
+            (pump_name,),
+        ).fetchone()
+        return row_to_dict(row) if row else None
+
+
+def calibration_status() -> dict:
+    with connect() as conn:
+        main_baseline = calibration_baseline(conn, "main")
+        refill_baseline = calibration_baseline(conn, "refill")
+    return {
+        "main": {
+            "factor": round(main_pump_calibration_factor(), 4),
+            "baseline": main_baseline or {},
+            "latest": latest_calibration("main") or {},
+        },
+        "refill": {
+            "baseline": refill_baseline or {},
+            "latest": latest_calibration("refill") or {},
+        },
+    }
+
+
+def calibrate_main_pump(measured_level_ml: int | float) -> dict:
+    measured_level = int(round(float(measured_level_ml)))
+    calibrated_at = now_iso()
+    with connect() as conn:
+        balcony = conn.execute("SELECT tank_capacity_ml FROM balcony_settings WHERE id = 1").fetchone()
+        if not balcony or not 0 <= measured_level <= int(balcony["tank_capacity_ml"]):
+            raise ValueError("Der gemessene Haupttankstand liegt außerhalb der Tankgröße")
+        baseline = calibration_baseline(conn, "main")
+        if not baseline:
+            raise ValueError("Vor der ersten Eichung den Haupttank einmal als voll markieren")
+        watering = conn.execute(
+            """
+            SELECT COUNT(*) AS cycles, COALESCE(SUM(delivered_ml), 0) AS nominal_ml
+            FROM watering_events WHERE ran_at > ? AND ran_at <= ?
+            """,
+            (baseline["baseline_at"], calibrated_at),
+        ).fetchone()
+        refilled = conn.execute(
+            "SELECT COALESCE(SUM(transferred_ml), 0) AS amount_ml FROM refill_events WHERE ran_at > ? AND ran_at <= ?",
+            (baseline["baseline_at"], calibrated_at),
+        ).fetchone()
+        cycles = int(watering["cycles"])
+        nominal_ml = int(watering["nominal_ml"])
+        measured_ml = int(baseline["baseline_level_ml"]) + int(refilled["amount_ml"]) - measured_level
+        if cycles <= 0 or nominal_ml <= 0:
+            raise ValueError("Seit dem letzten Vollstand oder der letzten Eichung wurde kein Bewässerungszyklus verbucht")
+        if measured_ml <= 0:
+            raise ValueError("Der gemessene Stand ergibt keinen positiven Wasserverbrauch")
+        factor = measured_ml / nominal_ml
+        if not 0.1 <= factor <= 10:
+            raise ValueError("Die Messung ergibt einen unplausiblen Verbrauchsfaktor außerhalb 0,1 bis 10")
+        conn.execute(
+            "UPDATE balcony_settings SET tank_current_ml = ?, updated_at = ? WHERE id = 1",
+            (measured_level, calibrated_at),
+        )
+        conn.execute(
+            """
+            INSERT INTO pump_calibration_events
+                (calibrated_at, pump_name, measured_level_ml, baseline_at, baseline_level_ml,
+                 cycles, nominal_ml, measured_ml, result_value)
+            VALUES (?, 'main', ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (calibrated_at, measured_level, baseline["baseline_at"], baseline["baseline_level_ml"], cycles, nominal_ml, measured_ml, factor),
+        )
+    save_main_pump_calibration_factor(factor)
+    return latest_calibration("main") or {}
+
+
+def calibrate_refill_pump(measured_level_ml: int | float) -> dict:
+    measured_level = int(round(float(measured_level_ml)))
+    calibrated_at = now_iso()
+    with connect() as conn:
+        balcony = conn.execute("SELECT refill_tank_capacity_ml FROM balcony_settings WHERE id = 1").fetchone()
+        if not balcony or not 0 <= measured_level <= int(balcony["refill_tank_capacity_ml"]):
+            raise ValueError("Der gemessene Vorratstankstand liegt außerhalb der Tankgröße")
+        baseline = calibration_baseline(conn, "refill")
+        if not baseline:
+            raise ValueError("Vor der ersten Eichung den Vorratstank einmal als voll markieren")
+        refills = conn.execute(
+            """
+            SELECT COUNT(*) AS cycles, COALESCE(SUM(transferred_ml), 0) AS nominal_ml,
+                   COALESCE(SUM(duration_seconds), 0) AS duration_seconds
+            FROM refill_events WHERE ran_at > ? AND ran_at <= ?
+            """,
+            (baseline["baseline_at"], calibrated_at),
+        ).fetchone()
+        cycles = int(refills["cycles"])
+        duration_seconds = int(refills["duration_seconds"])
+        measured_ml = int(baseline["baseline_level_ml"]) - measured_level
+        if cycles <= 0 or duration_seconds <= 0:
+            raise ValueError("Seit dem letzten Vollstand oder der letzten Eichung wurde kein Nachfüllzyklus verbucht")
+        if measured_ml <= 0:
+            raise ValueError("Der gemessene Stand ergibt keine positive Fördermenge")
+        ml_per_min = measured_ml / duration_seconds * 60
+        if not 1 <= ml_per_min <= 100000:
+            raise ValueError("Die Messung ergibt einen unplausiblen Pumpendurchsatz")
+        conn.execute(
+            """
+            UPDATE balcony_settings
+            SET refill_tank_current_ml = ?, refill_pump_ml_per_min = ?, updated_at = ?
+            WHERE id = 1
+            """,
+            (measured_level, round(ml_per_min), calibrated_at),
+        )
+        conn.execute(
+            """
+            INSERT INTO pump_calibration_events
+                (calibrated_at, pump_name, measured_level_ml, baseline_at, baseline_level_ml,
+                 cycles, nominal_ml, measured_ml, result_value)
+            VALUES (?, 'refill', ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (calibrated_at, measured_level, baseline["baseline_at"], baseline["baseline_level_ml"], cycles, int(refills["nominal_ml"]), measured_ml, ml_per_min),
+        )
+    return latest_calibration("refill") or {}
+
+
 def get_state() -> dict:
     with connect() as conn:
         balcony = row_to_dict(conn.execute("SELECT * FROM balcony_settings WHERE id = 1").fetchone())
@@ -833,6 +1016,7 @@ def get_state() -> dict:
             )
         ]
     return {
+        "version": APP_VERSION,
         "balcony": balcony,
         "outlets": outlets,
         "hoses": hoses,
@@ -841,10 +1025,12 @@ def get_state() -> dict:
         "plants": plants,
         "settings": {
             "watering_amount_percent": round(watering_amount_percent(), 1),
+            "main_pump_calibration_factor": round(main_pump_calibration_factor(), 4),
             "refill_automation_enabled": refill_automation_enabled(),
             "refill_schedule_times": refill_schedule_times(),
             "refill_cooldown_minutes_per_liter": refill_cooldown_minutes_per_liter(),
         },
+        "calibration": calibration_status(),
         "cycles_completed_today": completed_cycles_today(str(balcony.get("timezone_name", "Europe/Berlin"))),
     }
 
@@ -859,11 +1045,14 @@ def watering_events(limit: int = 12) -> list[dict]:
                 "title": "Bewässerung",
                 "amount_ml": int(row["delivered_ml"]),
                 "duration_seconds": 120,
-                "detail": f"{int(row['delivered_ml'])} ml gegossen",
+                "detail": (
+                    f"{int(row['delivered_ml'])} ml an Pflanzen · "
+                    f"{int(row['actual_consumed_ml'] if row['actual_consumed_ml'] is not None else calibrated_consumption_ml(row['delivered_ml']))} ml Tankverbrauch"
+                ),
             }
             for row in conn.execute(
                 """
-                SELECT id, ran_at, delivered_ml, temperature_c, rain_mm, source
+                SELECT id, ran_at, delivered_ml, actual_consumed_ml, temperature_c, rain_mm, source
                 FROM watering_events
                 """
             )
@@ -950,6 +1139,21 @@ def delivered_ml_for_local_date(day: date, timezone_name: str = "Europe/Berlin")
             (start.isoformat(), end.isoformat()),
         ).fetchone()
         return int(row["delivered_ml"])
+
+
+def consumed_ml_for_local_date(day: date, timezone_name: str = "Europe/Berlin") -> int:
+    tzinfo = local_now(timezone_name).tzinfo
+    start, end = local_day_utc_bounds(day, tzinfo)
+    factor = main_pump_calibration_factor()
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT COALESCE(SUM(COALESCE(actual_consumed_ml, ROUND(delivered_ml * ?))), 0) AS consumed_ml
+            FROM watering_events WHERE ran_at >= ? AND ran_at < ?
+            """,
+            (factor, start.isoformat(), end.isoformat()),
+        ).fetchone()
+        return int(row["consumed_ml"])
 
 
 def refill_event_for_target_date(target_date: date, window_label: str = "") -> dict | None:
@@ -2269,6 +2473,7 @@ def refill_status(balcony: dict) -> dict:
     timezone_name = str(balcony.get("timezone_name", "Europe/Berlin"))
     now = local_now(timezone_name)
     target_date = now.date()
+    consumption_date = target_date - timedelta(days=1)
     enabled = refill_automation_enabled()
     schedule_times = refill_schedule_times()
     main_capacity = max(int(balcony.get("tank_capacity_ml", 0)), 0)
@@ -2277,37 +2482,37 @@ def refill_status(balcony: dict) -> dict:
     refill_current = max(int(balcony.get("refill_tank_current_ml", 0)), 0)
     pump_ml_per_min = max(int(balcony.get("refill_pump_ml_per_min", 0)), 0)
     main_missing_ml = max(0, main_capacity - main_current)
-    requested_ml = main_missing_ml
+    requested_ml = consumed_ml_for_local_date(consumption_date, timezone_name)
     target_transfer_ml = math.ceil(requested_ml * REFILL_TRANSFER_FRACTION)
     transferable_ml = min(target_transfer_ml, main_missing_ml, refill_current)
     duration_seconds = math.ceil(transferable_ml / pump_ml_per_min * 60) if pump_ml_per_min and transferable_ml else 0
     refill_windows = refill_window_datetimes(now.date(), now.tzinfo, schedule_times)
-    last_window = next((item for item in reversed(refill_windows) if item <= now), None)
-    last_window_label = last_window.strftime("%H:%M") if last_window else ""
+    elapsed_windows = [item for item in refill_windows if item <= now]
+    pending_windows = [
+        item for item in elapsed_windows
+        if not refill_event_for_target_date(target_date, item.strftime("%H:%M"))
+    ]
+    active_window = pending_windows[0] if pending_windows else None
+    active_window_label = active_window.strftime("%H:%M") if active_window else ""
     next_window = next((item for item in refill_windows if item > now), None)
     if not next_window:
         next_window = refill_window_datetimes(now.date() + timedelta(days=1), now.tzinfo, schedule_times)[0]
     last_event = latest_refill_event()
-    last_event_at = parse_event_datetime(str(last_event.get("ran_at", ""))) if last_event else None
-    cooldown_minutes = refill_cooldown_minutes(int(last_event.get("transferred_ml", 0))) if last_event else 0
-    cooldown_until_dt = last_event_at + timedelta(minutes=cooldown_minutes) if last_event_at and cooldown_minutes else None
-    cooldown_active = bool(cooldown_until_dt and now < cooldown_until_dt.astimezone(now.tzinfo))
-    cooldown_until = cooldown_until_dt.astimezone(now.tzinfo).isoformat() if cooldown_until_dt else ""
-    schedule_due = bool(last_window)
+    schedule_due = bool(active_window)
     need_exists = bool(transferable_ml > 0 and pump_ml_per_min > 0)
-    run_now = bool(enabled and schedule_due and need_exists and not cooldown_active)
-    catch_up = bool(schedule_due and now > last_window + timedelta(minutes=REFILL_TRIGGER_TOLERANCE_MINUTES))
+    run_now = bool(enabled and schedule_due and need_exists)
+    catch_up = bool(active_window and now > active_window + timedelta(minutes=REFILL_TRIGGER_TOLERANCE_MINUTES))
 
     if not enabled:
         summary = "Automatisches Nachfüllen ist deaktiviert."
     elif pump_ml_per_min <= 0:
         summary = "Durchsatz der Nachfüllpumpe fehlt."
+    elif requested_ml <= 0:
+        summary = f"Für {consumption_date.strftime('%d.%m.')} wurde kein Verbrauch verbucht."
     elif main_missing_ml <= 0:
         summary = "Haupttank ist voll."
     elif refill_current <= 0:
         summary = "Vorratstank ist leer."
-    elif cooldown_active:
-        summary = f"Nachfüllung bis {cooldown_until_dt.astimezone(now.tzinfo).strftime('%H:%M')} gesperrt."
     elif transferable_ml < target_transfer_ml:
         summary = f"Nachfüllung auf {format_liters_for_text(transferable_ml)} begrenzt."
     elif run_now:
@@ -2322,11 +2527,12 @@ def refill_status(balcony: dict) -> dict:
         "run_now": run_now,
         "enabled": enabled,
         "target_date": target_date.isoformat(),
-        "scheduled_time": (last_window or next_window).strftime("%H:%M"),
+        "consumption_date": consumption_date.isoformat(),
+        "scheduled_time": (active_window or next_window).strftime("%H:%M"),
         "scheduled_times": schedule_times,
-        "active_window": last_window_label,
-        "window_label": last_window_label if run_now else "",
-        "last_window": last_window_label,
+        "active_window": active_window_label,
+        "window_label": active_window_label if run_now else "",
+        "last_window": elapsed_windows[-1].strftime("%H:%M") if elapsed_windows else "",
         "next_window": next_window.strftime("%H:%M") if next_window else "",
         "requested_ml": requested_ml,
         "target_transfer_ml": target_transfer_ml,
@@ -2337,10 +2543,10 @@ def refill_status(balcony: dict) -> dict:
         "main_missing_ml": main_missing_ml,
         "blocked_by_empty_refill_tank": bool(refill_current <= 0),
         "limited_by_refill_tank": bool(target_transfer_ml > 0 and transferable_ml < min(target_transfer_ml, main_missing_ml)),
-        "already_done": False,
-        "cooldown_active": cooldown_active,
-        "cooldown_minutes": cooldown_minutes,
-        "cooldown_until": cooldown_until,
+        "already_done": bool(elapsed_windows and not pending_windows),
+        "cooldown_active": False,
+        "cooldown_minutes": 0,
+        "cooldown_until": "",
         "need_exists": need_exists,
         "schedule_due": schedule_due,
         "catch_up": catch_up,
@@ -2749,11 +2955,13 @@ def evaluate(
     cycles_completed = completed_cycles_today(str(balcony.get("timezone_name", "Europe/Berlin")))
     remaining_cycles = max(0, recommended_cycles - cycles_completed)
     delivered_if_remaining = remaining_cycles * total_delivered_per_run
-    tank_after = max(0, balcony["tank_current_ml"] - delivered_if_remaining)
+    consumed_per_run = calibrated_consumption_ml(total_delivered_per_run)
+    consumed_if_remaining = remaining_cycles * consumed_per_run
+    tank_after = max(0, balcony["tank_current_ml"] - consumed_if_remaining)
     tank_capacity = max(int(balcony["tank_capacity_ml"]), 1)
     tank_percent = round(int(balcony["tank_current_ml"]) / tank_capacity * 100)
     tank_after_percent = round(tank_after / tank_capacity * 100)
-    tank_empty_soon = bool(plants and total_delivered_per_run > 0 and int(balcony["tank_current_ml"]) < total_delivered_per_run)
+    tank_empty_soon = bool(plants and consumed_per_run > 0 and int(balcony["tank_current_ml"]) < consumed_per_run)
     tank_low = tank_percent <= TANK_LOW_PERCENT or tank_empty_soon
 
     hottest_sensitive_need = max((p["need_ml"] for p in plant_results), default=0)
@@ -2766,7 +2974,7 @@ def evaluate(
     if plants and total_delivered_per_run <= 0:
         should_run = False
         reason = "Noch keine nutzbare Verschlauchung vorhanden"
-    elif plants and balcony["tank_current_ml"] < total_delivered_per_run:
+    elif plants and balcony["tank_current_ml"] < consumed_per_run:
         should_run = False
         reason = "Wassertank reicht nicht für einen vollständigen Pumpenlauf"
     elif not plants:
@@ -2806,6 +3014,9 @@ def evaluate(
             "duration_seconds": 120,
             "delivered_per_cycle_ml": total_delivered_per_run,
             "delivered_if_remaining_ml": delivered_if_remaining,
+            "consumption_factor": main_pump_calibration_factor(),
+            "consumed_per_cycle_ml": consumed_per_run,
+            "consumed_if_remaining_ml": consumed_if_remaining,
         },
         "tank": {
             "current_ml": balcony["tank_current_ml"],
@@ -2868,6 +3079,35 @@ def send_json(handler: SimpleHTTPRequestHandler, payload: dict, status: HTTPStat
     handler.wfile.write(body)
 
 
+def updater_token() -> str:
+    try:
+        return UPDATER_TOKEN_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def updater_request(path: str, method: str = "GET", payload: dict | None = None, timeout: int = 30) -> dict:
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    headers = {"Accept": "application/json"}
+    token = updater_token()
+    if data is not None:
+        headers["Content-Type"] = "application/json"
+    if token:
+        headers["X-Watering-Planner-Updater-Token"] = token
+    request = Request(f"{UPDATER_URL}{path}", data=data, headers=headers, method=method)
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        try:
+            reason = json.loads(exc.read().decode("utf-8")).get("reason")
+        except (ValueError, AttributeError):
+            reason = None
+        raise ValueError(reason or f"updater_http_{exc.code}") from exc
+    except (URLError, TimeoutError) as exc:
+        raise ValueError("updater_unavailable") from exc
+
+
 class AppHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(PUBLIC_DIR), **kwargs)
@@ -2885,10 +3125,16 @@ class AppHandler(SimpleHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/api/health":
-            send_json(self, {"ok": True})
+            send_json(self, {"ok": True, "version": APP_VERSION})
             return
         if parsed.path == "/api/state":
             send_json(self, get_state())
+            return
+        if parsed.path == "/api/update/status":
+            try:
+                send_json(self, updater_request("/api/status"))
+            except ValueError as exc:
+                send_json(self, {"error": str(exc)}, HTTPStatus.SERVICE_UNAVAILABLE)
             return
         if parsed.path == "/api/weather":
             try:
@@ -2941,6 +3187,33 @@ class AppHandler(SimpleHTTPRequestHandler):
                 payload = read_json(self)
                 weather = weather_from_payload(payload)
                 send_json(self, evaluate_weather(weather, str(payload.get("slot", "morning"))))
+                return
+            if parsed.path == "/api/calibration/main":
+                payload = read_json(self)
+                result = calibrate_main_pump(payload["measured_level_ml"])
+                send_json(self, {"calibration": result, **get_state()})
+                return
+            if parsed.path == "/api/calibration/refill":
+                payload = read_json(self)
+                result = calibrate_refill_pump(payload["measured_level_ml"])
+                send_json(self, {"calibration": result, **get_state()})
+                return
+            if parsed.path == "/api/update/setup":
+                send_json(self, updater_request("/api/setup", "POST", read_json(self)))
+                return
+            if parsed.path == "/api/update/check":
+                send_json(self, updater_request("/api/check", "POST", {"currentVersion": APP_VERSION}))
+                return
+            if parsed.path == "/api/update/install":
+                payload = read_json(self)
+                if payload.get("confirm") is not True:
+                    send_json(self, {"error": "update_install_confirmation_required"}, HTTPStatus.CONFLICT)
+                    return
+                send_json(
+                    self,
+                    updater_request("/api/install", "POST", {"currentVersion": APP_VERSION}),
+                    HTTPStatus.ACCEPTED,
+                )
                 return
             if parsed.path == "/api/homekit/mark-run":
                 payload = read_json(self)
@@ -3106,6 +3379,7 @@ def save_balcony(payload: dict) -> None:
     refill_enabled = payload.get("refill_automation_enabled")
     refill_times = payload.get("refill_schedule_times")
     refill_cooldown = payload.get("refill_cooldown_minutes_per_liter")
+    main_consumption_factor = payload.get("main_pump_calibration_factor")
     if amount_percent is not None:
         amount_percent = float(amount_percent)
         if not MIN_WATERING_AMOUNT_PERCENT <= amount_percent <= MAX_WATERING_AMOUNT_PERCENT:
@@ -3174,6 +3448,8 @@ def save_balcony(payload: dict) -> None:
         save_refill_schedule_times(refill_times)
     if refill_cooldown is not None:
         save_refill_cooldown_minutes_per_liter(refill_cooldown)
+    if main_consumption_factor is not None:
+        save_main_pump_calibration_factor(main_consumption_factor)
 
 
 def add_plant(payload: dict) -> int:
@@ -3271,8 +3547,8 @@ def mark_refill_run(source: str = "home_assistant") -> dict:
         source = str(pending.get("source", "manual"))
     elif not refill["enabled"]:
         raise ValueError("Automatisches Nachfüllen ist deaktiviert")
-    elif refill["cooldown_active"]:
-        raise ValueError(refill["summary"] or "Nachfüllung ist vorübergehend gesperrt")
+    elif not refill["schedule_due"]:
+        raise ValueError("Für dieses Nachfüllzeitfenster wurde bereits ein Lauf verbucht oder es ist noch nicht erreicht")
     transferred_ml = int(refill["planned_transfer_ml"])
     if transferred_ml <= 0:
         raise ValueError(refill["summary"] or "Keine Nachfüllung nötig")
@@ -3347,13 +3623,15 @@ def fill_tank(tank_name: str) -> None:
 
 
 def mark_run(delivered_ml: int, temperature_c: float, rain_mm: float) -> None:
+    actual_consumed_ml = calibrated_consumption_ml(delivered_ml)
+    timestamp = now_iso()
     with connect() as conn:
         conn.execute(
             """
-            INSERT INTO watering_events (ran_at, delivered_ml, temperature_c, rain_mm, source)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO watering_events (ran_at, delivered_ml, actual_consumed_ml, temperature_c, rain_mm, source)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (now_iso(), delivered_ml, temperature_c, rain_mm, "homekit"),
+            (timestamp, delivered_ml, actual_consumed_ml, temperature_c, rain_mm, "homekit"),
         )
         conn.execute(
             """
@@ -3361,7 +3639,7 @@ def mark_run(delivered_ml: int, temperature_c: float, rain_mm: float) -> None:
             SET tank_current_ml = MAX(0, tank_current_ml - ?), updated_at = ?
             WHERE id = 1
             """,
-            (delivered_ml, now_iso()),
+            (actual_consumed_ml, timestamp),
         )
 
 
