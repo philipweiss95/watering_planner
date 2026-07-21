@@ -2,6 +2,15 @@
 
 Alle stabilen Änderungen am Watering Planner werden in dieser Datei dokumentiert.
 
+## [1.1.0] - 2026-07-21
+
+- Einstellungen, Schläuche, Pflanzen und Info als einheitliche, übersichtlichere Arbeitsbereiche neu gestaltet.
+- Mobile Navigation als gut erreichbare Bottom-Bar mit größeren Touch-Zielen umgesetzt.
+- Einstellungsbereiche mit Abschnittsnavigation, Nummerierung und hervorgehobener Speicheraktion vereinfacht.
+- Schlauchzuordnung und Pflanzenkarten mit klaren Statusanzeigen, Hilfetexten und leeren Zuständen verbessert.
+- Updater, Changelog und Shortcuts auf der Info-Seite neu gegliedert.
+- Responsive Layouts für Smartphone, Tablet und Desktop sowie Fokus- und Reduced-Motion-Zustände ergänzt.
+
 ## [1.0.3] - 2026-07-21
 
 - Synology-Updater erkennt die tatsächliche Compose-Projektkennung der laufenden Container aus deren Docker-Labels.

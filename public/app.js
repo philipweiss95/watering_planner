@@ -73,7 +73,7 @@ function renderState() {
   balconyForm.elements.refill_automation_enabled.checked = state.settings?.refill_automation_enabled !== false;
   balconyForm.elements.main_pump_calibration_factor.value = state.settings?.main_pump_calibration_factor ?? 1;
   balconyForm.elements.watering_amount_percent.value = state.settings?.watering_amount_percent ?? 100;
-  $("#appVersion").textContent = `v${state.version || "1.0.3"}`;
+  $("#appVersion").textContent = `v${state.version || "1.1.0"}`;
   renderCalibrationStatus();
 
   $("#outletEditor").innerHTML = state.outlets
@@ -246,9 +246,12 @@ function renderPlants() {
             return `
               <article class="plant-card">
                 <div class="plant-top">
-                  <div>
-                    <strong>${plant.custom_name}</strong>
-                    <p class="meta">${plant.catalog_name} · ${plant.pot_liters} l · ${potLabel(plant.pot_type)}</p>
+                  <div class="plant-identity">
+                    <span class="plant-avatar" aria-hidden="true">${escapeAttribute(plant.custom_name.trim().slice(0, 2).toUpperCase())}</span>
+                    <div>
+                      <strong>${plant.custom_name}</strong>
+                      <p class="meta">${plant.catalog_name} · ${plant.pot_liters} l · ${potLabel(plant.pot_type)}</p>
+                    </div>
                   </div>
                   <div class="plant-actions">
                     <button class="secondary small-button" data-edit="${plant.id}" type="button">Bearbeiten</button>
@@ -264,7 +267,7 @@ function renderPlants() {
           },
         )
         .join("")
-    : `<p class="meta">Noch keine Pflanzen angelegt.</p>`;
+    : `<div class="empty-state"><span aria-hidden="true">+</span><strong>Noch keine Pflanzen</strong><p>Lege rechts deine erste Pflanze an.</p></div>`;
 
   document.querySelectorAll("[data-edit]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -406,6 +409,7 @@ function renderPlantEditForm(plant) {
             <select name="hose_numbers" multiple size="5">
               ${hoseSelectOptions(plant.hose_numbers)}
             </select>
+            <span class="field-help">Mehrere Einträge lassen sich gemeinsam auswählen.</span>
           </label>
           <div class="derived-water-preview" data-derived-water-preview></div>
         </div>
@@ -479,22 +483,25 @@ function renderHoses() {
   if (!editor) return;
   editor.innerHTML = state.hoses.length
     ? state.hoses.map((hose) => hoseRow(hose)).join("")
-    : `<p class="meta">Noch keine Schläuche angelegt.</p>`;
+    : `<div class="empty-state"><span aria-hidden="true">+</span><strong>Noch keine Schläuche</strong><p>Füge den ersten Schlauch hinzu und wähle seinen Pumpenausgang.</p></div>`;
   bindHoseRemoveButtons();
 }
 
 function hoseRow(hose = {}) {
   return `
     <div class="hose-row" data-hose-row>
+      <div class="hose-row-title">
+        <span class="hose-row-number">${hose.number ? `Schlauch ${escapeAttribute(hose.number)}` : "Neuer Schlauch"}</span>
+        <span class="hose-assignment ${hose.plant_name ? "assigned" : "unassigned"}">${hose.plant_name ? `Verbunden mit ${hose.plant_name}` : "Noch nicht zugeordnet"}</span>
+      </div>
       <label>
         Schlauchnummer
-        <input name="hose_number" value="${escapeAttribute(hose.number || "")}" placeholder="z.B. 12">
+        <input name="hose_number" value="${escapeAttribute(hose.number || "")}" placeholder="z. B. 12">
       </label>
       <label>
-        Output
+        Pumpenausgang
         <select name="hose_outlet_id">${outletOptions(hose.outlet_id)}</select>
       </label>
-      <span class="hose-assignment">${hose.plant_name ? `Pflanze: ${hose.plant_name}` : "Noch keiner Pflanze zugeordnet"}</span>
       <button class="delete small-button" data-remove-hose type="button">Entfernen</button>
     </div>
   `;
@@ -1446,7 +1453,7 @@ $("#plantForm").addEventListener("submit", async (event) => {
 
 $("#addHoseButton").addEventListener("click", () => {
   const editor = $("#hoseEditor");
-  if (editor.querySelector(".meta")) editor.innerHTML = "";
+  if (editor.querySelector(".empty-state")) editor.innerHTML = "";
   editor.insertAdjacentHTML("beforeend", hoseRow());
   bindHoseRemoveButtons();
 });

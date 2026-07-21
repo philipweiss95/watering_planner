@@ -81,7 +81,23 @@ class UpdaterTests(unittest.TestCase):
     def test_updater_panel_is_rendered_on_info_page(self):
         html = (Path(__file__).resolve().parents[1] / "public" / "index.html").read_text(encoding="utf-8")
 
-        self.assertGreater(html.index("<h2>Updates</h2>"), html.index('class="view info-view"'))
+        self.assertGreater(html.index("<h2>Updater</h2>"), html.index('class="view info-view"'))
+
+    def test_configuration_views_have_guided_headers(self):
+        html = (Path(__file__).resolve().parents[1] / "public" / "index.html").read_text(encoding="utf-8")
+
+        for view in ("settings", "hoses", "plants", "info"):
+            marker = f'class="view {view}-view"'
+            section = html[html.index(marker):]
+            self.assertLess(section.index("view-hero"), section.index("</div>"))
+
+    def test_mobile_navigation_uses_reachable_bottom_bar(self):
+        css = (Path(__file__).resolve().parents[1] / "public" / "styles.css").read_text(encoding="utf-8")
+
+        mobile = css[css.index("@media (max-width: 719px)"):]
+        self.assertIn(".app-nav", mobile)
+        self.assertIn("position: fixed", mobile)
+        self.assertIn("safe-area-inset-bottom", mobile)
 
 
 if __name__ == "__main__":
