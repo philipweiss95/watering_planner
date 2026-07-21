@@ -22,7 +22,11 @@ jobs:
         run: python -m unittest discover -s tests -v
       - name: Package stable update
         run: python scripts/package_release.py
+      - name: Build release changelog
+        run: python scripts/release_notes.py --output dist/release-notes.md
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/* --generate-notes --title "Watering Planner $GITHUB_REF_NAME"
+        run: |
+          ARCHIVE="dist/watering-planner-$(cat VERSION).zip"
+          gh release create "$GITHUB_REF_NAME" "$ARCHIVE" "$ARCHIVE.sha256" --notes-file dist/release-notes.md --title "Watering Planner $GITHUB_REF_NAME"

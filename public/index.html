@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Terrassen-Bewässerungsplaner</title>
-    <link rel="stylesheet" href="/styles.css?v=1.0.1">
+    <link rel="stylesheet" href="/styles.css?v=1.0.2">
   </head>
   <body>
     <header class="topbar">
@@ -267,34 +267,6 @@
               <p class="field-help calibration-result" id="calibrationResult" aria-live="polite"></p>
             </fieldset>
 
-            <fieldset class="settings-group update-settings">
-              <div class="settings-group-heading">
-                <div>
-                  <p class="eyebrow">System</p>
-                  <h3>Updates</h3>
-                </div>
-                <strong class="setting-value" id="appVersion">v1.0.1</strong>
-              </div>
-              <p class="field-help" id="updateNotice">Der interne Update-Dienst wird geprüft.</p>
-              <div class="settings-grid" id="updateSetup">
-                <label>
-                  GitHub-Repository
-                  <input id="updateRepository" type="text" value="philipweiss95/watering_planner" autocomplete="off">
-                </label>
-                <label>
-                  GitHub-Token
-                  <input id="updateGithubToken" type="password" autocomplete="new-password" placeholder="github_pat_…">
-                </label>
-              </div>
-              <div class="update-actions">
-                <button id="updateSetupButton" class="secondary" type="button">Updater einrichten</button>
-                <button id="updateCheckButton" class="secondary" type="button">Nach Updates suchen</button>
-                <button id="updateInstallButton" class="primary" type="button" disabled>Update installieren</button>
-              </div>
-              <p class="field-help" id="updateResult" aria-live="polite"></p>
-              <pre class="update-release-notes" id="updateReleaseNotes" hidden></pre>
-            </fieldset>
-
             <fieldset class="settings-group">
               <div class="settings-group-heading">
                 <div>
@@ -427,6 +399,41 @@
       </div>
 
       <div class="view info-view" data-view="info">
+        <section class="panel update-settings wide-panel">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">System</p>
+              <h2>Updates</h2>
+            </div>
+            <div class="update-badges">
+              <span class="status-pill" id="updateTokenStatus">Token wird geprüft</span>
+              <strong class="setting-value" id="appVersion">v1.0.2</strong>
+            </div>
+          </div>
+          <p class="section-copy" id="updateNotice">Der interne Update-Dienst wird geprüft.</p>
+          <div class="settings-grid" id="updateSetup">
+            <label>
+              GitHub-Repository
+              <input id="updateRepository" type="text" value="philipweiss95/watering_planner" autocomplete="off">
+            </label>
+            <label>
+              GitHub-Token
+              <input id="updateGithubToken" type="password" autocomplete="new-password" placeholder="github_pat_…">
+              <span class="field-help">Der Token wird dauerhaft im geschützten Datenvolume gespeichert und niemals an den Browser zurückgegeben.</span>
+            </label>
+          </div>
+          <div class="update-actions">
+            <button id="updateSetupButton" class="secondary" type="button">Updater einrichten</button>
+            <button id="updateCheckButton" class="secondary" type="button">Nach Updates suchen</button>
+            <button id="updateInstallButton" class="primary" type="button" disabled>Update installieren</button>
+          </div>
+          <p class="field-help" id="updateResult" aria-live="polite"></p>
+          <section class="update-changelog" id="updateChangelog" hidden>
+            <h3 id="updateChangelogTitle">Changelog</h3>
+            <pre class="update-release-notes" id="updateReleaseNotes"></pre>
+          </section>
+        </section>
+
         <section class="panel shortcuts-panel wide-panel">
           <div class="section-heading">
             <div>
@@ -445,6 +452,6 @@
       </div>
     </main>
 
-    <script src="/app.js?v=1.0.1"></script>
+    <script src="/app.js?v=1.0.2"></script>
   </body>
 </html>

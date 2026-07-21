@@ -187,7 +187,7 @@ docker compose -f docker-compose.yml up -d
 
 ## Updates ab Version 1.0
 
-Der Compose-Stack startet einen zweiten, ausschließlich intern erreichbaren Dienst `watering-planner-updater`. Öffne in der Weboberfläche **Einstellungen > Updates**, trage `philipweiss95/watering_planner` und einen GitHub-Token mit Leserechten auf das Repository ein und speichere den Zugang. Danach kann die Oberfläche das neueste stabile Release prüfen und installieren.
+Der Compose-Stack startet einen zweiten, ausschließlich intern erreichbaren Dienst `watering-planner-updater`. Öffne in der Weboberfläche **Info > Updates**, trage `philipweiss95/watering_planner` und einen GitHub-Token mit Leserechten auf das Repository ein und speichere den Zugang. Der Token bleibt dauerhaft im persistenten `data`-Volume und wird nicht an den Browser zurückgegeben. Danach kann die Oberfläche das neueste stabile Release prüfen und installieren; der versionsbezogene Changelog wird vor und nach dem Update direkt dort angezeigt.
 
 Der Updater benötigt `/var/run/docker.sock`, weil er die Planner-Images auf der NAS neu baut und Container austauscht. Wer einem Container keinen Docker-Zugriff geben möchte, entfernt den Dienst `updater` und aktualisiert weiterhin manuell. Datenbank, Updater-Konfiguration und Rollback-Sicherungen bleiben in `./data` erhalten.
 
@@ -219,7 +219,7 @@ Im Synology **Container Manager** reicht ein normaler Neustart nicht aus, wenn s
 Du erkennst Version 1.0 an der ausgelieferten HTML-Datei:
 
 ```html
-<link rel="stylesheet" href="/styles.css?v=1.0.1">
+<link rel="stylesheet" href="/styles.css?v=1.0.2">
 ```
 
 Wenn im Browser oder per `curl http://NAS-IP:8080/` noch eine ältere `styles.css` ohne Versionsparameter oder ohne `app-nav` auftaucht, läuft auf der NAS noch ein altes Image oder ein Container aus einem anderen Projektordner.
@@ -227,7 +227,7 @@ Wenn im Browser oder per `curl http://NAS-IP:8080/` noch eine ältere `styles.cs
 Die Synology-Projektdatei verwendet deshalb ein versioniertes Image:
 
 ```yaml
-image: watering-planner:1.0.1
+image: watering-planner:1.0.2
 ```
 
 Wenn nach dem Kopieren der neuen Dateien weiter ein 5964-Byte-HTML ohne `app-nav` ausgeliefert wird, wurde die neue Compose-Datei noch nicht verwendet. In dem Fall im Container Manager:
@@ -239,7 +239,7 @@ Wenn nach dem Kopieren der neuen Dateien weiter ein 5964-Byte-HTML ohne `app-nav
 
 ```bash
 curl http://NAS-IP:8080/ | grep app-nav
-curl http://NAS-IP:8080/ | grep 'styles.css?v=1.0.1'
+curl http://NAS-IP:8080/ | grep 'styles.css?v=1.0.2'
 ```
 
 ## Verwaisten Container-Manager-Eintrag reparieren

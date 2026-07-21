@@ -1282,6 +1282,28 @@ button {
   margin-top: 1rem;
 }
 
+.update-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.55rem;
+}
+
+#updateTokenStatus.ok {
+  color: #176b49;
+  border-color: rgba(23, 107, 73, 0.24);
+  background: rgba(48, 161, 111, 0.12);
+}
+
+.update-changelog {
+  margin-top: 1rem;
+}
+
+.update-changelog h3 {
+  margin: 0 0 0.55rem;
+}
+
 .update-release-notes {
   max-height: 16rem;
   overflow: auto;

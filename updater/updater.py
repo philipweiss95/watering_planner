@@ -32,7 +32,7 @@ ASSET_PREFIX = "watering-planner"
 MANAGED_PATHS = (
     "server.py", "public", "updater", "home-assistant", "docs", "scripts", ".github",
     "Dockerfile", "docker-compose.yml", ".dockerignore", ".gitignore", ".env.synology.example",
-    "README.md", "VERSION",
+    "README.md", "CHANGELOG.md", "VERSION",
 )
 INSTALL_RUNNING = threading.Event()
 
@@ -196,7 +196,7 @@ def safe_zip_members(archive: zipfile.ZipFile, expected_root: str) -> list[zipfi
         if member.filename.startswith("/") or ".." in path.parts or not member.filename.startswith(prefix):
             raise ValueError("invalid_release_archive_layout")
     names = {member.filename.rstrip("/") for member in members}
-    for required in ("server.py", "public/index.html", "updater/Dockerfile", "docker-compose.yml", "VERSION"):
+    for required in ("server.py", "public/index.html", "updater/Dockerfile", "docker-compose.yml", "CHANGELOG.md", "VERSION"):
         if f"{expected_root}/{required}" not in names:
             raise ValueError(f"release_archive_missing_{required}")
     return members
@@ -213,6 +213,12 @@ def install_update(current_version: str) -> None:
         try:
             update_state(type="install", status="running", phase="release", step=1, totalSteps=8, currentVersion=current_version, message="Suche nach dem neuesten stabilen Release.")
             release = latest_release()
+            update_state(
+                targetVersion=release["version"],
+                releaseName=release["name"],
+                releasePublishedAt=release["publishedAt"],
+                releaseNotes=release["notes"],
+            )
             if version_key(release["version"]) <= version_key(current_version):
                 update_state(status="ok", phase="complete", step=8, targetVersion=release["version"], message="Die installierte Version ist bereits aktuell.", finishedAt=now_iso())
                 return
@@ -324,7 +330,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/api/status":
             config = read_json_file(CONFIG_PATH, {})
             state = read_json_file(STATE_PATH, None)
-            self.send_json(HTTPStatus.OK, {"ok": True, "configured": bool(config.get("repository") and config.get("githubToken")), "repository": config.get("repository"), "channel": "stable", "lastOperation": state})
+            token_stored = bool(config.get("githubToken"))
+            self.send_json(HTTPStatus.OK, {"ok": True, "configured": bool(config.get("repository") and token_stored), "tokenStored": token_stored, "repository": config.get("repository"), "channel": "stable", "lastOperation": state})
             return
         self.send_json(HTTPStatus.NOT_FOUND, {"reason": "not_found"})
 

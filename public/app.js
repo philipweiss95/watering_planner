@@ -7,6 +7,7 @@ let updaterStatus = null;
 let updateCheck = null;
 let updatePollTimer = null;
 let updatePollAttempts = 0;
+let updaterSetupOpen = false;
 
 const IGNORED_SUGGESTIONS_KEY = "wateringPlannerIgnoredSuggestions";
 
@@ -72,7 +73,7 @@ function renderState() {
   balconyForm.elements.refill_automation_enabled.checked = state.settings?.refill_automation_enabled !== false;
   balconyForm.elements.main_pump_calibration_factor.value = state.settings?.main_pump_calibration_factor ?? 1;
   balconyForm.elements.watering_amount_percent.value = state.settings?.watering_amount_percent ?? 100;
-  $("#appVersion").textContent = `v${state.version || "1.0.1"}`;
+  $("#appVersion").textContent = `v${state.version || "1.0.2"}`;
   renderCalibrationStatus();
 
   $("#outletEditor").innerHTML = state.outlets
@@ -135,6 +136,8 @@ async function refreshUpdaterStatus() {
     renderUpdater();
   } catch (error) {
     updaterStatus = null;
+    $("#updateTokenStatus").textContent = "Updater nicht erreichbar";
+    $("#updateTokenStatus").classList.remove("ok");
     $("#updateNotice").textContent = `Updater nicht erreichbar: ${formatUpdateError(error.message)}`;
     $("#updateResult").textContent = "In Synology Container Manager muss der Dienst „updater“ gemeinsam mit dem Planner gestartet sein.";
   }
@@ -142,11 +145,18 @@ async function refreshUpdaterStatus() {
 
 function renderUpdater() {
   const configured = Boolean(updaterStatus?.configured);
+  const tokenStored = Boolean(updaterStatus?.tokenStored ?? configured);
   $("#updateRepository").value = updaterStatus?.repository || $("#updateRepository").value || "philipweiss95/watering_planner";
+  $("#updateSetup").hidden = configured && !updaterSetupOpen;
+  $("#updateGithubToken").placeholder = tokenStored ? "Token gespeichert – zum Ersetzen neu eingeben" : "github_pat_…";
+  $("#updateTokenStatus").textContent = tokenStored ? "Token gespeichert" : "Token fehlt";
+  $("#updateTokenStatus").classList.toggle("ok", tokenStored);
   $("#updateNotice").textContent = configured
-    ? `Stabile GitHub-Releases aus ${updaterStatus.repository}; das Token bleibt ausschließlich im Datenvolume des Updaters.`
+    ? `Stabile GitHub-Releases aus ${updaterStatus.repository}. Der gespeicherte Token bleibt ausschließlich im Datenvolume des Updaters.`
     : "GitHub-Zugang noch nicht eingerichtet. Benötigt wird ein Token mit Lesezugriff auf das Repository.";
-  $("#updateSetupButton").textContent = configured ? "GitHub-Zugang speichern" : "Updater einrichten";
+  $("#updateSetupButton").textContent = configured
+    ? updaterSetupOpen ? "Neuen GitHub-Zugang speichern" : "GitHub-Zugang ändern"
+    : "Updater einrichten";
   const release = updateCheck?.release;
   const operation = updaterStatus?.lastOperation;
   if (release) {
@@ -158,8 +168,11 @@ function renderUpdater() {
   } else {
     $("#updateResult").textContent = configured ? "Noch nicht nach Updates gesucht." : "";
   }
-  $("#updateReleaseNotes").hidden = !release?.notes || !updateCheck?.updateAvailable;
-  $("#updateReleaseNotes").textContent = release?.notes || "";
+  const releaseNotes = String(release?.notes || operation?.releaseNotes || "").trim();
+  const changelogVersion = release?.version || operation?.targetVersion || "";
+  $("#updateChangelog").hidden = !releaseNotes;
+  $("#updateChangelogTitle").textContent = changelogVersion ? `Changelog ${changelogVersion}` : "Changelog";
+  $("#updateReleaseNotes").textContent = releaseNotes;
   const installing = operation?.status === "running";
   $("#updateCheckButton").disabled = !configured || installing;
   $("#updateInstallButton").disabled = !updateCheck?.updateAvailable || installing;
@@ -1535,6 +1548,12 @@ $("#calibrateRefillButton").addEventListener("click", () => submitCalibration("r
 
 $("#updateSetupButton").addEventListener("click", async () => {
   const button = $("#updateSetupButton");
+  if (updaterStatus?.configured && !updaterSetupOpen) {
+    updaterSetupOpen = true;
+    renderUpdater();
+    $("#updateGithubToken").focus();
+    return;
+  }
   button.disabled = true;
   try {
     await api("/api/update/setup", {
@@ -1545,6 +1564,7 @@ $("#updateSetupButton").addEventListener("click", async () => {
       }),
     });
     $("#updateGithubToken").value = "";
+    updaterSetupOpen = false;
     await refreshUpdaterStatus();
   } catch (error) {
     $("#updateResult").textContent = `Einrichtung fehlgeschlagen: ${formatUpdateError(error.message)}`;
