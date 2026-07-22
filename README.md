@@ -14,6 +14,8 @@ Danach im Browser öffnen:
 http://127.0.0.1:8080
 ```
 
+Auf dem iPhone lässt sich die Seite in Safari über **Teilen > Zum Home-Bildschirm** als **Gießplaner** installieren. Manifest, App-Icon, Standalone-Darstellung und Safe-Area-Abstände sind integriert. Für Service Worker und eine zuverlässige Web-App-Installation sollte die NAS-Adresse über HTTPS bereitgestellt werden.
+
 Die SQLite-Datenbank wird beim ersten Start unter `data/watering.sqlite3` angelegt. Eine neue leere Datenbank startet mit Beispieldaten. Der anschließend im Webinterface gepflegte Datenbankbestand ist maßgeblich; Excel-Dateien im Datenordner werden nicht importiert.
 
 ## Docker / Synology NAS
@@ -85,6 +87,8 @@ Zusätzlich verwaltet der Planer einen 30-l-Vorratstank mit eigener Nachfüllpum
 Beide Pumpen können unter **Einstellungen > Pumpen kalibrieren** anhand eines abgelesenen Füllstands von 0 bis 100 Prozent kalibriert werden. Für die Wasserpumpe wird aus dem letzten Vollstand beziehungsweise der letzten Messung, den Bewässerungszyklen, zwischenzeitlichen Nachfüllungen und dem prozentual gemessenen Haupttankstand ein Verbrauchsfaktor ermittelt. Er verändert ausschließlich die Tankbilanz, nie die ml-Angaben der Pflanzen. Für die Nachfüllpumpe berechnet der Planer aus dem prozentualen Vorratstankverlust und der protokollierten Pumpzeit einen neuen Durchsatz in ml/min und überschreibt damit den bisherigen Wert.
 
 Version 1.0 enthält außerdem auf der **Info-Seite** einen internen Synology-Updater. Er liest ausschließlich stabile GitHub-Releases, prüft die SHA-256-Prüfsumme, sichert die bestehende Programmversion, baut beide Container neu und führt bei einem Fehler einen Rollback aus. Der GitHub-Token wird dauerhaft nur im persistenten `data`-Volume gespeichert und nicht an den Browser zurückgegeben. Zu jedem Release wird der passende Abschnitt aus [CHANGELOG.md](CHANGELOG.md) veröffentlicht und vor sowie nach der Installation im Updater angezeigt.
+
+Der Updater erneuert sich am Ende eines Updates über einen unabhängigen, kurzlebigen Übergabecontainer. Dadurch bleibt der Compose-Befehl aktiv, während der alte Updater ersetzt wird. Gestoppte Duplikate des Updater-Dienstes aus früher abgebrochenen Neuerstellungen werden dabei innerhalb desselben Compose-Projekts entfernt.
 
 Die Berechnung nutzt Temperatur, Tagesniederschlag, Wind, FAO-Referenzverdunstung ET₀, Sonnenscheindauer, Balkon-/Terrassenausrichtung in Grad, Koordinaten, Pflanzenpositionen und die vier Wandhöhen nach Seite. Wenn Open-Meteo keine ET₀-Werte liefert oder manuelle Wetterdaten genutzt werden, schätzt die App ET₀ aus Temperatur, Sonnenscheindauer und Wind. Zusätzlich wird Wind als Balkon-Expositionsfaktor berechnet: hohe Windgeschwindigkeiten erhöhen Transpiration und Topfverdunstung, niedrige Wände schützen weniger.
 

@@ -3355,3 +3355,374 @@ button:not(:disabled):active,
     grid-column: 1 / -1;
   }
 }
+
+/* Compact configuration workspaces and standalone iPhone layout */
+
+html,
+body {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+main,
+.view,
+.view.active,
+.panel,
+.config-plan-panel,
+.config-plants-panel,
+.compact-create-panel,
+.plant-card,
+.hose-row {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.view-hero-icon,
+.metric-icon,
+.settings-group-heading::before {
+  align-items: center;
+  justify-items: center;
+  line-height: 1;
+}
+
+.view-hero-icon svg,
+.metric-icon svg {
+  display: block;
+  margin: auto;
+}
+
+.settings-group-heading::before {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  text-align: center;
+}
+
+.settings-view .config-setup-panel,
+.settings-view .settings-form,
+.settings-view .settings-group {
+  width: 100%;
+  max-width: none;
+}
+
+.plants-hero,
+.hoses-hero {
+  padding-block: 16px;
+}
+
+.plants-hero .view-hero-icon,
+.hoses-hero .view-hero-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+}
+
+.plants-hero .hero-tip,
+.hoses-hero .hero-tip {
+  padding-block: 8px;
+}
+
+.compact-create-panel {
+  padding: 0;
+  overflow: hidden;
+}
+
+.compact-create-panel > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 74px;
+  padding: 15px 18px;
+  cursor: pointer;
+  list-style: none;
+  background: linear-gradient(135deg, #f0f7f1, #ffffff);
+}
+
+.compact-create-panel > summary::-webkit-details-marker {
+  display: none;
+}
+
+.compact-create-panel > summary h2 {
+  margin-top: 2px;
+}
+
+.summary-action {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  border: 1px solid #bfd4c4;
+  border-radius: 999px;
+  padding: 6px 10px;
+  background: #ffffff;
+  color: var(--accent-strong);
+  font-size: 0;
+  font-weight: 850;
+}
+
+.summary-action::after {
+  content: "Öffnen";
+  font-size: 0.74rem;
+}
+
+.compact-create-panel[open] .summary-action::after {
+  content: "Schließen";
+}
+
+.compact-create-panel[open] > summary {
+  border-bottom: 1px solid var(--line);
+}
+
+.compact-create-content {
+  padding: 16px 18px 18px;
+}
+
+.compact-create-content > .section-copy {
+  margin-bottom: 12px;
+}
+
+.config-plants-panel .plants {
+  gap: 9px;
+}
+
+.plant-card {
+  gap: 8px;
+  border-radius: 12px;
+  padding: 11px;
+}
+
+.plant-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  font-size: 0.69rem;
+}
+
+.plant-identity {
+  gap: 8px;
+}
+
+.plant-identity strong {
+  font-size: 0.92rem;
+}
+
+.plant-identity .meta {
+  margin-top: 1px;
+  font-size: 0.74rem;
+}
+
+.plant-actions {
+  gap: 5px;
+}
+
+.plant-actions .small-button,
+.plant-actions .delete {
+  min-height: 30px;
+  padding: 5px 8px;
+  font-size: 0.72rem;
+}
+
+.plant-quick-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.plant-quick-stats > span:not(.connection-chip) {
+  display: grid;
+  gap: 1px;
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: #f4f7f3;
+}
+
+.plant-quick-stats small {
+  color: var(--muted);
+  font-size: 0.63rem;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.plant-quick-stats strong {
+  font-size: 0.82rem;
+}
+
+.plant-details {
+  border-top: 1px solid var(--line);
+  padding-top: 7px;
+}
+
+.plant-details > summary,
+.assignment-list > summary {
+  cursor: pointer;
+  color: #476054;
+  font-size: 0.76rem;
+  font-weight: 850;
+}
+
+.plant-details[open] > summary,
+.assignment-list[open] > summary {
+  margin-bottom: 8px;
+}
+
+.plant-details .connection-compare {
+  gap: 6px;
+  padding: 8px;
+}
+
+.plant-details > .meta {
+  margin-top: 6px;
+  font-size: 0.74rem;
+}
+
+.config-plan-panel .section-copy,
+.config-plants-panel > .section-copy,
+.hose-setup-panel > .section-copy,
+.config-routing-panel > .section-copy {
+  margin-bottom: 10px;
+  font-size: 0.82rem;
+}
+
+.config-routing-panel .assignment-list {
+  max-height: 420px;
+  padding: 10px;
+}
+
+.config-routing-panel .assignment-row {
+  gap: 8px;
+  padding: 8px 0;
+}
+
+.config-routing-panel .assignment-row .meta {
+  font-size: 0.74rem;
+}
+
+.hose-editor {
+  gap: 7px;
+}
+
+.hose-row {
+  gap: 8px;
+  border-radius: 10px;
+  padding: 9px 10px;
+}
+
+.hose-row-title {
+  display: grid;
+  align-content: center;
+  justify-content: start;
+  gap: 3px;
+}
+
+.hose-row-number {
+  font-size: 0.82rem;
+}
+
+.hose-assignment {
+  justify-self: start;
+  min-height: 23px;
+  padding: 3px 7px;
+  font-size: 0.66rem;
+}
+
+.hose-row label {
+  gap: 4px;
+  font-size: 0.72rem;
+}
+
+.hose-row input,
+.hose-row select {
+  min-height: 40px;
+}
+
+.hose-row .delete {
+  min-height: 40px;
+}
+
+.hose-actions {
+  margin-top: 12px;
+  padding-top: 11px;
+}
+
+@media (min-width: 720px) {
+  .settings-form,
+  .settings-group,
+  .settings-save-bar {
+    grid-column: 1 / -1;
+  }
+
+  .settings-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-group .settings-grid {
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  }
+
+  .hose-row,
+  .hose-row-title {
+    grid-column: auto;
+  }
+
+  .hose-row {
+    grid-template-columns: minmax(150px, 0.72fr) minmax(110px, 0.48fr) minmax(190px, 1fr) auto;
+    align-items: end;
+  }
+}
+
+@media (min-width: 980px) {
+  .settings-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-group,
+  .settings-group.watering-settings,
+  .settings-save-bar {
+    grid-column: 1 / -1;
+  }
+
+  .config-plants-panel .plants {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .plants-view .config-plan-panel .balcony-plan {
+    min-height: 300px;
+  }
+}
+
+@media (max-width: 719px) {
+  .topbar {
+    padding-top: calc(13px + env(safe-area-inset-top));
+  }
+
+  main,
+  .view.active,
+  .config-plan-panel,
+  .config-plants-panel,
+  .compact-create-panel {
+    width: 100%;
+  }
+
+  .section-copy,
+  .meta,
+  .plant-details,
+  .connection-side {
+    overflow-wrap: anywhere;
+  }
+
+  .plants-hero .hero-tip,
+  .hoses-hero .hero-tip {
+    display: none;
+  }
+
+  .plant-quick-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .plant-quick-stats .connection-chip {
+    grid-column: 1 / -1;
+  }
+}

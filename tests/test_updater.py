@@ -61,6 +61,58 @@ class UpdaterTests(unittest.TestCase):
         with patch.object(updater, "run", return_value=""):
             self.assertEqual(updater.compose_project_name(), "watering-planner")
 
+    def test_cleanup_removes_only_stopped_duplicate_updaters(self):
+        commands = []
+
+        def fake_run(command, timeout=600):
+            commands.append(command)
+            if command[:3] == ["docker", "ps", "-aq"] and "status=exited" in command:
+                return "old-updater-id"
+            return ""
+
+        with patch.object(updater, "run", side_effect=fake_run):
+            removed = updater.cleanup_stopped_updater_containers("synology-project", "current-updater-id")
+
+        self.assertEqual(removed, ["old-updater-id"])
+        self.assertIn(["docker", "rm", "old-updater-id"], commands)
+        filters = [item for command in commands for item in command if item.startswith("label=")]
+        self.assertIn("label=com.docker.compose.project=synology-project", filters)
+        self.assertIn("label=com.docker.compose.service=updater", filters)
+
+    def test_updater_handoff_runs_in_independent_helper_container(self):
+        commands = []
+        current_id = "a" * 64
+
+        def fake_run(command, timeout=600):
+            commands.append(command)
+            if command[:4] == ["docker", "inspect", "--format", "{{.Id}}"]:
+                return current_id
+            if command[:4] == ["docker", "inspect", "--format", '{{ index .Config.Labels "com.docker.compose.project" }}']:
+                return "container-manager-project"
+            if command[:4] == ["docker", "inspect", "--format", "{{json .Mounts}}"]:
+                return '[{"Type":"bind","Destination":"/project","Source":"/volume1/docker/watering-planner"}]'
+            if "images" in command and "-q" in command:
+                return "sha256:new-updater-image"
+            if command[:3] == ["docker", "ps", "-aq"]:
+                return ""
+            if command[:2] == ["docker", "run"]:
+                return "handoff-container-id"
+            return ""
+
+        with patch.object(updater, "run", side_effect=fake_run), patch.object(updater.time, "time", return_value=1234):
+            helper_id = updater.schedule_updater_handoff(Path("/data/update/runtime-1234.yml"))
+
+        self.assertEqual(helper_id, "handoff-container-id")
+        docker_run = next(command for command in commands if command[:2] == ["docker", "run"])
+        self.assertIn("--rm", docker_run)
+        self.assertIn("/volume1/docker/watering-planner:/project", docker_run)
+        self.assertIn("/volume1/docker/watering-planner/data:/data", docker_run)
+        script = docker_run[-1]
+        self.assertIn("sleep 5", script)
+        self.assertIn("--project-name container-manager-project", script)
+        self.assertIn("up -d --no-deps --force-recreate updater", script)
+        self.assertIn("rm -f /data/update/runtime-1234.yml", script)
+
     def test_release_notes_use_only_requested_changelog_version(self):
         changelog = """# Changelog
 
@@ -108,6 +160,21 @@ class UpdaterTests(unittest.TestCase):
         self.assertIn('id="refillCalibrationLevel" type="number" min="0" max="100"', html)
         self.assertIn("measured_level_percent", javascript)
         self.assertNotIn("JSON.stringify({ measured_level_ml:", javascript)
+
+    def test_iphone_web_app_metadata_and_icons_are_present(self):
+        root = Path(__file__).resolve().parents[1]
+        html = (root / "public" / "index.html").read_text(encoding="utf-8")
+        manifest = (root / "public" / "manifest.webmanifest").read_text(encoding="utf-8")
+        javascript = (root / "public" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('name="apple-mobile-web-app-capable" content="yes"', html)
+        self.assertIn('name="apple-mobile-web-app-title" content="Gießplaner"', html)
+        self.assertIn('rel="apple-touch-icon"', html)
+        self.assertIn('"display": "standalone"', manifest)
+        self.assertNotIn('id="plants"', html)
+        self.assertIn("window.scrollTo(0, 0)", javascript)
+        for size in (180, 192, 512):
+            self.assertTrue((root / "public" / "icons" / f"app-icon-{size}.png").is_file())
 
 
 if __name__ == "__main__":

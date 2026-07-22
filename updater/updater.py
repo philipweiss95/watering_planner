@@ -5,6 +5,7 @@ import hmac
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import tarfile
@@ -157,8 +158,23 @@ def run(command: list[str], timeout: int = 600) -> str:
     return result.stdout.strip()
 
 
+def updater_container_reference() -> str:
+    """Prefer this container's own Docker ID over a configured display name."""
+    candidates = [os.environ.get("HOSTNAME", "").strip(), UPDATER_CONTAINER_NAME]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            container_id = run(["docker", "inspect", "--format", "{{.Id}}", candidate]).strip()
+        except RuntimeError:
+            continue
+        if re.fullmatch(r"[a-f0-9]{12,64}", container_id):
+            return container_id
+    raise RuntimeError("updater_container_not_found")
+
+
 def host_project_dir() -> str:
-    raw = run(["docker", "inspect", "--format", "{{json .Mounts}}", UPDATER_CONTAINER_NAME])
+    raw = run(["docker", "inspect", "--format", "{{json .Mounts}}", updater_container_reference()])
     mounts = json.loads(raw)
     for mount in mounts:
         if mount.get("Type") == "bind" and mount.get("Destination") == "/project":
@@ -169,7 +185,11 @@ def host_project_dir() -> str:
 def compose_project_name() -> str:
     """Use the Compose project that owns the running Synology containers."""
     label_format = '{{ index .Config.Labels "com.docker.compose.project" }}'
-    for container_name in (UPDATER_CONTAINER_NAME, PLANNER_CONTAINER_NAME):
+    try:
+        updater_reference = updater_container_reference()
+    except RuntimeError:
+        updater_reference = UPDATER_CONTAINER_NAME
+    for container_name in (updater_reference, PLANNER_CONTAINER_NAME):
         try:
             project_name = run(["docker", "inspect", "--format", label_format, container_name]).strip()
         except RuntimeError:
@@ -201,6 +221,61 @@ def compose(arguments: list[str], runtime_file: Path, timeout: int = 900) -> str
     ], timeout=timeout)
 
 
+def cleanup_stopped_updater_containers(project_name: str, current_container_id: str) -> list[str]:
+    """Remove interrupted Compose replacements, scoped to this project and service."""
+    removed = []
+    for status in ("created", "exited", "dead"):
+        output = run([
+            "docker", "ps", "-aq",
+            "--filter", f"label=com.docker.compose.project={project_name}",
+            "--filter", "label=com.docker.compose.service=updater",
+            "--filter", f"status={status}",
+        ])
+        for container_id in output.splitlines():
+            container_id = container_id.strip()
+            if not container_id or current_container_id.startswith(container_id) or container_id.startswith(current_container_id):
+                continue
+            run(["docker", "rm", container_id])
+            removed.append(container_id)
+    return removed
+
+
+def schedule_updater_handoff(runtime_file: Path) -> str:
+    """Let an independent helper recreate this container after the request finishes."""
+    current_container_id = updater_container_reference()
+    project_name = compose_project_name()
+    host_dir = host_project_dir()
+    cleanup_stopped_updater_containers(project_name, current_container_id)
+    image_ids = compose(["images", "-q", "updater"], runtime_file).splitlines()
+    image_id = next((item.strip() for item in image_ids if item.strip()), "")
+    if not image_id:
+        raise RuntimeError("updater_image_not_found_after_build")
+
+    helper_runtime_file = f"/data/update/{runtime_file.name}"
+    compose_command = " ".join([
+        "docker compose",
+        "--project-name", shlex.quote(project_name),
+        "--project-directory /project",
+        "-f /project/docker-compose.yml",
+        "-f", shlex.quote(helper_runtime_file),
+        "up -d --no-deps --force-recreate updater",
+    ])
+    script = (
+        f"sleep 5; {compose_command}; result=$?; "
+        f"rm -f {shlex.quote(helper_runtime_file)}; exit $result"
+    )
+    helper_name = f"watering-planner-updater-handoff-{int(time.time())}"
+    return run([
+        "docker", "run", "-d", "--rm", "--name", helper_name,
+        "-v", "/var/run/docker.sock:/var/run/docker.sock",
+        "-v", f"{host_dir}:/project",
+        "-v", f"{host_dir}/data:/data",
+        "--entrypoint", "sh",
+        image_id,
+        "-c", script,
+    ])
+
+
 def safe_zip_members(archive: zipfile.ZipFile, expected_root: str) -> list[zipfile.ZipInfo]:
     members = archive.infolist()
     prefix = f"{expected_root}/"
@@ -225,6 +300,7 @@ def install_update(current_version: str) -> None:
     try:
         backup_path = None
         runtime_file = None
+        handoff_scheduled = False
         try:
             update_state(type="install", status="running", phase="release", step=1, totalSteps=8, currentVersion=current_version, message="Suche nach dem neuesten stabilen Release.")
             release = latest_release()
@@ -295,8 +371,10 @@ def install_update(current_version: str) -> None:
                     time.sleep(2)
                 else:
                     raise RuntimeError("watering_planner_health_timeout")
+                update_state(phase="handoff", step=8, message="Aktiviere den neuen Updater ohne den laufenden Installationsprozess zu unterbrechen.")
+                schedule_updater_handoff(runtime_file)
+                handoff_scheduled = True
                 update_state(status="ok", phase="complete", step=8, message=f"Update auf {release['version']} erfolgreich installiert.", finishedAt=now_iso())
-                compose(["up", "-d", "--no-deps", "--force-recreate", "updater"], runtime_file)
         except Exception as exc:
             if backup_path and backup_path.exists():
                 try:
@@ -315,7 +393,7 @@ def install_update(current_version: str) -> None:
                     exc = RuntimeError(f"{exc}; rollback_failed: {rollback_error}")
             update_state(status="error", phase="error", message=str(exc), finishedAt=now_iso())
         finally:
-            if runtime_file:
+            if runtime_file and not handoff_scheduled:
                 runtime_file.unlink(missing_ok=True)
     finally:
         INSTALL_RUNNING.clear()

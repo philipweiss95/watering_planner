@@ -117,6 +117,8 @@ Wenn das Projekt bisher mit einer anderen Compose-Datei oder über SSH erstellt 
 
 Danach verwendet auch **Projekt > Aktion > Erstellen** die gespeicherte Synology-Projektdatei. SSH bleibt nur noch für Diagnosefälle nötig.
 
+Der interne Updater ersetzt seinen eigenen Container nach einem erfolgreichen Update über einen kurzlebigen Übergabecontainer. Dieser läuft unabhängig vom zu ersetzenden Updater und startet den neuen Dienst vollständig. Gestoppte Updater-Duplikate mit denselben Compose-Projekt- und Service-Labels werden bei dieser Übergabe automatisch entfernt. Ein manuelles Starten des neuen Updater-Containers sollte ab Version 1.3.0 nicht mehr nötig sein.
+
 Die Synology-Dateien verwenden absichtlich:
 
 ```yaml

@@ -9,6 +9,12 @@ let updatePollTimer = null;
 let updatePollAttempts = 0;
 let updaterSetupOpen = false;
 
+if ("serviceWorker" in navigator && window.isSecureContext) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
+  });
+}
+
 const IGNORED_SUGGESTIONS_KEY = "wateringPlannerIgnoredSuggestions";
 
 const $ = (selector) => document.querySelector(selector);
@@ -73,7 +79,7 @@ function renderState() {
   balconyForm.elements.refill_automation_enabled.checked = state.settings?.refill_automation_enabled !== false;
   balconyForm.elements.main_pump_calibration_factor.value = state.settings?.main_pump_calibration_factor ?? 1;
   balconyForm.elements.watering_amount_percent.value = state.settings?.watering_amount_percent ?? 100;
-  $("#appVersion").textContent = `v${state.version || "1.2.0"}`;
+  $("#appVersion").textContent = `v${state.version || "1.3.0"}`;
   renderCalibrationStatus();
 
   $("#outletEditor").innerHTML = state.outlets
@@ -223,12 +229,13 @@ function setActiveView(viewName) {
     }
   });
   window.location.hash = viewName;
+  window.requestAnimationFrame(() => window.scrollTo(0, 0));
 }
 
 function renderPlants() {
   const assignments = latestEvaluation?.connection_plan?.assignments || [];
   const evaluatedPlants = latestEvaluation?.plants || [];
-  $("#plants").innerHTML = state.plants.length
+  $("#plantList").innerHTML = state.plants.length
     ? state.plants
         .map(
           (plant) => {
@@ -240,9 +247,8 @@ function renderPlants() {
               ? `Anschluss: ${hoseLabel(plant.hose_numbers)} · ${plant.outlet_summary} · ${plant.configured_ml_per_cycle} ml/Zyklus`
               : "Noch keine Schläuche angeschlossen";
             const connectionText = ignored ? "" : assignment?.connection_note || plant.connection_note || "";
-            const needText = evaluated
-              ? `Berechneter Bedarf heute: ${evaluated.need_ml} ml`
-              : "Bedarf wird nach Wetterdaten berechnet";
+            const needMl = evaluated ? `${evaluated.need_ml} ml` : "--";
+            const connectionStatus = ignored ? "ok" : assignment?.connection_status || plant.connection_status || "ok";
             return `
               <article class="plant-card">
                 <div class="plant-top">
@@ -258,16 +264,23 @@ function renderPlants() {
                     <button class="delete" data-delete="${plant.id}" type="button">Entfernen</button>
                   </div>
                 </div>
-                ${renderConnectionCompare(plant, assignment, ignored)}
-                <p class="meta">${outletText}</p>
-                ${connectionText ? `<p class="meta ${connectionClass(assignment)}">${connectionText}</p>` : ""}
-                <p class="meta">${needText}</p>
+                <div class="plant-quick-stats">
+                  <span><small>Bedarf heute</small><strong>${needMl}</strong></span>
+                  <span><small>Je Zyklus</small><strong>${Math.round(plant.configured_ml_per_cycle || 0)} ml</strong></span>
+                  <span class="connection-chip ${connectionStatus}">${connectionStatusLabel(connectionStatus)}</span>
+                </div>
+                <details class="plant-details" ${connectionStatus !== "ok" ? "open" : ""}>
+                  <summary>Versorgung und Anschlüsse</summary>
+                  ${renderConnectionCompare(plant, assignment, ignored)}
+                  <p class="meta">${outletText}</p>
+                  ${connectionText ? `<p class="meta ${connectionClass(assignment)}">${connectionText}</p>` : ""}
+                </details>
               </article>
             `;
           },
         )
         .join("")
-    : `<div class="empty-state"><span aria-hidden="true">+</span><strong>Noch keine Pflanzen</strong><p>Lege rechts deine erste Pflanze an.</p></div>`;
+    : `<div class="empty-state"><span aria-hidden="true">+</span><strong>Noch keine Pflanzen</strong><p>Öffne „Neue Pflanze“ und lege deinen ersten Topf an.</p></div>`;
 
   document.querySelectorAll("[data-edit]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -1282,8 +1295,8 @@ function renderRoutingAssignments(result) {
   const ok = result.connection_plan.assignments.filter((item) => item.connection_status === "ok");
   const sorted = [...urgent, ...changes, ...ok];
   return `
-    <div class="assignment-list">
-      <strong>${result.connection_plan.summary}</strong>
+    <details class="assignment-list" ${urgent.length || changes.length ? "open" : ""}>
+      <summary>${result.connection_plan.summary}</summary>
       ${sorted
         .map(
           (item) => `
@@ -1301,7 +1314,7 @@ function renderRoutingAssignments(result) {
           `,
         )
         .join("")}
-    </div>
+    </details>
   `;
 }
 

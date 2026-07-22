@@ -2,6 +2,15 @@
 
 Alle stabilen Änderungen am Watering Planner werden in dieser Datei dokumentiert.
 
+## [1.3.0] - 2026-07-22
+
+- Updater-Neustart an einen unabhängigen Hilfscontainer übergeben, damit die eigene Neuerstellung den laufenden Update-Prozess nicht mehr abbricht.
+- Gestoppte Updater-Duplikate desselben Compose-Projekts werden vor der Übergabe gezielt entfernt.
+- iPhone-Web-App-Unterstützung mit Manifest, Standalone-Modus, Safe-Area-Layout, Service Worker und eigenem Gießplaner-App-Icon ergänzt.
+- Einstellungsbereiche nutzen auf großen Bildschirmen wieder die volle Breite; Abschnitts- und Seitenicons exakt zentriert.
+- Pflanzenkarten auf Kernwerte verdichtet und Versorgungsdetails bedarfsgerecht aufklappbar gemacht.
+- Pflanzenanlage, Schlauchzeilen und Anschlussprüfung kompakter gestaltet, ohne Bearbeitungsfunktionen zu entfernen.
+
 ## [1.2.0] - 2026-07-22
 
 - Dashboard auf die aktuelle Bewässerungsentscheidung, den Tagesplan, beide Tankstände, Reichweite, Wetter und Systemstatus verdichtet.
