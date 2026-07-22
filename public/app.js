@@ -73,7 +73,7 @@ function renderState() {
   balconyForm.elements.refill_automation_enabled.checked = state.settings?.refill_automation_enabled !== false;
   balconyForm.elements.main_pump_calibration_factor.value = state.settings?.main_pump_calibration_factor ?? 1;
   balconyForm.elements.watering_amount_percent.value = state.settings?.watering_amount_percent ?? 100;
-  $("#appVersion").textContent = `v${state.version || "1.1.0"}`;
+  $("#appVersion").textContent = `v${state.version || "1.2.0"}`;
   renderCalibrationStatus();
 
   $("#outletEditor").innerHTML = state.outlets
@@ -690,8 +690,8 @@ function renderTankQuickActions(result) {
   return `
     <div class="tank-action-card">
       <div>
-        <span class="metric-label">Tankstände</span>
-        <strong>${formatLiters(result.tank.current_ml)} Haupt · ${formatLiters(refillTank.current_ml || 0)} Vorrat</strong>
+        <span class="metric-label">Tankstände korrigieren</span>
+        <strong>Nach dem Auffüllen auf 100 % setzen</strong>
       </div>
       <div class="tank-fill-actions">
         <button class="secondary small-button" data-fill-tank="main" type="button">Haupttank voll</button>
@@ -1030,54 +1030,47 @@ function formatCompass(degrees) {
 
 function renderDashboardCards(result, urgentActions, changeActions) {
   const weather = result.weather || result.inputs;
-  const tankPercent = result.tank.percent ?? Math.round((result.tank.current_ml / Math.max(result.tank.capacity_ml, 1)) * 100);
-  const refill = result.refill || {};
-  const refillTank = refill.refill_tank || {};
+  const tankPercent = clampPercent(result.tank.percent ?? (result.tank.current_ml / Math.max(result.tank.capacity_ml, 1)) * 100);
+  const refillTank = result.refill?.refill_tank || {};
+  const refillPercent = clampPercent(refillTank.percent || 0);
   const depletion = result.depletion || {};
   const remainingLiters = (result.pump.delivered_if_remaining_ml / 1000).toFixed(1);
   const perCycleLiters = (result.pump.delivered_per_cycle_ml / 1000).toFixed(2);
-  const wateringAmount = state.settings?.watering_amount_percent ?? 100;
-  const calibrationText = `${formatPercent(wateringAmount)}% Versorgung`;
   const automation = result.automation || {};
+  const connectionState = urgentActions.length
+    ? `${urgentActions.length} Anschluss${urgentActions.length === 1 ? "" : "e"} dringend prüfen`
+    : changeActions.length
+      ? `${changeActions.length} Empfehlung${changeActions.length === 1 ? "" : "en"}`
+      : "Anschlüsse in Ordnung";
   return `
-    <article class="metric-card primary-metric ${result.should_run ? "go" : "stop"}">
+    <article class="metric-card primary-metric summary-span-two ${result.should_run ? "go" : "stop"}">
       ${icon("cycles")}
       <div>
-        <p class="metric-label">Zyklen heute</p>
-        <strong>${result.remaining_cycles_today}<span>/${result.recommended_cycles_today}</span></strong>
-        <p class="metric-detail">${result.cycles_completed_today} erledigt</p>
+        <p class="metric-label">Tagesplan</p>
+        <strong>${result.remaining_cycles_today} <span>${result.remaining_cycles_today === 1 ? "Lauf" : "Läufe"} offen</span></strong>
+        <p class="metric-detail">${result.cycles_completed_today} von ${result.recommended_cycles_today} erledigt · ${remainingLiters} l offen · ${perCycleLiters} l je Lauf</p>
       </div>
     </article>
-    <article class="metric-card water-metric">
-      ${icon("drop")}
-      <div>
-        <p class="metric-label">Offene Menge</p>
-        <strong>${remainingLiters} l</strong>
-        <p class="metric-detail">${perCycleLiters} l je Lauf</p>
-      </div>
-    </article>
-    <article class="metric-card tank-metric ${result.tank.empty_soon ? "urgent" : result.tank.low ? "warn" : ""}">
+    <article class="metric-card tank-overview-metric summary-span-two ${result.tank.empty_soon || refillTank.empty ? "urgent" : result.tank.low || refillTank.low ? "warn" : ""}">
       ${icon("tank")}
-      <div>
-        <p class="metric-label">Haupttank</p>
-        <strong>${tankPercent}%</strong>
-        <p class="metric-detail">${result.tank.warning || `${Math.round(result.tank.after_recommended_ml / 1000)} l nach Plan`}</p>
-      </div>
-    </article>
-    <article class="metric-card refill-metric ${refillTank.empty ? "urgent" : refill.limited_by_refill_tank || refillTank.low ? "warn" : "ok"}">
-      ${icon("tank")}
-      <div>
-        <p class="metric-label">Vorratstank</p>
-        <strong>${refillTank.percent ?? 0}%</strong>
-        <p class="metric-detail">${refill.summary || `${formatLiters(refill.planned_transfer_ml || 0)} um ${refill.scheduled_time || "01:00"}`}</p>
+      <div class="tank-overview-content">
+        <p class="metric-label">Wasservorrat</p>
+        <div class="tank-level-row">
+          <span>Haupttank</span><strong>${tankPercent}%</strong>
+          <span class="tank-level"><i style="width: ${tankPercent}%"></i></span>
+        </div>
+        <div class="tank-level-row refill">
+          <span>Vorrat</span><strong>${refillPercent}%</strong>
+          <span class="tank-level"><i style="width: ${refillPercent}%"></i></span>
+        </div>
       </div>
     </article>
     <article class="metric-card depletion-metric ${depletion.all_empty_at ? "warn" : "ok"}">
       ${icon("clock")}
       <div>
-        <p class="metric-label">Alles leer</p>
-        <strong>${depletion.all_empty_at ? formatDateTime(depletion.all_empty_at) : "--"}</strong>
-        <p class="metric-detail">${depletion.total_available_ml !== undefined ? `${formatLiters(depletion.total_available_ml)} Gesamtvorrat` : "Noch keine Reichweite"}</p>
+        <p class="metric-label">Reichweite</p>
+        <strong>${depletion.all_empty_at ? formatDateTime(depletion.all_empty_at) : "Stabil"}</strong>
+        <p class="metric-detail">${depletion.total_available_ml !== undefined ? `${formatLiters(depletion.total_available_ml)} verfügbar` : "Wird noch berechnet"}</p>
       </div>
     </article>
     <article class="metric-card weather-metric">
@@ -1088,31 +1081,19 @@ function renderDashboardCards(result, urgentActions, changeActions) {
         <p class="metric-detail">${Math.round(weather.rain_mm * 10) / 10} mm Regen · ${Math.round(weather.wind_kmh)} km/h</p>
       </div>
     </article>
-    <article class="metric-card setup-metric ${urgentActions.length ? "urgent" : changeActions.length ? "warn" : "ok"}">
-      ${icon("route")}
-      <div>
-        <p class="metric-label">Anschlüsse</p>
-        <strong>${urgentActions.length ? urgentActions.length : changeActions.length}</strong>
-        <p class="metric-detail">${urgentActions.length ? "dringend" : changeActions.length ? "Änderungen" : "Bestand passt"}</p>
-      </div>
-    </article>
-    <article class="metric-card automation-metric ${automation.run_now ? "go" : automation.paused ? "stop" : "ok"}">
+    <article class="metric-card automation-metric summary-span-two ${automation.run_now ? "go" : automation.paused ? "stop" : "ok"}">
       ${icon("clock")}
       <div>
-        <p class="metric-label">Home Assistant</p>
-        <strong>${automation.run_now ? "Jetzt" : automation.next_window || "--"}</strong>
-        <p class="metric-detail">${automation.paused ? "Automatik pausiert" : automation.catch_up ? "verpasster Lauf wird nachgeholt" : "nächster verteilter Lauf"}</p>
-      </div>
-    </article>
-    <article class="metric-card model-metric">
-      ${icon("leaf")}
-      <div>
-        <p class="metric-label">Modell</p>
-        <strong>${result.plants.length}</strong>
-        <p class="metric-detail">${calibrationText}</p>
+        <p class="metric-label">System</p>
+        <strong>${automation.paused ? "Pausiert" : automation.run_now ? "Bereit" : automation.next_window || "Automatisch"}</strong>
+        <p class="metric-detail">${connectionState}</p>
       </div>
     </article>
   `;
+}
+
+function clampPercent(value) {
+  return Math.max(0, Math.min(100, Math.round(Number(value) || 0)));
 }
 
 function formatPercent(value) {
@@ -1209,7 +1190,8 @@ function renderWateringLog() {
     `;
     return;
   }
-  target.innerHTML = wateringEvents
+  const visibleEvents = wateringEvents.slice(0, 6);
+  target.innerHTML = visibleEvents
     .map(
       (event) => `
         <article class="log-row">
@@ -1225,7 +1207,9 @@ function renderWateringLog() {
         </article>
       `,
     )
-    .join("");
+    .join("") + (wateringEvents.length > visibleEvents.length
+      ? `<p class="log-count-hint">Die letzten ${visibleEvents.length} von ${wateringEvents.length} Vorgängen werden angezeigt.</p>`
+      : "");
 }
 
 function eventLogIcon(event) {
@@ -1528,23 +1512,23 @@ async function submitCalibration(kind) {
   const isMain = kind === "main";
   const input = $(isMain ? "#mainCalibrationLevel" : "#refillCalibrationLevel");
   const button = $(isMain ? "#calibrateMainButton" : "#calibrateRefillButton");
-  const liters = Number(input.value);
-  if (!Number.isFinite(liters) || liters < 0) {
-    renderCalibrationStatus("Bitte einen gültigen gemessenen Füllstand in Litern eingeben.");
+  const percent = Number(input.value);
+  if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
+    renderCalibrationStatus("Bitte einen Füllstand zwischen 0 und 100 Prozent eingeben.");
     return;
   }
   button.disabled = true;
   try {
     state = await api(`/api/calibration/${kind}`, {
       method: "POST",
-      body: JSON.stringify({ measured_level_ml: Math.round(liters * 1000) }),
+      body: JSON.stringify({ measured_level_percent: percent }),
     });
     input.value = "";
     renderState();
     await evaluateCurrent();
-    renderCalibrationStatus(isMain ? "Verbrauchsfaktor wurde aus der Messreihe neu berechnet." : "Fördermenge pro Minute wurde aus der Messreihe neu berechnet.");
+    renderCalibrationStatus(isMain ? "Wasserpumpe erfolgreich kalibriert." : "Nachfüllpumpe erfolgreich kalibriert.");
   } catch (error) {
-    renderCalibrationStatus(`Eichung nicht möglich: ${error.message}`);
+    renderCalibrationStatus(`Kalibrierung nicht möglich: ${error.message}`);
   } finally {
     button.disabled = false;
   }

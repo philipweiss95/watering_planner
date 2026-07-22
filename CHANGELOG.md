@@ -2,6 +2,14 @@
 
 Alle stabilen Änderungen am Watering Planner werden in dieser Datei dokumentiert.
 
+## [1.2.0] - 2026-07-22
+
+- Dashboard auf die aktuelle Bewässerungsentscheidung, den Tagesplan, beide Tankstände, Reichweite, Wetter und Systemstatus verdichtet.
+- Visuelle Hierarchie, Navigation, Aktionsflächen, Statuskarten und das mobile Layout weiter vereinheitlicht.
+- Vorgangsprotokoll auf die jüngsten Einträge begrenzt, damit die Übersicht schnell erfassbar bleibt.
+- Pumpeneichung in eine verständlich erklärte Kalibrierung mit prozentualen Füllständen von 0 bis 100 Prozent umgestellt.
+- Technische Pumpenwerte in einen optionalen Detailbereich verschoben.
+
 ## [1.1.0] - 2026-07-21
 
 - Einstellungen, Schläuche, Pflanzen und Info als einheitliche, übersichtlichere Arbeitsbereiche neu gestaltet.

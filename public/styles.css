@@ -2962,3 +2962,396 @@ button:not(:disabled):active,
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Product dashboard and percentage calibration */
+
+.topbar {
+  border-bottom-color: rgba(186, 201, 188, 0.72);
+  background: rgba(247, 250, 246, 0.92);
+}
+
+.topbar-head h1 {
+  letter-spacing: -0.025em;
+}
+
+.tank {
+  border: 1px solid #c7ddce;
+  background: rgba(255, 255, 255, 0.76);
+  box-shadow: 0 4px 14px rgba(27, 48, 34, 0.05);
+}
+
+.app-nav {
+  border-color: #d5ded5;
+  background: rgba(232, 238, 232, 0.78);
+}
+
+.nav-button.active {
+  background: #ffffff;
+  color: var(--accent-strong);
+  box-shadow: 0 3px 12px rgba(26, 48, 33, 0.09);
+}
+
+.decision-panel {
+  border-color: #c8d8cb;
+  background:
+    radial-gradient(circle at 100% 0, rgba(78, 143, 96, 0.1), transparent 25rem),
+    #ffffff;
+}
+
+.decision-panel > .section-heading {
+  align-items: center;
+  margin-bottom: 18px;
+}
+
+.dashboard-intro {
+  margin: 5px 0 0;
+  font-size: 0.84rem;
+}
+
+.dashboard-command {
+  display: block;
+}
+
+.decision-layout {
+  grid-template-columns: 1fr;
+  min-height: 0;
+  border: 0;
+  border-radius: 14px;
+  padding: clamp(16px, 2.4vw, 22px);
+  background: linear-gradient(135deg, #eaf6ed, #f9fcf9 72%);
+  box-shadow: inset 0 0 0 1px #c8ddcd;
+}
+
+.decision-layout.wait {
+  border: 0;
+  background: linear-gradient(135deg, #f1f6e8, #fbfcf8 72%);
+  box-shadow: inset 0 0 0 1px #d7e1ca;
+}
+
+.decision-layout.stop {
+  border: 0;
+  background: linear-gradient(135deg, #fff2ed, #fffaf8 72%);
+  box-shadow: inset 0 0 0 1px #ead3cb;
+}
+
+.decision-copy {
+  gap: 7px;
+}
+
+.decision-copy > span:not(.decision-kicker) {
+  max-width: 62ch;
+}
+
+.decision-copy strong {
+  letter-spacing: -0.035em;
+}
+
+.automation-controls {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.manual-run-card {
+  min-width: 0;
+  border: 1px solid rgba(188, 210, 194, 0.88);
+  border-radius: 11px;
+  padding: 11px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.automation-secondary {
+  grid-column: 1 / -1;
+}
+
+.dashboard-context {
+  margin-top: 10px;
+}
+
+.next-action-card,
+.schedule-card,
+.tank-action-card {
+  border-radius: 11px;
+  box-shadow: none;
+}
+
+.tank-action-card {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  margin-top: 10px;
+  background: #fafcf9;
+}
+
+.tank-action-card .tank-fill-actions {
+  justify-content: flex-end;
+}
+
+.dashboard-section-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+
+.dashboard-section-heading h3 {
+  margin-top: 3px;
+  font-size: 1rem;
+}
+
+.dashboard-section-heading > span {
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
+.dashboard-cards {
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.metric-card {
+  min-height: 98px;
+  border-color: #d9e1da;
+  border-radius: 12px;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 7px 20px rgba(27, 48, 34, 0.045);
+}
+
+.metric-card.primary-metric,
+.metric-card.tank-overview-metric,
+.metric-card.depletion-metric,
+.metric-card.weather-metric,
+.metric-card.automation-metric {
+  background: #ffffff;
+}
+
+.metric-card.primary-metric {
+  border-color: #c4dbc9;
+  background: linear-gradient(135deg, #eef8f0, #ffffff 82%);
+}
+
+.metric-card strong {
+  white-space: normal;
+}
+
+.summary-span-two {
+  grid-column: span 2;
+}
+
+.tank-overview-metric {
+  align-items: start;
+}
+
+.tank-overview-metric.warn {
+  border-color: #e3c6a9;
+}
+
+.tank-overview-metric.urgent {
+  border-color: #e2aaaa;
+}
+
+.tank-overview-content {
+  display: grid;
+  gap: 8px;
+}
+
+.tank-level-row {
+  display: grid;
+  grid-template-columns: minmax(68px, auto) auto minmax(70px, 1fr);
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.tank-level-row strong {
+  min-width: 38px;
+  justify-content: flex-end;
+  color: var(--ink);
+  font-size: 0.85rem;
+}
+
+.tank-level {
+  display: block;
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e7ece7;
+}
+
+.tank-level i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #2d8a68, #55ad7d);
+}
+
+.tank-level-row.refill .tank-level i {
+  background: linear-gradient(90deg, #347d97, #63a9bd);
+}
+
+.watering-log-panel {
+  border-top: 4px solid #dceade;
+}
+
+.log-row,
+.empty-log {
+  border-radius: 11px;
+  background: #fcfdfb;
+}
+
+.log-count-hint {
+  padding: 5px 4px 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+  text-align: center;
+}
+
+.tank-settings-grid {
+  align-items: center;
+}
+
+.pump-details {
+  margin-top: 14px;
+}
+
+.calibration-guide {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.calibration-guide span {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 48px;
+  border-radius: 10px;
+  padding: 9px 10px;
+  background: #edf4ee;
+  color: #42564a;
+  font-size: 0.76rem;
+  font-weight: 750;
+  line-height: 1.3;
+}
+
+.calibration-guide b {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #ffffff;
+  color: var(--accent-strong);
+  font-size: 0.72rem;
+  box-shadow: 0 2px 6px rgba(27, 48, 34, 0.08);
+}
+
+.calibration-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.calibration-card {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid #d7e1d8;
+  border-radius: 12px;
+  padding: 14px;
+  background: #ffffff;
+}
+
+.calibration-card > div:first-child {
+  display: grid;
+  gap: 2px;
+}
+
+.calibration-card > div:first-child strong {
+  font-size: 1rem;
+}
+
+.calibration-card > label {
+  margin-top: 2px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+}
+
+.input-with-unit {
+  position: relative;
+}
+
+.input-with-unit input {
+  width: 100%;
+  padding-right: 42px;
+  font-size: 1.08rem;
+  font-weight: 800;
+}
+
+.input-with-unit > span {
+  position: absolute;
+  top: 50%;
+  right: 15px;
+  transform: translateY(-50%);
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 900;
+  pointer-events: none;
+}
+
+.calibration-settings .calibration-card .small-button {
+  width: 100%;
+  min-height: 44px;
+  margin-top: 0;
+}
+
+.calibration-result:not(:empty) {
+  margin-top: 12px;
+  border-radius: 9px;
+  padding: 9px 11px;
+  background: #edf4ee;
+  color: #3d5647;
+}
+
+@media (max-width: 719px) {
+  .automation-controls,
+  .calibration-guide,
+  .calibration-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .tank-action-card {
+    grid-template-columns: 1fr;
+  }
+
+  .tank-action-card .tank-fill-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .tank-action-card .tank-fill-actions button {
+    width: 100%;
+  }
+
+  .summary-span-two {
+    grid-column: auto;
+  }
+
+  .dashboard-section-heading > span {
+    display: none;
+  }
+}
+
+@media (max-width: 420px) {
+  .tank-level-row {
+    grid-template-columns: minmax(62px, auto) auto;
+  }
+
+  .tank-level {
+    grid-column: 1 / -1;
+  }
+}

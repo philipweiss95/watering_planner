@@ -83,9 +83,11 @@ class WateringPlannerTests(unittest.TestCase):
         before = server.evaluate(temperature_c=26, rain_mm=0)
         nominal = before["pump"]["delivered_per_cycle_ml"]
         server.mark_run(nominal, 26, 0)
-        measured_level = server.get_state()["balcony"]["tank_capacity_ml"] - nominal * 2
+        capacity = server.get_state()["balcony"]["tank_capacity_ml"]
+        measured_level = capacity - nominal * 2
+        measured_percent = measured_level / capacity * 100
 
-        calibration = server.calibrate_main_pump(measured_level)
+        calibration = server.calibrate_main_pump(measured_percent)
         after_calibration = server.evaluate(temperature_c=26, rain_mm=0)
 
         self.assertAlmostEqual(calibration["result_value"], 2)
@@ -97,7 +99,11 @@ class WateringPlannerTests(unittest.TestCase):
 
     def test_main_pump_calibration_requires_a_recorded_full_level(self):
         with self.assertRaisesRegex(ValueError, "voll markieren"):
-            server.calibrate_main_pump(7000)
+            server.calibrate_main_pump(70)
+
+    def test_pump_calibration_rejects_invalid_percentage(self):
+        with self.assertRaisesRegex(ValueError, "0 und 100 Prozent"):
+            server.calibrate_main_pump(101)
 
     def test_refill_pump_calibration_overwrites_flow_rate(self):
         server.fill_tank("refill")
@@ -112,7 +118,7 @@ class WateringPlannerTests(unittest.TestCase):
             )
             conn.execute("UPDATE balcony_settings SET refill_tank_current_ml = 29000 WHERE id = 1")
 
-        calibration = server.calibrate_refill_pump(28000)
+        calibration = server.calibrate_refill_pump(28000 / 30000 * 100)
         state = server.get_state()
 
         self.assertEqual(calibration["cycles"], 1)
