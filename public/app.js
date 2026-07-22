@@ -79,7 +79,7 @@ function renderState() {
   balconyForm.elements.refill_automation_enabled.checked = state.settings?.refill_automation_enabled !== false;
   balconyForm.elements.main_pump_calibration_factor.value = state.settings?.main_pump_calibration_factor ?? 1;
   balconyForm.elements.watering_amount_percent.value = state.settings?.watering_amount_percent ?? 100;
-  $("#appVersion").textContent = `v${state.version || "1.3.0"}`;
+  $("#appVersion").textContent = `v${state.version || "1.3.1"}`;
   renderCalibrationStatus();
 
   $("#outletEditor").innerHTML = state.outlets

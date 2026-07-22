@@ -5,9 +5,9 @@ import hmac
 import json
 import os
 import re
-import shlex
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import threading
@@ -240,40 +240,166 @@ def cleanup_stopped_updater_containers(project_name: str, current_container_id: 
     return removed
 
 
-def schedule_updater_handoff(runtime_file: Path) -> str:
-    """Let an independent helper recreate this container after the request finishes."""
+def same_container(left: str, right: str) -> bool:
+    return bool(left and right and (left.startswith(right) or right.startswith(left)))
+
+
+def updater_container_ids(project_name: str) -> list[str]:
+    output = run([
+        "docker", "ps", "-aq",
+        "--filter", f"label=com.docker.compose.project={project_name}",
+        "--filter", "label=com.docker.compose.service=updater",
+    ])
+    return list(dict.fromkeys(item.strip() for item in output.splitlines() if item.strip()))
+
+
+def cleanup_other_updater_containers(project_name: str, keep_container_id: str) -> list[str]:
+    """Remove every updater from this Compose project except the verified replacement."""
+    removed = []
+    for container_id in updater_container_ids(project_name):
+        if same_container(container_id, keep_container_id):
+            continue
+        run(["docker", "rm", "-f", container_id])
+        removed.append(container_id)
+    return removed
+
+
+def helper_compose_command(project_name: str, runtime_file: Path, arguments: list[str]) -> list[str]:
+    return [
+        "docker", "compose", "--project-name", project_name, "--project-directory", str(PROJECT_DIR),
+        "-f", str(COMPOSE_FILE), "-f", str(runtime_file), *arguments,
+    ]
+
+
+def wait_for_verified_updater(container_id: str, expected_image_id: str, timeout: int = 120) -> None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        actual_image_id = run(["docker", "inspect", "--format", "{{.Image}}", container_id])
+        if actual_image_id != expected_image_id:
+            raise RuntimeError("updater_replacement_uses_unexpected_image")
+        status = run([
+            "docker", "inspect", "--format",
+            "{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}", container_id,
+        ])
+        if status in {"healthy", "running"}:
+            return
+        if status in {"unhealthy", "exited", "dead"}:
+            raise RuntimeError(f"updater_replacement_{status}")
+        time.sleep(2)
+    raise RuntimeError("updater_replacement_health_timeout")
+
+
+def perform_updater_handoff(
+    runtime_file: Path,
+    previous_container_id: str,
+    project_name: str,
+    expected_image_id: str,
+    target_version: str,
+) -> str:
+    """Recreate, verify and reconcile the updater from an independent helper container."""
+    time.sleep(5)
+    last_error = None
+    try:
+        for attempt in range(1, 4):
+            try:
+                run(helper_compose_command(
+                    project_name,
+                    runtime_file,
+                    ["up", "-d", "--no-deps", "--force-recreate", "updater"],
+                ), timeout=900)
+                candidates = [
+                    container_id
+                    for container_id in updater_container_ids(project_name)
+                    if not same_container(container_id, previous_container_id)
+                    and run(["docker", "inspect", "--format", "{{.Image}}", container_id]) == expected_image_id
+                ]
+                if not candidates:
+                    raise RuntimeError("updater_replacement_not_created")
+                new_container_id = ""
+                candidate_errors = []
+                for candidate_id in candidates:
+                    try:
+                        wait_for_verified_updater(candidate_id, expected_image_id)
+                        new_container_id = candidate_id
+                        break
+                    except Exception as exc:
+                        candidate_errors.append(str(exc))
+                if not new_container_id:
+                    raise RuntimeError(f"updater_replacement_not_healthy: {'; '.join(candidate_errors)}")
+                cleanup_other_updater_containers(project_name, new_container_id)
+                remaining = updater_container_ids(project_name)
+                if len(remaining) != 1 or not same_container(remaining[0], new_container_id):
+                    raise RuntimeError("updater_reconciliation_failed")
+                update_state(
+                    status="ok",
+                    phase="complete",
+                    step=8,
+                    targetVersion=target_version,
+                    message=f"Update auf {target_version} erfolgreich installiert; der neue Updater ist geprüft und aktiv.",
+                    finishedAt=now_iso(),
+                )
+                return new_container_id
+            except Exception as exc:
+                last_error = exc
+                if attempt < 3:
+                    time.sleep(3)
+        raise RuntimeError(f"updater_handoff_failed_after_retries: {last_error}")
+    except Exception as exc:
+        update_state(status="error", phase="error", message=str(exc), finishedAt=now_iso())
+        raise
+    finally:
+        runtime_file.unlink(missing_ok=True)
+
+
+def schedule_updater_handoff(runtime_file: Path, target_version: str) -> str:
+    """Start the verified handoff in an independent helper based on the new image."""
     current_container_id = updater_container_reference()
     project_name = compose_project_name()
     host_dir = host_project_dir()
     cleanup_stopped_updater_containers(project_name, current_container_id)
-    image_ids = compose(["images", "-q", "updater"], runtime_file).splitlines()
-    image_id = next((item.strip() for item in image_ids if item.strip()), "")
-    if not image_id:
+    image_reference = f"watering-planner-updater:{target_version}"
+    image_id = run(["docker", "image", "inspect", "--format", "{{.Id}}", image_reference])
+    if not re.fullmatch(r"sha256:[a-f0-9]{64}", image_id):
         raise RuntimeError("updater_image_not_found_after_build")
 
-    helper_runtime_file = f"/data/update/{runtime_file.name}"
-    compose_command = " ".join([
-        "docker compose",
-        "--project-name", shlex.quote(project_name),
-        "--project-directory /project",
-        "-f /project/docker-compose.yml",
-        "-f", shlex.quote(helper_runtime_file),
-        "up -d --no-deps --force-recreate updater",
-    ])
-    script = (
-        f"sleep 5; {compose_command}; result=$?; "
-        f"rm -f {shlex.quote(helper_runtime_file)}; exit $result"
-    )
-    helper_name = f"watering-planner-updater-handoff-{int(time.time())}"
+    helper_name = f"watering-planner-updater-handoff-{current_container_id[:12]}-{int(time.time())}"
     return run([
         "docker", "run", "-d", "--rm", "--name", helper_name,
         "-v", "/var/run/docker.sock:/var/run/docker.sock",
         "-v", f"{host_dir}:/project",
         "-v", f"{host_dir}/data:/data",
-        "--entrypoint", "sh",
+        "--entrypoint", "python",
         image_id,
-        "-c", script,
+        "/app/updater.py", "handoff", runtime_file.name, current_container_id,
+        project_name, image_id, target_version,
     ])
+
+
+def reconcile_updater_on_startup(project_version: str | None = None) -> None:
+    """Let the expected current image recover interrupted replacements and the canonical name."""
+    time.sleep(2)
+    try:
+        current_container_id = updater_container_reference()
+        project_name = compose_project_name()
+        version = project_version or (PROJECT_DIR / "VERSION").read_text(encoding="utf-8").strip()
+        expected_image_id = run([
+            "docker", "image", "inspect", "--format", "{{.Id}}",
+            f"watering-planner-updater:{version}",
+        ])
+        current_image_id = run(["docker", "inspect", "--format", "{{.Image}}", current_container_id])
+        if current_image_id != expected_image_id:
+            print("Updater startup reconciliation skipped: running image is not the project version.")
+            return
+        cleanup_other_updater_containers(project_name, current_container_id)
+        current_name = run(["docker", "inspect", "--format", "{{.Name}}", current_container_id]).lstrip("/")
+        if current_name != UPDATER_CONTAINER_NAME:
+            run(["docker", "rename", current_container_id, UPDATER_CONTAINER_NAME])
+        remaining = updater_container_ids(project_name)
+        if len(remaining) != 1 or not same_container(remaining[0], current_container_id):
+            raise RuntimeError("updater_startup_reconciliation_failed")
+        print(f"Updater startup reconciliation complete: {UPDATER_CONTAINER_NAME} uses {version}.")
+    except Exception as exc:
+        print(f"Updater startup reconciliation warning: {exc}")
 
 
 def safe_zip_members(archive: zipfile.ZipFile, expected_root: str) -> list[zipfile.ZipInfo]:
@@ -372,9 +498,8 @@ def install_update(current_version: str) -> None:
                 else:
                     raise RuntimeError("watering_planner_health_timeout")
                 update_state(phase="handoff", step=8, message="Aktiviere den neuen Updater ohne den laufenden Installationsprozess zu unterbrechen.")
-                schedule_updater_handoff(runtime_file)
+                schedule_updater_handoff(runtime_file, release["version"])
                 handoff_scheduled = True
-                update_state(status="ok", phase="complete", step=8, message=f"Update auf {release['version']} erfolgreich installiert.", finishedAt=now_iso())
         except Exception as exc:
             if backup_path and backup_path.exists():
                 try:
@@ -476,9 +601,22 @@ class Handler(BaseHTTPRequestHandler):
 def main() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
+    threading.Thread(target=reconcile_updater_on_startup, daemon=True).start()
     print(f"Watering Planner updater listening on {PORT}")
     server.serve_forever()
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) == 7 and sys.argv[1] == "handoff":
+        runtime_name, previous_container_id, project_name, expected_image_id, target_version = sys.argv[2:]
+        if Path(runtime_name).name != runtime_name or not re.fullmatch(r"runtime-[0-9]+\.yml", runtime_name):
+            raise SystemExit("invalid_handoff_runtime_file")
+        perform_updater_handoff(
+            DATA_DIR / runtime_name,
+            previous_container_id,
+            project_name,
+            expected_image_id,
+            target_version,
+        )
+    else:
+        main()

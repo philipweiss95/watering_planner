@@ -2,6 +2,13 @@
 
 Alle stabilen Änderungen am Watering Planner werden in dieser Datei dokumentiert.
 
+## [1.3.1] - 2026-07-22
+
+- Updater-Übergabe wartet nun auf das neue Container-Image und einen erfolgreichen Healthcheck, bevor das Update als abgeschlossen gilt.
+- Nach erfolgreicher Übergabe bleibt exakt ein Updater-Container des Compose-Projekts bestehen; alte, gestoppte oder noch laufende Duplikate werden entfernt.
+- Der Updater gleicht seine Containeridentität beim Start selbst ab, räumt unterbrochene Ersetzungen auf und übernimmt bei Bedarf wieder den kanonischen Namen `watering-planner-updater`.
+- Die unabhängige Übergabe versucht die Neuerstellung bis zu dreimal und speichert einen Fehlerstatus, falls Image-, Health- oder Eindeutigkeitsprüfung fehlschlagen.
+
 ## [1.3.0] - 2026-07-22
 
 - Updater-Neustart an einen unabhängigen Hilfscontainer übergeben, damit die eigene Neuerstellung den laufenden Update-Prozess nicht mehr abbricht.

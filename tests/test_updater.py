@@ -82,6 +82,7 @@ class UpdaterTests(unittest.TestCase):
     def test_updater_handoff_runs_in_independent_helper_container(self):
         commands = []
         current_id = "a" * 64
+        image_id = "sha256:" + "b" * 64
 
         def fake_run(command, timeout=600):
             commands.append(command)
@@ -91,8 +92,8 @@ class UpdaterTests(unittest.TestCase):
                 return "container-manager-project"
             if command[:4] == ["docker", "inspect", "--format", "{{json .Mounts}}"]:
                 return '[{"Type":"bind","Destination":"/project","Source":"/volume1/docker/watering-planner"}]'
-            if "images" in command and "-q" in command:
-                return "sha256:new-updater-image"
+            if command[:3] == ["docker", "image", "inspect"]:
+                return image_id
             if command[:3] == ["docker", "ps", "-aq"]:
                 return ""
             if command[:2] == ["docker", "run"]:
@@ -100,18 +101,134 @@ class UpdaterTests(unittest.TestCase):
             return ""
 
         with patch.object(updater, "run", side_effect=fake_run), patch.object(updater.time, "time", return_value=1234):
-            helper_id = updater.schedule_updater_handoff(Path("/data/update/runtime-1234.yml"))
+            helper_id = updater.schedule_updater_handoff(Path("/data/update/runtime-1234.yml"), "1.3.1")
 
         self.assertEqual(helper_id, "handoff-container-id")
         docker_run = next(command for command in commands if command[:2] == ["docker", "run"])
         self.assertIn("--rm", docker_run)
         self.assertIn("/volume1/docker/watering-planner:/project", docker_run)
         self.assertIn("/volume1/docker/watering-planner/data:/data", docker_run)
-        script = docker_run[-1]
-        self.assertIn("sleep 5", script)
-        self.assertIn("--project-name container-manager-project", script)
-        self.assertIn("up -d --no-deps --force-recreate updater", script)
-        self.assertIn("rm -f /data/update/runtime-1234.yml", script)
+        self.assertEqual(docker_run[docker_run.index("--entrypoint") + 1], "python")
+        self.assertIn(image_id, docker_run)
+        self.assertEqual(docker_run[-6:], [
+            "handoff", "runtime-1234.yml", current_id,
+            "container-manager-project", image_id, "1.3.1",
+        ])
+
+    def test_handoff_verifies_new_image_health_and_removes_all_duplicates(self):
+        commands = []
+        removed = set()
+        previous_id = "a" * 64
+        new_id = "b" * 64
+        old_duplicate_id = "c" * 64
+        image_id = "sha256:" + "d" * 64
+
+        def fake_run(command, timeout=600):
+            commands.append(command)
+            if command[-3:] == ["ps", "-q", "updater"]:
+                return new_id
+            if command[:4] == ["docker", "inspect", "--format", "{{.Image}}"]:
+                return image_id
+            if command[:3] == ["docker", "inspect", "--format"]:
+                return "healthy"
+            if command[:3] == ["docker", "ps", "-aq"]:
+                ids = [new_id]
+                if old_duplicate_id not in removed:
+                    ids.append(old_duplicate_id)
+                return "\n".join(ids)
+            if command[:3] == ["docker", "rm", "-f"]:
+                removed.add(command[-1])
+                return command[-1]
+            return ""
+
+        with tempfile.TemporaryDirectory() as directory:
+            runtime_file = Path(directory) / "runtime-1234.yml"
+            runtime_file.write_text("services: {}", encoding="utf-8")
+            with (
+                patch.object(updater, "run", side_effect=fake_run),
+                patch.object(updater, "update_state") as update_state,
+                patch.object(updater.time, "sleep"),
+            ):
+                result = updater.perform_updater_handoff(
+                    runtime_file, previous_id, "synology-project", image_id, "1.3.1"
+                )
+
+            self.assertEqual(result, new_id)
+            self.assertFalse(runtime_file.exists())
+            self.assertIn(old_duplicate_id, removed)
+            self.assertIn(["docker", "rm", "-f", old_duplicate_id], commands)
+            update_state.assert_called_once()
+            self.assertEqual(update_state.call_args.kwargs["status"], "ok")
+            self.assertEqual(update_state.call_args.kwargs["targetVersion"], "1.3.1")
+
+    def test_startup_reconciliation_promotes_current_image_and_removes_old_updater(self):
+        commands = []
+        current_id = "a" * 64
+        old_id = "b" * 64
+        image_id = "sha256:" + "c" * 64
+        removed = set()
+
+        def fake_run(command, timeout=600):
+            commands.append(command)
+            if command[:4] == ["docker", "inspect", "--format", "{{.Id}}"]:
+                return current_id
+            if command[:4] == ["docker", "inspect", "--format", '{{ index .Config.Labels "com.docker.compose.project" }}']:
+                return "synology-project"
+            if command[:3] == ["docker", "image", "inspect"]:
+                return image_id
+            if command[:4] == ["docker", "inspect", "--format", "{{.Image}}"]:
+                return image_id
+            if command[:4] == ["docker", "inspect", "--format", "{{.Name}}"]:
+                return "/7ac37_current-updater"
+            if command[:3] == ["docker", "ps", "-aq"]:
+                ids = [current_id]
+                if old_id not in removed:
+                    ids.append(old_id)
+                return "\n".join(ids)
+            if command[:3] == ["docker", "rm", "-f"]:
+                removed.add(command[-1])
+                return command[-1]
+            return ""
+
+        with (
+            patch.object(updater, "run", side_effect=fake_run),
+            patch.object(updater.time, "sleep"),
+        ):
+            updater.reconcile_updater_on_startup("1.3.1")
+
+        self.assertIn(["docker", "rm", "-f", old_id], commands)
+        self.assertIn(["docker", "rename", current_id, "watering-planner-updater"], commands)
+
+    def test_handoff_retries_three_times_and_persists_failure(self):
+        compose_attempts = []
+
+        def fake_run(command, timeout=600):
+            if command[-3:] == ["--no-deps", "--force-recreate", "updater"]:
+                compose_attempts.append(command)
+                raise RuntimeError("compose_failed")
+            return ""
+
+        with tempfile.TemporaryDirectory() as directory:
+            runtime_file = Path(directory) / "runtime-1234.yml"
+            runtime_file.write_text("services: {}", encoding="utf-8")
+            with (
+                patch.object(updater, "run", side_effect=fake_run),
+                patch.object(updater, "update_state") as update_state,
+                patch.object(updater.time, "sleep"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "updater_handoff_failed_after_retries"):
+                    updater.perform_updater_handoff(
+                        runtime_file,
+                        "a" * 64,
+                        "synology-project",
+                        "sha256:" + "b" * 64,
+                        "1.3.1",
+                    )
+
+            self.assertEqual(len(compose_attempts), 3)
+            self.assertFalse(runtime_file.exists())
+            update_state.assert_called_once()
+            self.assertEqual(update_state.call_args.kwargs["status"], "error")
 
     def test_release_notes_use_only_requested_changelog_version(self):
         changelog = """# Changelog
