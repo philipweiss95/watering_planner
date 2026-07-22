@@ -185,8 +185,9 @@ AUTOMATION_DAY_START = "07:00"
 AUTOMATION_DAY_END = "19:00"
 AUTOMATION_TRIGGER_TOLERANCE_MINUTES = 20
 AUTOMATION_RUN_COOLDOWN_MINUTES = 30
-REFILL_RUN_TIMES = ("01:00",)
+REFILL_RUN_TIMES = ("01:00", "06:00")
 REFILL_TRIGGER_TOLERANCE_MINUTES = 60
+REFILL_MIN_INTERVAL_MINUTES = 3 * 60
 REFILL_TRANSFER_FRACTION = 0.5
 REFILL_COOLDOWN_MINUTES_PER_LITER = 30
 REFILL_MIN_COOLDOWN_MINUTES = 15
@@ -524,7 +525,7 @@ def refill_schedule_times() -> list[str]:
 
 
 def save_refill_schedule_times(value: object) -> None:
-    # Das einzelne Nachtfenster ist fest definiert und wird nicht nachgeholt.
+    # Die beiden Nachtfenster sind fest definiert und werden nicht nachgeholt.
     set_setting("refill_schedule_times", json.dumps(list(REFILL_RUN_TIMES)))
 
 
@@ -2510,9 +2511,16 @@ def refill_status(balcony: dict) -> dict:
     if not next_window:
         next_window = refill_window_datetimes(now.date() + timedelta(days=1), now.tzinfo, schedule_times)[0]
     last_event = latest_refill_event()
+    last_event_at = parse_event_datetime(last_event.get("ran_at")) if last_event else None
+    cooldown_until = (
+        last_event_at.astimezone(now.tzinfo) + timedelta(minutes=REFILL_MIN_INTERVAL_MINUTES)
+        if last_event_at
+        else None
+    )
+    cooldown_active = bool(cooldown_until and now < cooldown_until)
     schedule_due = bool(active_window)
     need_exists = bool(transferable_ml > 0 and pump_ml_per_min > 0)
-    run_now = bool(enabled and schedule_due and need_exists)
+    run_now = bool(enabled and schedule_due and need_exists and not cooldown_active)
     catch_up = False
 
     if not enabled:
@@ -2523,6 +2531,8 @@ def refill_status(balcony: dict) -> dict:
         summary = "Haupttank ist voll."
     elif refill_current <= 0:
         summary = "Vorratstank ist leer."
+    elif cooldown_active:
+        summary = f"Nachfüllpause aktiv. Frühester nächster Lauf um {cooldown_until.strftime('%H:%M')}."
     elif transferable_ml < target_transfer_ml:
         summary = f"Nachfüllung auf {format_liters_for_text(transferable_ml)} begrenzt."
     elif run_now:
@@ -2556,9 +2566,9 @@ def refill_status(balcony: dict) -> dict:
         "limited_by_refill_tank": bool(target_transfer_ml > 0 and transferable_ml < min(target_transfer_ml, main_missing_ml)),
         "already_done": bool(completed_windows),
         "missed_today": bool(missed_windows),
-        "cooldown_active": False,
-        "cooldown_minutes": 0,
-        "cooldown_until": "",
+        "cooldown_active": cooldown_active,
+        "cooldown_minutes": REFILL_MIN_INTERVAL_MINUTES,
+        "cooldown_until": cooldown_until.isoformat() if cooldown_until else "",
         "need_exists": need_exists,
         "schedule_due": schedule_due,
         "catch_up": catch_up,
@@ -2773,6 +2783,8 @@ def manual_refill_status(result: dict) -> dict:
     manual_plan = manual_refill_plan(result)
     if int(manual_plan.get("planned_transfer_ml", 0)) <= 0:
         reason = manual_plan.get("summary") or "Keine Nachfüllung nötig."
+    elif result.get("refill", {}).get("cooldown_active"):
+        reason = result["refill"].get("summary") or "Zwischen Nachfüllvorgängen müssen mindestens drei Stunden liegen."
     elif not home_assistant_refill_webhook_url():
         reason = "Home-Assistant-Webhook für manuelle Nachfüllläufe ist noch nicht konfiguriert."
     else:
@@ -3548,6 +3560,8 @@ def mark_refill_run(source: str = "home_assistant") -> dict:
     pending = pending_refill_request()
     refill = refill_status(state["balcony"])
     if pending:
+        if refill["cooldown_active"]:
+            raise ValueError("Zwischen zwei Nachfüllvorgängen müssen mindestens drei Stunden liegen")
         refill = {
             **refill,
             "target_date": pending.get("target_date", refill.get("target_date", "")),
@@ -3561,6 +3575,8 @@ def mark_refill_run(source: str = "home_assistant") -> dict:
         raise ValueError("Automatisches Nachfüllen ist deaktiviert")
     elif not refill["schedule_due"]:
         raise ValueError("Für dieses Nachfüllzeitfenster wurde bereits ein Lauf verbucht oder es ist noch nicht erreicht")
+    elif refill["cooldown_active"]:
+        raise ValueError("Zwischen zwei Nachfüllvorgängen müssen mindestens drei Stunden liegen")
     transferred_ml = int(refill["planned_transfer_ml"])
     if transferred_ml <= 0:
         raise ValueError(refill["summary"] or "Keine Nachfüllung nötig")

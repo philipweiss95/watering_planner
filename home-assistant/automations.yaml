@@ -85,9 +85,14 @@
       minutes: "/15"
 
   action:
-    - condition: time
-      after: "00:59:00"
-      before: "02:01:00"
+    - condition: or
+      conditions:
+        - condition: time
+          after: "00:59:00"
+          before: "02:01:00"
+        - condition: time
+          after: "05:59:00"
+          before: "07:01:00"
 
     - action: homeassistant.update_entity
       target:

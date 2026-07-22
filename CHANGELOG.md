@@ -2,6 +2,13 @@
 
 Alle stabilen Änderungen am Watering Planner werden in dieser Datei dokumentiert.
 
+## [1.3.3] - 2026-07-22
+
+- Zwei getrennte nächtliche Nachfüllfenster von 01:00 bis 02:00 und 06:00 bis 07:00 aktiviert.
+- Jedes Fenster kann höchstens einen automatischen Nachfüllvorgang auslösen und wird außerhalb seines Zeitraums nicht nachgeholt.
+- Zwischen sämtlichen Nachfüllvorgängen wird eine Mindestpause von drei Stunden eingehalten.
+- Home-Assistant-Vorlage auf beide Nachtfenster begrenzt.
+
 ## [1.3.2] - 2026-07-22
 
 - Automatische Nachfüllung auf genau ein tägliches Nachtfenster von 01:00 bis 02:00 begrenzt.
