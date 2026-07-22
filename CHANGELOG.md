@@ -2,6 +2,13 @@
 
 Alle stabilen Änderungen am Watering Planner werden in dieser Datei dokumentiert.
 
+## [1.3.2] - 2026-07-22
+
+- Automatische Nachfüllung auf genau ein tägliches Nachtfenster von 01:00 bis 02:00 begrenzt.
+- Das bisherige zweite Fenster um 06:00 entfernt, das nach einer Bewässerung einen weiteren halbierten Nachfülllauf ausgelöst hatte.
+- Verpasste Nachtfenster werden morgens und tagsüber nicht mehr nachgeholt.
+- Home-Assistant-Vorlage zusätzlich mit derselben Zeitbegrenzung abgesichert.
+
 ## [1.3.1] - 2026-07-22
 
 - Updater-Übergabe wartet nun auf das neue Container-Image und einen erfolgreichen Healthcheck, bevor das Update als abgeschlossen gilt.

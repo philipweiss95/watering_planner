@@ -1,9 +1,9 @@
-const CACHE_NAME = "watering-planner-1.3.1";
+const CACHE_NAME = "watering-planner-1.3.2";
 const APP_SHELL = [
   "/",
   "/index.html",
-  "/styles.css?v=1.3.1",
-  "/app.js?v=1.3.1",
+  "/styles.css?v=1.3.2",
+  "/app.js?v=1.3.2",
   "/manifest.webmanifest",
   "/icons/app-icon-180.png",
   "/icons/app-icon-192.png",

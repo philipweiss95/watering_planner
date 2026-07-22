@@ -185,7 +185,7 @@ AUTOMATION_DAY_START = "07:00"
 AUTOMATION_DAY_END = "19:00"
 AUTOMATION_TRIGGER_TOLERANCE_MINUTES = 20
 AUTOMATION_RUN_COOLDOWN_MINUTES = 30
-REFILL_RUN_TIMES = ("01:00", "06:00")
+REFILL_RUN_TIMES = ("01:00",)
 REFILL_TRIGGER_TOLERANCE_MINUTES = 60
 REFILL_TRANSFER_FRACTION = 0.5
 REFILL_COOLDOWN_MINUTES_PER_LITER = 30
@@ -524,7 +524,7 @@ def refill_schedule_times() -> list[str]:
 
 
 def save_refill_schedule_times(value: object) -> None:
-    # Seit Version 1.0 sind die zwei sicheren NAS-Zeitfenster fest definiert.
+    # Das einzelne Nachtfenster ist fest definiert und wird nicht nachgeholt.
     set_setting("refill_schedule_times", json.dumps(list(REFILL_RUN_TIMES)))
 
 
@@ -2487,9 +2487,22 @@ def refill_status(balcony: dict) -> dict:
     duration_seconds = math.ceil(transferable_ml / pump_ml_per_min * 60) if pump_ml_per_min and transferable_ml else 0
     refill_windows = refill_window_datetimes(now.date(), now.tzinfo, schedule_times)
     elapsed_windows = [item for item in refill_windows if item <= now]
-    pending_windows = [
+    eligible_windows = [
         item for item in elapsed_windows
+        if now <= item + timedelta(minutes=REFILL_TRIGGER_TOLERANCE_MINUTES)
+    ]
+    pending_windows = [
+        item for item in eligible_windows
         if not refill_event_for_target_date(target_date, item.strftime("%H:%M"))
+    ]
+    completed_windows = [
+        item for item in elapsed_windows
+        if refill_event_for_target_date(target_date, item.strftime("%H:%M"))
+    ]
+    missed_windows = [
+        item for item in elapsed_windows
+        if item not in eligible_windows
+        and not refill_event_for_target_date(target_date, item.strftime("%H:%M"))
     ]
     active_window = pending_windows[0] if pending_windows else None
     active_window_label = active_window.strftime("%H:%M") if active_window else ""
@@ -2500,7 +2513,7 @@ def refill_status(balcony: dict) -> dict:
     schedule_due = bool(active_window)
     need_exists = bool(transferable_ml > 0 and pump_ml_per_min > 0)
     run_now = bool(enabled and schedule_due and need_exists)
-    catch_up = bool(active_window and now > active_window + timedelta(minutes=REFILL_TRIGGER_TOLERANCE_MINUTES))
+    catch_up = False
 
     if not enabled:
         summary = "Automatisches Nachfüllen ist deaktiviert."
@@ -2514,6 +2527,8 @@ def refill_status(balcony: dict) -> dict:
         summary = f"Nachfüllung auf {format_liters_for_text(transferable_ml)} begrenzt."
     elif run_now:
         summary = "Nachfüllbedarf besteht, Nachfüllpumpe darf laufen."
+    elif missed_windows:
+        summary = f"Nachtfenster für heute verpasst. Nächste Nachfüllung um {next_window.strftime('%H:%M')}."
     elif now < next_window:
         summary = f"Nächste Nachfüllung um {next_window.strftime('%H:%M')}."
     else:
@@ -2539,7 +2554,8 @@ def refill_status(balcony: dict) -> dict:
         "main_missing_ml": main_missing_ml,
         "blocked_by_empty_refill_tank": bool(refill_current <= 0),
         "limited_by_refill_tank": bool(target_transfer_ml > 0 and transferable_ml < min(target_transfer_ml, main_missing_ml)),
-        "already_done": bool(elapsed_windows and not pending_windows),
+        "already_done": bool(completed_windows),
+        "missed_today": bool(missed_windows),
         "cooldown_active": False,
         "cooldown_minutes": 0,
         "cooldown_until": "",
