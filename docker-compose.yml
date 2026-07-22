@@ -1,7 +1,7 @@
 services:
   watering-planner:
     build: .
-    image: watering-planner:1.3.3
+    image: watering-planner:1.4.1
     container_name: watering-planner
     restart: unless-stopped
     user: "0:0"
@@ -29,7 +29,7 @@ services:
     build:
       context: .
       dockerfile: updater/Dockerfile
-    image: watering-planner-updater:1.3.3
+    image: watering-planner-updater:1.4.1
     container_name: watering-planner-updater
     restart: unless-stopped
     user: "0:0"

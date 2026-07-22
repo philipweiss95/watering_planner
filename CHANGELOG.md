@@ -2,6 +2,12 @@
 
 Alle stabilen Änderungen am Watering Planner werden in dieser Datei dokumentiert.
 
+## [1.4.1] - 2026-07-22
+
+- Docker-Image-Tags für Planner und Updater mit der Release-Version synchronisiert.
+- Release-Konsistenztest ergänzt, der Versionsdatei, Compose-Images und Web-App-Assets gemeinsam prüft.
+- Automatisches Update kann den neuen Updater dadurch wieder eindeutig finden und sicher übernehmen.
+
 ## [1.4.0] - 2026-07-22
 
 - Einstellungen auf eine klare Abfolge für Gießmenge, Balkon, Tanks und Pumpen reduziert.

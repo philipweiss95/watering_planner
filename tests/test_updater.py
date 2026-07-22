@@ -6,17 +6,34 @@ from pathlib import Path
 from unittest.mock import patch
 
 
-UPDATER_PATH = Path(__file__).resolve().parents[1] / "updater" / "updater.py"
+ROOT = Path(__file__).resolve().parents[1]
+UPDATER_PATH = ROOT / "updater" / "updater.py"
 SPEC = importlib.util.spec_from_file_location("watering_updater", UPDATER_PATH)
 updater = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(updater)
-RELEASE_NOTES_PATH = Path(__file__).resolve().parents[1] / "scripts" / "release_notes.py"
+RELEASE_NOTES_PATH = ROOT / "scripts" / "release_notes.py"
 RELEASE_NOTES_SPEC = importlib.util.spec_from_file_location("watering_release_notes", RELEASE_NOTES_PATH)
 release_notes = importlib.util.module_from_spec(RELEASE_NOTES_SPEC)
 RELEASE_NOTES_SPEC.loader.exec_module(release_notes)
 
 
 class UpdaterTests(unittest.TestCase):
+    def test_release_version_is_consistent_across_runtime_assets(self):
+        version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+        compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+        index = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
+        app = (ROOT / "public" / "app.js").read_text(encoding="utf-8")
+        service_worker = (ROOT / "public" / "sw.js").read_text(encoding="utf-8")
+
+        self.assertIn(f"image: watering-planner:{version}", compose)
+        self.assertIn(f"image: watering-planner-updater:{version}", compose)
+        self.assertIn(f"/styles.css?v={version}", index)
+        self.assertIn(f"/app.js?v={version}", index)
+        self.assertIn(f'v${{state.version || "{version}"}}', app)
+        self.assertIn(f'watering-planner-{version}', service_worker)
+        self.assertIn(f'"/styles.css?v={version}"', service_worker)
+        self.assertIn(f'"/app.js?v={version}"', service_worker)
+
     def test_versions_compare_stable_releases(self):
         self.assertEqual(updater.normalize_version("v1.0.0"), "1.0.0")
         self.assertGreater(updater.version_key("1.1.0"), updater.version_key("1.0.9"))
