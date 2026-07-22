@@ -82,7 +82,7 @@ Der Planer verteilt die empfohlenen Zyklen gleichmäßig zwischen `07:00` und `1
 
 Zusätzlich verwaltet der Planer einen 30-l-Vorratstank mit eigener Nachfüllpumpe. Die deaktivierbare Automatik läuft fest um `01:00` und `06:00`. Jeder Lauf füllt die Hälfte des zu diesem Zeitpunkt im Haupttank fehlenden Wassers nach; jeder Zeitpunkt wird höchstens einmal verbucht. Die Menge wird auf den Rest im Vorratstank begrenzt.
 
-Beide Pumpen können unter **Einstellungen > Pumpen eichen** kalibriert werden. Für die Wasserpumpe wird aus dem letzten Vollstand beziehungsweise der letzten Messung, den Bewässerungszyklen, zwischenzeitlichen Nachfüllungen und dem manuell gemessenen Haupttankstand ein Verbrauchsfaktor ermittelt. Er verändert ausschließlich die Tankbilanz, nie die ml-Angaben der Pflanzen. Für die Nachfüllpumpe berechnet der Planer aus Vorratstankverlust und protokollierter Pumpzeit einen neuen Durchsatz in ml/min und überschreibt damit den bisherigen Wert.
+Beide Pumpen können unter **Einstellungen > Pumpen kalibrieren** anhand eines abgelesenen Füllstands von 0 bis 100 Prozent kalibriert werden. Für die Wasserpumpe wird aus dem letzten Vollstand beziehungsweise der letzten Messung, den Bewässerungszyklen, zwischenzeitlichen Nachfüllungen und dem prozentual gemessenen Haupttankstand ein Verbrauchsfaktor ermittelt. Er verändert ausschließlich die Tankbilanz, nie die ml-Angaben der Pflanzen. Für die Nachfüllpumpe berechnet der Planer aus dem prozentualen Vorratstankverlust und der protokollierten Pumpzeit einen neuen Durchsatz in ml/min und überschreibt damit den bisherigen Wert.
 
 Version 1.0 enthält außerdem auf der **Info-Seite** einen internen Synology-Updater. Er liest ausschließlich stabile GitHub-Releases, prüft die SHA-256-Prüfsumme, sichert die bestehende Programmversion, baut beide Container neu und führt bei einem Fehler einen Rollback aus. Der GitHub-Token wird dauerhaft nur im persistenten `data`-Volume gespeichert und nicht an den Browser zurückgegeben. Zu jedem Release wird der passende Abschnitt aus [CHANGELOG.md](CHANGELOG.md) veröffentlicht und vor sowie nach der Installation im Updater angezeigt.
 
@@ -140,7 +140,7 @@ Content-Type: application/json
 ```
 
 Dadurch zählt der Server die bereits erledigten Tageszyklen und reduziert den Haupttankstand.
-Die letzten Läufe erscheinen im Dashboard als Protokoll unter `Bewässerungsvorgänge`.
+Die letzten Läufe erscheinen in der Übersicht als Protokoll unter `Bewässerungsvorgänge`.
 
 ## API
 
@@ -160,8 +160,8 @@ Die letzten Läufe erscheinen im Dashboard als Protokoll unter `Bewässerungsvor
 - `POST /api/refill/mark-run`: nächtlichen Nachfülllauf verbuchen und Wasser vom Vorratstank in den Haupttank rechnen
 - `POST /api/tanks/main/fill`: Haupttank als voll markieren
 - `POST /api/tanks/refill/fill`: 30-l-Vorratstank als voll markieren
-- `POST /api/calibration/main`: Hauptpumpenfaktor aus `measured_level_ml` eichen
-- `POST /api/calibration/refill`: Nachfüllpumpen-Durchsatz aus `measured_level_ml` eichen
+- `POST /api/calibration/main`: Hauptpumpenfaktor aus `measured_level_percent` kalibrieren
+- `POST /api/calibration/refill`: Nachfüllpumpen-Durchsatz aus `measured_level_percent` kalibrieren
 - `GET /api/update/status`: internen Updater-Status lesen
 - `POST /api/update/setup`, `/api/update/check`, `/api/update/install`: stabilen GitHub-Updater verwalten
 - `POST /api/automation/pause`: Automatik bis morgen pausieren

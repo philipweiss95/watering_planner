@@ -887,16 +887,27 @@ def calibration_status() -> dict:
     }
 
 
-def calibrate_main_pump(measured_level_ml: int | float) -> dict:
-    measured_level = int(round(float(measured_level_ml)))
+def measured_level_ml_from_percent(measured_level_percent: int | float, capacity_ml: int, tank_label: str) -> int:
+    percent = float(measured_level_percent)
+    if not math.isfinite(percent) or not 0 <= percent <= 100:
+        raise ValueError(f"Der Füllstand des {tank_label} muss zwischen 0 und 100 Prozent liegen")
+    return int(round(capacity_ml * percent / 100))
+
+
+def calibrate_main_pump(measured_level_percent: int | float) -> dict:
     calibrated_at = now_iso()
     with connect() as conn:
         balcony = conn.execute("SELECT tank_capacity_ml FROM balcony_settings WHERE id = 1").fetchone()
-        if not balcony or not 0 <= measured_level <= int(balcony["tank_capacity_ml"]):
-            raise ValueError("Der gemessene Haupttankstand liegt außerhalb der Tankgröße")
+        if not balcony:
+            raise ValueError("Der Haupttank ist nicht konfiguriert")
+        measured_level = measured_level_ml_from_percent(
+            measured_level_percent,
+            int(balcony["tank_capacity_ml"]),
+            "Haupttanks",
+        )
         baseline = calibration_baseline(conn, "main")
         if not baseline:
-            raise ValueError("Vor der ersten Eichung den Haupttank einmal als voll markieren")
+            raise ValueError("Vor der ersten Kalibrierung den Haupttank einmal als voll markieren")
         watering = conn.execute(
             """
             SELECT COUNT(*) AS cycles, COALESCE(SUM(delivered_ml), 0) AS nominal_ml
@@ -912,7 +923,7 @@ def calibrate_main_pump(measured_level_ml: int | float) -> dict:
         nominal_ml = int(watering["nominal_ml"])
         measured_ml = int(baseline["baseline_level_ml"]) + int(refilled["amount_ml"]) - measured_level
         if cycles <= 0 or nominal_ml <= 0:
-            raise ValueError("Seit dem letzten Vollstand oder der letzten Eichung wurde kein Bewässerungszyklus verbucht")
+            raise ValueError("Seit dem letzten Vollstand oder der letzten Kalibrierung wurde kein Bewässerungszyklus verbucht")
         if measured_ml <= 0:
             raise ValueError("Der gemessene Stand ergibt keinen positiven Wasserverbrauch")
         factor = measured_ml / nominal_ml
@@ -935,16 +946,20 @@ def calibrate_main_pump(measured_level_ml: int | float) -> dict:
     return latest_calibration("main") or {}
 
 
-def calibrate_refill_pump(measured_level_ml: int | float) -> dict:
-    measured_level = int(round(float(measured_level_ml)))
+def calibrate_refill_pump(measured_level_percent: int | float) -> dict:
     calibrated_at = now_iso()
     with connect() as conn:
         balcony = conn.execute("SELECT refill_tank_capacity_ml FROM balcony_settings WHERE id = 1").fetchone()
-        if not balcony or not 0 <= measured_level <= int(balcony["refill_tank_capacity_ml"]):
-            raise ValueError("Der gemessene Vorratstankstand liegt außerhalb der Tankgröße")
+        if not balcony:
+            raise ValueError("Der Vorratstank ist nicht konfiguriert")
+        measured_level = measured_level_ml_from_percent(
+            measured_level_percent,
+            int(balcony["refill_tank_capacity_ml"]),
+            "Vorratstanks",
+        )
         baseline = calibration_baseline(conn, "refill")
         if not baseline:
-            raise ValueError("Vor der ersten Eichung den Vorratstank einmal als voll markieren")
+            raise ValueError("Vor der ersten Kalibrierung den Vorratstank einmal als voll markieren")
         refills = conn.execute(
             """
             SELECT COUNT(*) AS cycles, COALESCE(SUM(transferred_ml), 0) AS nominal_ml,
@@ -957,7 +972,7 @@ def calibrate_refill_pump(measured_level_ml: int | float) -> dict:
         duration_seconds = int(refills["duration_seconds"])
         measured_ml = int(baseline["baseline_level_ml"]) - measured_level
         if cycles <= 0 or duration_seconds <= 0:
-            raise ValueError("Seit dem letzten Vollstand oder der letzten Eichung wurde kein Nachfüllzyklus verbucht")
+            raise ValueError("Seit dem letzten Vollstand oder der letzten Kalibrierung wurde kein Nachfüllzyklus verbucht")
         if measured_ml <= 0:
             raise ValueError("Der gemessene Stand ergibt keine positive Fördermenge")
         ml_per_min = measured_ml / duration_seconds * 60
@@ -3171,12 +3186,12 @@ class AppHandler(SimpleHTTPRequestHandler):
                 return
             if parsed.path == "/api/calibration/main":
                 payload = read_json(self)
-                result = calibrate_main_pump(payload["measured_level_ml"])
+                result = calibrate_main_pump(payload["measured_level_percent"])
                 send_json(self, {"calibration": result, **get_state()})
                 return
             if parsed.path == "/api/calibration/refill":
                 payload = read_json(self)
-                result = calibrate_refill_pump(payload["measured_level_ml"])
+                result = calibrate_refill_pump(payload["measured_level_percent"])
                 send_json(self, {"calibration": result, **get_state()})
                 return
             if parsed.path == "/api/update/setup":

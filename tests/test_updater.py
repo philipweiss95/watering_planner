@@ -99,6 +99,16 @@ class UpdaterTests(unittest.TestCase):
         self.assertIn("position: fixed", mobile)
         self.assertIn("safe-area-inset-bottom", mobile)
 
+    def test_calibration_ui_uses_percentage_levels(self):
+        root = Path(__file__).resolve().parents[1]
+        html = (root / "public" / "index.html").read_text(encoding="utf-8")
+        javascript = (root / "public" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('id="mainCalibrationLevel" type="number" min="0" max="100"', html)
+        self.assertIn('id="refillCalibrationLevel" type="number" min="0" max="100"', html)
+        self.assertIn("measured_level_percent", javascript)
+        self.assertNotIn("JSON.stringify({ measured_level_ml:", javascript)
+
 
 if __name__ == "__main__":
     unittest.main()
