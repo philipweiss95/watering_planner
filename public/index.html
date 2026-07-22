@@ -14,7 +14,7 @@
     <link rel="manifest" href="/manifest.webmanifest">
     <link rel="apple-touch-icon" sizes="180x180" href="/icons/app-icon-180.png">
     <link rel="icon" type="image/png" sizes="192x192" href="/icons/app-icon-192.png">
-    <link rel="stylesheet" href="/styles.css?v=1.3.3">
+    <link rel="stylesheet" href="/styles.css?v=1.4.0">
   </head>
   <body>
     <header class="topbar">
@@ -111,88 +111,95 @@
           <div class="view-hero-copy">
             <p class="eyebrow">Konfiguration</p>
             <h2>Einstellungen</h2>
-            <p class="section-copy">Passe Wassermenge, Standort, Tanks und Hardware an deine Anlage an. Die wichtigsten Werte sind in übersichtliche Bereiche gegliedert.</p>
+            <p class="section-copy">Gießmenge, Anlage und Technik.</p>
           </div>
           <nav class="section-nav" aria-label="Einstellungsbereiche">
-            <a href="#settings-water">Wassermenge</a>
+            <a class="active" href="#settings-water">Gießmenge</a>
             <a href="#settings-balcony">Balkon</a>
             <a href="#settings-tanks">Tanks</a>
-            <a href="#settings-calibration">Kalibrierung</a>
-            <a href="#settings-hardware">Hardware</a>
+            <a href="#settings-calibration">Pumpen</a>
+            <a href="#settings-shade">Beschattung</a>
+            <a href="#settings-hardware">Ausgänge</a>
           </nav>
         </section>
 
         <div class="config-summary wide-panel" id="configSummary"></div>
 
-        <section class="panel calculation-panel wide-panel">
-          <div class="section-heading">
+        <details class="panel calculation-panel wide-panel">
+          <summary class="calculation-summary">
             <div>
               <p class="eyebrow">Berechnung</p>
-              <h2>So entsteht der Tagesplan</h2>
+              <h2>Tagesplan nachvollziehen</h2>
             </div>
+            <span class="summary-action">Öffnen</span>
+          </summary>
+          <div class="calculation-content">
+            <p class="section-copy">Wetter, Pflanzen und Schläuche ergeben den Tagesbedarf und die Pumpzyklen.</p>
+            <div class="calculation-flow" id="calculationFlow">
+              <article class="calc-step">
+                <span class="step-number">1</span>
+                <div>
+                  <strong>Wetter wird geladen</strong>
+                  <p>Temperatur, Regen, Wind und Sonne werden vorbereitet.</p>
+                </div>
+              </article>
+            </div>
+            <details class="weather-test">
+              <summary>Wetterwerte manuell testen</summary>
+              <p class="field-help">Überschreibt das automatische Wetter nur für den Test.</p>
+              <form id="evaluateForm" class="weather-form">
+                <label class="check-label weather-auto">
+                  <input type="checkbox" name="auto_weather" checked>
+                  Wetter automatisch
+                </label>
+                <div class="weather-inputs">
+                  <label>
+                    Temperatur
+                    <input type="number" step="0.1" name="temperature_c" value="26">
+                  </label>
+                  <label>
+                    Regen in mm
+                    <input type="number" step="0.1" name="rain_mm" value="0.5">
+                  </label>
+                  <label>
+                    Wind in km/h
+                    <input type="number" step="1" name="wind_kmh" value="8">
+                  </label>
+                  <label>
+                    Sonne in h
+                    <input type="number" step="0.1" name="sunshine_hours" value="7">
+                  </label>
+                </div>
+                <input type="hidden" name="slot" value="morning">
+                <button type="submit" class="primary">Test aktualisieren</button>
+              </form>
+            </details>
           </div>
-          <p class="section-copy">Die App rechnet in vier Schritten: Standort und Wetter bestimmen den Tagesbedarf, die Pflanzen korrigieren ihn, die Schläuche liefern feste Mengen, daraus entstehen ganze Pumpzyklen.</p>
-          <div class="calculation-flow" id="calculationFlow">
-            <article class="calc-step">
-              <span class="step-number">1</span>
-              <div>
-                <strong>Wetter wird geladen</strong>
-                <p>Temperatur, Regen, Wind und Sonne werden vorbereitet.</p>
-              </div>
-            </article>
-          </div>
-          <details class="weather-test">
-            <summary>Wetterwerte manuell prüfen</summary>
-            <p class="field-help">Automatisch nutzt der Planer Open-Meteo am gespeicherten Standort. Für Tests kannst du die Werte hier überschreiben.</p>
-            <form id="evaluateForm" class="weather-form">
-              <label class="check-label weather-auto">
-                <input type="checkbox" name="auto_weather" checked>
-                Wetter automatisch
-              </label>
-              <div class="weather-inputs">
-                <label>
-                  Temperatur
-                  <input type="number" step="0.1" name="temperature_c" value="26">
-                </label>
-                <label>
-                  Regen mm
-                  <input type="number" step="0.1" name="rain_mm" value="0.5">
-                </label>
-                <label>
-                  Wind km/h
-                  <input type="number" step="1" name="wind_kmh" value="8">
-                </label>
-                <label>
-                  Sonne h
-                  <input type="number" step="0.1" name="sunshine_hours" value="7">
-                </label>
-              </div>
-              <input type="hidden" name="slot" value="morning">
-              <button type="submit" class="primary">Wetter aktualisieren</button>
-            </form>
-          </details>
-        </section>
+        </details>
 
         <section class="panel config-setup-panel wide-panel">
           <div class="section-heading">
             <div>
-              <p class="eyebrow">Grundlagen</p>
-              <h2>Grunddaten bearbeiten</h2>
+              <p class="eyebrow">Einstellungen</p>
+              <h2>Anlage einrichten</h2>
             </div>
           </div>
           <form id="balconyForm" class="settings-form">
             <fieldset class="settings-group watering-settings" id="settings-water">
               <div class="settings-group-heading">
                 <div>
-                  <p class="eyebrow">Feinabstimmung</p>
-                  <h3>Versorgungsfaktor</h3>
+                  <p class="eyebrow">Wasserbedarf</p>
+                  <h3>Gießmenge</h3>
                 </div>
                 <strong class="setting-value" id="wateringAmountLabel">100 %</strong>
               </div>
-              <p class="field-help">Mit <code>100 %</code> nutzt der Planer jetzt die höhere Standardversorgung. Ändere nur diesen einen Wert, wenn die Anlage insgesamt sparsamer oder kräftiger laufen soll.</p>
+              <p class="field-help">Regelt den Wasserbedarf aller Pflanzen gemeinsam.</p>
               <label class="factor-field">
-                Faktor für den Tagesbedarf
-                <input type="number" name="watering_amount_percent" min="40" max="500" step="5" value="100">
+                Gesamtmenge
+                <span class="input-with-unit">
+                  <input type="number" name="watering_amount_percent" min="40" max="500" step="5" value="100">
+                  <span>%</span>
+                </span>
               </label>
               <div class="watering-preview" id="wateringAmountPreview"></div>
             </fieldset>
@@ -204,26 +211,35 @@
                   <h3>Fläche und Ausrichtung</h3>
                 </div>
               </div>
-              <p class="field-help">Die Ausrichtung und Maße beeinflussen Sonne, Schatten und Verdunstung.</p>
+              <p class="field-help">Ausrichtung und Maße beeinflussen Sonne und Schatten.</p>
               <div class="settings-grid">
                 <label>
-                  Himmelsrichtung in Grad
-                  <input type="number" name="orientation_deg" min="0" max="359" step="1">
-                  <span class="field-help"><code>0°</code> Nord · <code>90°</code> Ost · <code>180°</code> Süd · <code>270°</code> West</span>
+                  Ausrichtung
+                  <span class="input-with-unit">
+                    <input type="number" name="orientation_deg" min="0" max="359" step="1">
+                    <span>°</span>
+                  </span>
+                  <span class="field-help">0 Nord · 90 Ost · 180 Süd · 270 West</span>
                 </label>
                 <label>
-                  Breite in Metern
-                  <input type="number" name="width_m" min="0.4" step="0.1">
+                  Breite
+                  <span class="input-with-unit">
+                    <input type="number" name="width_m" min="0.4" step="0.1">
+                    <span>m</span>
+                  </span>
                 </label>
                 <label>
-                  Tiefe in Metern
-                  <input type="number" name="depth_m" min="0.4" step="0.1">
+                  Tiefe
+                  <span class="input-with-unit">
+                    <input type="number" name="depth_m" min="0.4" step="0.1">
+                    <span>m</span>
+                  </span>
                 </label>
               </div>
               <details class="advanced-settings">
-                <summary>Standort für Wetterdaten</summary>
-                <p class="field-help">Der Standort wird nur für Wetterdaten und Sonnenstand benötigt. Mit der Ortung kannst du beide Werte automatisch eintragen.</p>
-                <button id="locateButton" class="secondary small-button" type="button">Standort automatisch ermitteln</button>
+                <summary>Wetterstandort</summary>
+                <p class="field-help">Wird für Wetter und Sonnenstand benötigt.</p>
+                <button id="locateButton" class="secondary small-button" type="button">Aktuellen Standort verwenden</button>
                 <div class="settings-grid">
                   <label>
                     Breitengrad
@@ -245,19 +261,22 @@
                   <h3>Tanks</h3>
                 </div>
               </div>
-              <p class="field-help">Der Haupttank versorgt die Bewässerung. Der 30-l-Vorratstank füllt ihn über die zweite Pumpe nach.</p>
+              <p class="field-help">Der Vorratstank füllt den Haupttank automatisch nach.</p>
               <div class="settings-grid tank-settings-grid">
                 <label>
-                  Haupttankgröße in Litern
-                  <input type="number" name="tank_capacity_liters" min="0" step="0.1">
+                  Größe Haupttank
+                  <span class="input-with-unit">
+                    <input type="number" name="tank_capacity_liters" min="0" step="0.1">
+                    <span>l</span>
+                  </span>
                 </label>
                 <label class="toggle-field">
-                  <span>Automatisch aus Vorratstank nachfüllen</span>
+                  <span>Automatisch nachfüllen</span>
                   <input type="checkbox" name="refill_automation_enabled" checked>
                   <span class="toggle-switch" aria-hidden="true"></span>
                 </label>
               </div>
-              <p class="field-help">Die Automatik darf je einmal zwischen <code>01:00–02:00</code> und <code>06:00–07:00</code> laufen. Zwischen Nachfüllungen liegen mindestens drei Stunden; verpasste Fenster werden tagsüber nicht nachgeholt.</p>
+              <p class="field-help">Nachtfenster: 01–02 Uhr und 06–07 Uhr, mit mindestens drei Stunden Abstand.</p>
               <details class="advanced-settings pump-details">
                 <summary>Technische Pumpenwerte</summary>
                 <p class="field-help">Diese Werte werden bei einer Kalibrierung automatisch angepasst. Eine manuelle Änderung ist nur bei einer neuen Hardware-Konfiguration nötig.</p>
@@ -281,12 +300,7 @@
                   <h3>Pumpen kalibrieren</h3>
                 </div>
               </div>
-              <p class="field-help">Ein Prozentwert genügt. Der Planer rechnet Tankgröße und protokollierte Pumpenläufe automatisch ein.</p>
-              <div class="calibration-guide" aria-label="Ablauf der Kalibrierung">
-                <span><b>1</b> Tank als voll markieren</span>
-                <span><b>2</b> Einige Läufe abwarten</span>
-                <span><b>3</b> Füllstand in Prozent eintragen</span>
-              </div>
+              <p class="field-help">Tank voll markieren, einige Läufe abwarten und den abgelesenen Füllstand eintragen.</p>
               <div class="settings-grid calibration-grid">
                 <article class="calibration-card">
                   <div>
@@ -316,31 +330,31 @@
               <p class="field-help calibration-result" id="calibrationResult" aria-live="polite"></p>
             </fieldset>
 
-            <fieldset class="settings-group" id="settings-shade">
-              <div class="settings-group-heading">
+            <details class="settings-group secondary-settings" id="settings-shade">
+              <summary class="settings-group-heading">
                 <div>
                   <p class="eyebrow">Beschattung</p>
                   <h3>Wände und Brüstung</h3>
                 </div>
-              </div>
-              <p class="field-help">Hohe Begrenzungen schützen vor Wind und werfen Schatten. Trage je Seite die Höhe in Metern ein. Bei einer offenen Seite genügt <code>0</code>.</p>
+              </summary>
+              <p class="field-help">Höhe je Seite in Metern; offene Seiten bleiben bei 0.</p>
               <div class="wall-editor" id="wallEditor"></div>
-            </fieldset>
+            </details>
 
-            <fieldset class="settings-group" id="settings-hardware">
-              <div class="settings-group-heading">
+            <details class="settings-group secondary-settings" id="settings-hardware">
+              <summary class="settings-group-heading">
                 <div>
                   <p class="eyebrow">Pumpe</p>
                   <h3>Ausgänge und Wassermenge</h3>
                 </div>
-              </div>
-              <p class="field-help">Jeder Pumpenausgang liefert pro Zyklus eine feste Menge. Passe diese Werte nur an, wenn deine Hardware anders konfiguriert ist.</p>
+              </summary>
+              <p class="field-help">Nur ändern, wenn die tatsächliche Ausgabemenge abweicht.</p>
               <div class="outlet-editor" id="outletEditor"></div>
-            </fieldset>
+            </details>
 
             <div class="settings-save-bar">
-              <p class="field-help">Änderungen wirken nach dem Speichern sofort auf Bedarf, Pumpenläufe und Anschlussvorschläge.</p>
-              <button type="submit" class="primary">Einstellungen speichern</button>
+              <p class="settings-save-status" id="settingsSaveStatus" aria-live="polite">Alle Änderungen gespeichert</p>
+              <button id="settingsSaveButton" type="submit" class="primary" disabled>Speichern</button>
             </div>
           </form>
         </section>
@@ -365,7 +379,7 @@
               <h2>Schläuche verwalten</h2>
             </div>
           </div>
-          <p class="section-copy">Die Nummer darf deiner Beschriftung am echten Schlauch entsprechen. So findest du Änderungen später schneller wieder.</p>
+          <p class="section-copy">Nutze dieselbe Nummer wie am echten Schlauch.</p>
           <form id="hoseForm">
             <div class="hose-editor" id="hoseEditor"></div>
             <div class="hose-actions">
@@ -381,7 +395,7 @@
               <h2>Verteilung prüfen</h2>
             </div>
           </div>
-          <p class="section-copy">Hier siehst du, ob die aktuellen Schläuche zur geplanten Gießmenge passen. Änderungen sind nur nötig, wenn eine Pflanze dauerhaft zu viel oder zu wenig Wasser erhält.</p>
+          <p class="section-copy">Zeigt, ob die Verteilung zur geplanten Gießmenge passt.</p>
           <div class="routing" id="routing"></div>
         </section>
       </div>
@@ -405,7 +419,7 @@
               <h2>Plan</h2>
             </div>
           </div>
-          <p class="section-copy">Ziehe die Pflanzen an ihre ungefähre Position. So kann der Planer Schatten durch Wände und Brüstung berücksichtigen.</p>
+          <p class="section-copy">Ziehe Pflanzen an ihre ungefähre Position.</p>
           <div class="balcony-plan" id="balconyPlan"></div>
         </section>
 
@@ -416,7 +430,7 @@
               <h2>Pflanzenbestand</h2>
             </div>
           </div>
-          <p class="section-copy">Topfgröße, Pflanzenart und Standort bestimmen den individuellen Wasserbedarf. Wähle je Pflanze die angeschlossenen Schläuche; deren Outputs bestimmen automatisch die gelieferte Menge.</p>
+          <p class="section-copy">Bedarf und angeschlossene Schläuche je Pflanze.</p>
           <div class="plants" id="plantList"></div>
         </section>
 
@@ -481,9 +495,9 @@
           <div class="view-hero-copy">
             <p class="eyebrow">System</p>
             <h2>Info und Updates</h2>
-            <p class="section-copy">Versionsstand, sichere GitHub-Updates und Automations-Shortcuts zentral an einem Ort.</p>
+            <p class="section-copy">Version, Updates und Automations-Shortcuts.</p>
           </div>
-          <strong class="hero-version" id="appVersion">v1.3.3</strong>
+          <strong class="hero-version" id="appVersion">v1.4.0</strong>
         </section>
 
         <section class="panel update-settings">
@@ -538,6 +552,6 @@
       </div>
     </main>
 
-    <script src="/app.js?v=1.3.3"></script>
+    <script src="/app.js?v=1.4.0"></script>
   </body>
 </html>

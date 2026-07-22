@@ -8,6 +8,7 @@ let updateCheck = null;
 let updatePollTimer = null;
 let updatePollAttempts = 0;
 let updaterSetupOpen = false;
+let settingsDirty = false;
 
 if ("serviceWorker" in navigator && window.isSecureContext) {
   window.addEventListener("load", () => {
@@ -79,7 +80,7 @@ function renderState() {
   balconyForm.elements.refill_automation_enabled.checked = state.settings?.refill_automation_enabled !== false;
   balconyForm.elements.main_pump_calibration_factor.value = state.settings?.main_pump_calibration_factor ?? 1;
   balconyForm.elements.watering_amount_percent.value = state.settings?.watering_amount_percent ?? 100;
-  $("#appVersion").textContent = `v${state.version || "1.3.3"}`;
+  $("#appVersion").textContent = `v${state.version || "1.4.0"}`;
   renderCalibrationStatus();
 
   $("#outletEditor").innerHTML = state.outlets
@@ -120,6 +121,33 @@ function renderState() {
   renderBalconyPlan();
   renderEvaluation(latestEvaluation);
   updateDerivedWaterPreview($("#plantForm"));
+  setSettingsSaveState("saved");
+}
+
+function setSettingsSaveState(mode, message = "") {
+  const bar = document.querySelector(".settings-save-bar");
+  const status = $("#settingsSaveStatus");
+  const button = $("#settingsSaveButton");
+  if (!bar || !status || !button) return;
+
+  if (mode === "dirty") settingsDirty = true;
+  if (mode === "saved") settingsDirty = false;
+  bar.classList.toggle("is-dirty", mode === "dirty");
+  bar.classList.toggle("is-saved", mode === "saved");
+  bar.classList.toggle("is-error", mode === "error");
+  status.textContent = message || {
+    dirty: "Ungespeicherte Änderungen",
+    saving: "Wird gespeichert …",
+    saved: "Alle Änderungen gespeichert",
+    error: "Speichern fehlgeschlagen",
+  }[mode];
+  button.disabled = mode !== "dirty" && mode !== "error";
+  button.textContent = mode === "saving" ? "Speichert …" : "Speichern";
+}
+
+function markSettingsDirty(event) {
+  if (event && !event.target?.name) return;
+  setSettingsSaveState("dirty");
 }
 
 function renderCalibrationStatus(message = "") {
@@ -1127,18 +1155,16 @@ function updateWateringAmountPreview() {
   const projectedDailyMl = standardDailyMl * amount / 100;
   const relativeText = wateringAmountTitle(amount);
   const adjustmentText = amount === 100
-    ? "Standardversorgung für deine Anlage."
+    ? "Standardversorgung."
     : `${formatPercent(Math.abs(amount - 100))} % ${amount > 100 ? "mehr" : "weniger"} als Standard.`;
   const litersText = latestEvaluation
-    ? `Bei aktuell geladenem Wetter sind das ungefähr ${formatLiters(projectedDailyMl)} statt ${formatLiters(standardDailyMl)} Pflanzenbedarf pro Tag.`
-    : "Nach dem Laden der Wetterdaten siehst du hier eine Vorschau in Litern.";
+    ? `Heute etwa ${formatLiters(projectedDailyMl)} Pflanzenbedarf${amount === 100 ? "." : ` statt ${formatLiters(standardDailyMl)}.`}`
+    : "Die Vorschau folgt mit den Wetterdaten.";
 
   label.textContent = `${formatPercent(amount)} %`;
   preview.innerHTML = `
     <strong>${relativeText}</strong>
-    <span>${adjustmentText}</span>
-    <span>${litersText}</span>
-    <span>Der Faktor verändert den berechneten Tagesbedarf. Die App macht daraus ganze Pumpzyklen.</span>
+    <span>${adjustmentText} ${litersText}</span>
   `;
 }
 
@@ -1479,6 +1505,7 @@ $("#hoseForm").addEventListener("submit", async (event) => {
 
 $("#balconyForm").addEventListener("submit", async (event) => {
   event.preventDefault();
+  setSettingsSaveState("saving");
   const payload = numberFields(formData(event.currentTarget), [
     "width_m",
     "depth_m",
@@ -1511,15 +1538,28 @@ $("#balconyForm").addEventListener("submit", async (event) => {
   for (const wall of payload.walls) {
     delete payload[`wall_${wall.side}`];
   }
-  state = await api("/api/balcony", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-  renderState();
-  await evaluateCurrent();
+  try {
+    state = await api("/api/balcony", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    renderState();
+    setSettingsSaveState("saved");
+  } catch (error) {
+    settingsDirty = true;
+    setSettingsSaveState("error", `Nicht gespeichert: ${error.message}`);
+    return;
+  }
+  try {
+    await evaluateCurrent();
+  } catch (error) {
+    setSettingsSaveState("saved", `Gespeichert · Vorschau nicht aktualisiert: ${error.message}`);
+  }
 });
 
 $("#balconyForm").elements.watering_amount_percent.addEventListener("input", updateWateringAmountPreview);
+$("#balconyForm").addEventListener("input", markSettingsDirty);
+$("#balconyForm").addEventListener("change", markSettingsDirty);
 
 async function submitCalibration(kind) {
   const isMain = kind === "main";
@@ -1609,6 +1649,7 @@ $("#locateButton").addEventListener("click", () => {
     form.elements.latitude.value = position.coords.latitude.toFixed(6);
     form.elements.longitude.value = position.coords.longitude.toFixed(6);
     form.elements.timezone_name.value = Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/Berlin";
+    setSettingsSaveState("dirty", "Standort übernommen – noch speichern");
   });
 });
 
@@ -1641,6 +1682,24 @@ document.querySelectorAll("[data-view-target]").forEach((button) => {
   button.addEventListener("click", () => setActiveView(button.dataset.viewTarget));
 });
 
+document.querySelectorAll(".section-nav a").forEach((link) => {
+  link.addEventListener("click", (event) => {
+    event.preventDefault();
+    const target = document.querySelector(link.getAttribute("href"));
+    if (!target) return;
+    if (target.tagName === "DETAILS") target.open = true;
+    document.querySelectorAll(".section-nav a").forEach((item) => item.classList.toggle("active", item === link));
+    window.history.replaceState(null, "", "#settings");
+    target.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+});
+
+window.addEventListener("beforeunload", (event) => {
+  if (!settingsDirty) return;
+  event.preventDefault();
+  event.returnValue = "";
+});
+
 document.addEventListener("keydown", async (event) => {
   const target = event.target;
   const typing = target && ["INPUT", "SELECT", "TEXTAREA"].includes(target.tagName);
@@ -1656,6 +1715,13 @@ document.addEventListener("keydown", async (event) => {
 const initialView = window.location.hash.replace("#", "");
 if (["dashboard", "plants", "hoses", "settings", "info"].includes(initialView)) {
   setActiveView(initialView);
+} else if (initialView.startsWith("settings-")) {
+  setActiveView("settings");
+  window.requestAnimationFrame(() => {
+    const target = document.getElementById(initialView);
+    if (target?.tagName === "DETAILS") target.open = true;
+    target?.scrollIntoView({ block: "start" });
+  });
 }
 
 loadState().catch((error) => {

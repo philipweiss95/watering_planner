@@ -2,6 +2,15 @@
 
 Alle stabilen Änderungen am Watering Planner werden in dieser Datei dokumentiert.
 
+## [1.4.0] - 2026-07-22
+
+- Einstellungen auf eine klare Abfolge für Gießmenge, Balkon, Tanks und Pumpen reduziert.
+- Berechnung, Beschattung und technische Ausgänge als optionale Detailbereiche eingeordnet.
+- Feldbezeichnungen, Einheiten und Hilfetexte in allen Arbeitsbereichen vereinheitlicht und gekürzt.
+- Speicherstatus für offene, erfolgreiche und fehlgeschlagene Änderungen ergänzt.
+- Einstellungsnavigation und direkte Bereichslinks korrigiert; technische Bereiche werden beim Anspringen automatisch geöffnet.
+- Statuskarten und Einstellungsbereiche für kleine Displays kompakter angeordnet.
+
 ## [1.3.3] - 2026-07-22
 
 - Zwei getrennte nächtliche Nachfüllfenster von 01:00 bis 02:00 und 06:00 bis 07:00 aktiviert.
