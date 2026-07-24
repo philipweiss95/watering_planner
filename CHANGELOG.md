@@ -2,6 +2,10 @@
 
 Alle stabilen Änderungen am Watering Planner werden in dieser Datei dokumentiert.
 
+## [1.4.2] - 2026-07-24
+
+- Tankprognose auf den letzten vollständig versorgbaren Gießlauf umgestellt und dabei Wettervorhersage, aktuelle Zyklusplanung sowie den kalibrierten tatsächlichen Tankverbrauch je Lauf berücksichtigt.
+
 ## [1.4.1] - 2026-07-22
 
 - Docker-Image-Tags für Planner und Updater mit der Release-Version synchronisiert.

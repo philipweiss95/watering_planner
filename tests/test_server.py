@@ -1,6 +1,6 @@
 import tempfile
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 from zoneinfo import ZoneInfo
@@ -93,6 +93,7 @@ class WateringPlannerTests(unittest.TestCase):
         self.assertAlmostEqual(calibration["result_value"], 2)
         self.assertEqual(after_calibration["pump"]["delivered_per_cycle_ml"], nominal)
         self.assertEqual(after_calibration["pump"]["consumed_per_cycle_ml"], nominal * 2)
+        self.assertEqual(after_calibration["depletion"]["consumption_per_cycle_ml"], nominal * 2)
         self.assertEqual(server.get_state()["settings"]["main_pump_calibration_factor"], 2)
         server.mark_run(nominal, 26, 0)
         self.assertEqual(server.get_state()["balcony"]["tank_current_ml"], measured_level - nominal * 2)
@@ -399,9 +400,90 @@ class WateringPlannerTests(unittest.TestCase):
             result = server.evaluate(temperature_c=26, rain_mm=0, wind_kmh=8, sunshine_hours=7)
 
         self.assertTrue(result["depletion"]["all_empty_at"])
+        self.assertEqual(result["depletion"]["last_watering_at"], "")
+        self.assertEqual(result["depletion"]["first_unserved_at"], result["depletion"]["all_empty_at"])
         self.assertEqual(result["depletion"]["total_available_ml"], 1)
         self.assertEqual(result["depletion"]["forecast_days"], server.WEATHER_FORECAST_DAYS)
         self.assertTrue(result["refill"]["blocked_by_empty_refill_tank"])
+
+    def test_depletion_forecast_returns_last_fully_supplied_cycle(self):
+        now = datetime(2026, 6, 3, 6, 30, tzinfo=ZoneInfo("Europe/Berlin"))
+        with patch("server.local_now", return_value=now):
+            result = server.evaluate(temperature_c=26, rain_mm=0, wind_kmh=8, sunshine_hours=7)
+        result["pump"]["delivered_per_cycle_ml"] = 100
+        result["pump"]["consumed_per_cycle_ml"] = 200
+        result["tank"]["current_ml"] = 500
+        result["refill"]["refill_tank"]["current_ml"] = 0
+        projected_days = [
+            {
+                "date": "2026-06-03",
+                "cycles": 3,
+                "delivered_ml": 300,
+                "delivered_per_cycle_ml": 100,
+                "consumed_ml": 600,
+                "consumed_per_cycle_ml": 200,
+            }
+        ]
+
+        with patch("server.local_now", return_value=now):
+            with patch("server.projected_consumption_days", return_value=projected_days):
+                depletion = server.depletion_forecast(result, {"forecast": [{"date": "2026-06-03"}]})
+
+        self.assertEqual(depletion["last_watering_at"], "2026-06-03T13:00:00+02:00")
+        self.assertEqual(depletion["first_unserved_at"], "2026-06-03T19:00:00+02:00")
+        self.assertEqual(depletion["consumption_per_cycle_ml"], 200)
+
+    def test_depletion_forecast_excludes_disabled_refill_tank(self):
+        now = datetime(2026, 6, 3, 6, 30, tzinfo=ZoneInfo("Europe/Berlin"))
+        server.save_refill_automation_enabled(False)
+        with server.connect() as conn:
+            conn.execute(
+                """
+                UPDATE balcony_settings
+                SET tank_current_ml = 1, refill_tank_current_ml = refill_tank_capacity_ml
+                WHERE id = 1
+                """
+            )
+
+        with patch("server.local_now", return_value=now):
+            result = server.evaluate(temperature_c=26, rain_mm=0, wind_kmh=8, sunshine_hours=7)
+
+        self.assertEqual(result["depletion"]["total_available_ml"], 1)
+        self.assertEqual(result["depletion"]["usable_refill_ml"], 0)
+        self.assertGreater(result["depletion"]["refill_available_ml"], 0)
+        self.assertEqual(result["depletion"]["last_watering_at"], "")
+
+    def test_hot_forecast_moves_last_watering_earlier(self):
+        now = datetime(2026, 7, 24, 6, 30, tzinfo=ZoneInfo("Europe/Berlin"))
+
+        def forecast(temperature_c, et0_mm, sunshine_hours):
+            return {
+                "forecast": [
+                    {
+                        "date": (now.date() + timedelta(days=index)).isoformat(),
+                        "temperature_c": temperature_c,
+                        "rain_mm": 0,
+                        "wind_kmh": 10,
+                        "sunshine_hours": sunshine_hours,
+                        "et0_mm": et0_mm,
+                    }
+                    for index in range(server.WEATHER_FORECAST_DAYS)
+                ]
+            }
+
+        with patch("server.local_now", return_value=now):
+            result = server.evaluate(temperature_c=30, rain_mm=0, wind_kmh=10, sunshine_hours=10, et0_mm=5)
+            hot = server.depletion_forecast(result, forecast(36, 8, 12))
+            mild = server.depletion_forecast(result, forecast(22, 2, 6))
+
+        self.assertGreater(
+            sum(day["cycles"] for day in hot["projected_days"]),
+            sum(day["cycles"] for day in mild["projected_days"]),
+        )
+        self.assertLess(
+            datetime.fromisoformat(hot["last_watering_at"]),
+            datetime.fromisoformat(mild["last_watering_at"]),
+        )
 
     def test_fill_tank_buttons_set_tanks_to_capacity(self):
         with server.connect() as conn:

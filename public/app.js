@@ -80,7 +80,7 @@ function renderState() {
   balconyForm.elements.refill_automation_enabled.checked = state.settings?.refill_automation_enabled !== false;
   balconyForm.elements.main_pump_calibration_factor.value = state.settings?.main_pump_calibration_factor ?? 1;
   balconyForm.elements.watering_amount_percent.value = state.settings?.watering_amount_percent ?? 100;
-  $("#appVersion").textContent = `v${state.version || "1.4.1"}`;
+  $("#appVersion").textContent = `v${state.version || "1.4.2"}`;
   renderCalibrationStatus();
 
   $("#outletEditor").innerHTML = state.outlets
@@ -1075,6 +1075,18 @@ function renderDashboardCards(result, urgentActions, changeActions) {
   const refillTank = result.refill?.refill_tank || {};
   const refillPercent = clampPercent(refillTank.percent || 0);
   const depletion = result.depletion || {};
+  const lastWateringAt = depletion.last_watering_at || "";
+  const firstUnservedAt = depletion.first_unserved_at || depletion.all_empty_at || "";
+  const depletionValue = lastWateringAt
+    ? formatDateTime(lastWateringAt)
+    : firstUnservedAt
+      ? "Kein weiterer Lauf"
+      : "Keine Läufe geplant";
+  const depletionDetail = depletion.consumption_per_cycle_ml
+    ? `${formatLiters(depletion.total_available_ml || 0)} verfügbar · ${formatLiters(depletion.consumption_per_cycle_ml)} Tankverbrauch je Lauf`
+    : depletion.total_available_ml !== undefined
+      ? `${formatLiters(depletion.total_available_ml)} verfügbar`
+      : "Wird noch berechnet";
   const remainingLiters = (result.pump.delivered_if_remaining_ml / 1000).toFixed(1);
   const perCycleLiters = (result.pump.delivered_per_cycle_ml / 1000).toFixed(2);
   const automation = result.automation || {};
@@ -1106,12 +1118,12 @@ function renderDashboardCards(result, urgentActions, changeActions) {
         </div>
       </div>
     </article>
-    <article class="metric-card depletion-metric ${depletion.all_empty_at ? "warn" : "ok"}">
+    <article class="metric-card depletion-metric ${firstUnservedAt ? "warn" : "ok"}">
       ${icon("clock")}
       <div>
-        <p class="metric-label">Reichweite</p>
-        <strong>${depletion.all_empty_at ? formatDateTime(depletion.all_empty_at) : "Stabil"}</strong>
-        <p class="metric-detail">${depletion.total_available_ml !== undefined ? `${formatLiters(depletion.total_available_ml)} verfügbar` : "Wird noch berechnet"}</p>
+        <p class="metric-label">Letzter Gießlauf</p>
+        <strong>${depletionValue}</strong>
+        <p class="metric-detail">${depletionDetail}</p>
       </div>
     </article>
     <article class="metric-card weather-metric">

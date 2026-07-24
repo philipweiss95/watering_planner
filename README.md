@@ -92,7 +92,7 @@ Der Updater erneuert sich am Ende eines Updates über einen unabhängigen, kurzl
 
 Die Berechnung nutzt Temperatur, Tagesniederschlag, Wind, FAO-Referenzverdunstung ET₀, Sonnenscheindauer, Balkon-/Terrassenausrichtung in Grad, Koordinaten, Pflanzenpositionen und die vier Wandhöhen nach Seite. Wenn Open-Meteo keine ET₀-Werte liefert oder manuelle Wetterdaten genutzt werden, schätzt die App ET₀ aus Temperatur, Sonnenscheindauer und Wind. Zusätzlich wird Wind als Balkon-Expositionsfaktor berechnet: hohe Windgeschwindigkeiten erhöhen Transpiration und Topfverdunstung, niedrige Wände schützen weniger.
 
-Für die Tank-Reichweite nutzt die App die längste reguläre Open-Meteo-Vorhersage von 16 Tagen. Erst wenn beide Tanks laut Prognose länger reichen, wird der mittlere Tagesverbrauch dieser Vorhersage für die weitere Schätzung verwendet.
+Für den letzten noch vollständig möglichen Gießlauf nutzt die App die längste reguläre Open-Meteo-Vorhersage von 16 Tagen. Sie berechnet für jeden Vorhersagetag die wetterabhängige Zahl der Pumpzyklen und zieht pro Lauf den aktuell kalibrierten Tankverbrauch ab. Der Vorratstank zählt nur mit, wenn die Nachfüllautomatik und ein nutzbarer Pumpendurchsatz konfiguriert sind. Reichen beide nutzbaren Tanks länger als die Vorhersage, wird die mittlere Zykluszahl der Bewässerungstage für die weitere Schätzung verwendet; der angezeigte Zeitpunkt entspricht dabei dem letzten vollständig versorgbaren Lauf und nicht dem ersten ausfallenden Lauf.
 
 Der Wasserbedarf pro Pflanze wird aus einem Pflanzenprofil berechnet:
 

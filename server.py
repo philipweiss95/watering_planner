@@ -2594,45 +2594,79 @@ def depletion_forecast(result: dict, weather: dict | None = None) -> dict:
     timezone_name = str(balcony.get("timezone_name", "Europe/Berlin"))
     now = local_now(timezone_name)
     delivered_per_cycle = int(result["pump"]["delivered_per_cycle_ml"])
+    consumed_per_cycle = int(
+        result["pump"].get("consumed_per_cycle_ml", calibrated_consumption_ml(delivered_per_cycle))
+    )
     main_ml = max(0, int(result["tank"]["current_ml"]))
     refill = result.get("refill", {})
     refill_tank = refill.get("refill_tank", {})
     refill_ml = max(0, int(refill_tank.get("current_ml", balcony.get("refill_tank_current_ml", 0))))
-    total_ml = main_ml + refill_ml
+    refill_enabled = refill.get("enabled")
+    if refill_enabled is None:
+        refill_enabled = refill_automation_enabled()
+    refill_usable = bool(
+        refill_enabled
+        and int(refill.get("pump_ml_per_min", balcony.get("refill_pump_ml_per_min", 0))) > 0
+    )
+    usable_refill_ml = refill_ml if refill_usable else 0
+    total_ml = main_ml + usable_refill_ml
     forecast_days = normalized_forecast_days(weather or result.get("weather") or result.get("inputs", {}), now.date())
-    projected_days = projected_consumption_days(state, forecast_days, delivered_per_cycle)
+    projected_days = projected_consumption_days(
+        state,
+        forecast_days,
+        delivered_per_cycle,
+        consumed_per_cycle,
+    )
     cycle_events = projected_cycle_events(projected_days, result, now, timezone_name)
     main_remaining = main_ml
     total_remaining = total_ml
     main_empty_at = ""
-    all_empty_at = ""
+    first_unserved_at = ""
+    last_watering_at = ""
+    estimated_after_forecast = False
     next_cycle_at = cycle_events[0]["at"].isoformat() if cycle_events else ""
 
-    if delivered_per_cycle <= 0:
+    if consumed_per_cycle <= 0:
         summary = "Noch kein Wasserverbrauch pro Zyklus berechenbar."
     else:
-        summary = "Reichweite anhand der Wetterprognose berechnet."
+        summary = "Letzten vollständig versorgbaren Gießlauf anhand der Wetterprognose berechnet."
         for event in cycle_events:
-            amount = int(event["delivered_ml"])
-            if not main_empty_at and main_remaining <= amount:
+            amount = int(event["consumed_ml"])
+            if not main_empty_at and main_remaining < amount:
                 main_empty_at = event["at"].isoformat()
-            if not all_empty_at and total_remaining <= amount:
-                all_empty_at = event["at"].isoformat()
+            if total_remaining < amount:
+                first_unserved_at = event["at"].isoformat()
                 break
             main_remaining = max(0, main_remaining - amount)
             total_remaining = max(0, total_remaining - amount)
-        if delivered_per_cycle > 0 and not all_empty_at:
-            all_empty_at = estimate_depletion_after_forecast(projected_days, cycle_events, total_remaining, delivered_per_cycle, now, timezone_name)
-        if not main_empty_at and main_remaining <= 0:
-            main_empty_at = cycle_events[-1]["at"].isoformat() if cycle_events else ""
+            last_watering_at = event["at"].isoformat()
+        if not first_unserved_at:
+            estimated_last, first_unserved_at = estimate_depletion_after_forecast(
+                projected_days,
+                total_remaining,
+                consumed_per_cycle,
+                now,
+            )
+            if estimated_last:
+                last_watering_at = estimated_last
+            estimated_after_forecast = bool(first_unserved_at)
+        if not cycle_events and not first_unserved_at:
+            summary = "Für die Wetterprognose sind keine Gießläufe geplant."
 
     return {
         "main_empty_at": main_empty_at,
-        "all_empty_at": all_empty_at,
+        # Kept for API compatibility: this is the first cycle that the combined
+        # tank stock can no longer supply completely.
+        "all_empty_at": first_unserved_at,
+        "first_unserved_at": first_unserved_at,
+        "last_watering_at": last_watering_at,
         "next_cycle_at": next_cycle_at,
         "total_available_ml": total_ml,
         "main_available_ml": main_ml,
         "refill_available_ml": refill_ml,
+        "usable_refill_ml": usable_refill_ml,
+        "consumption_per_cycle_ml": consumed_per_cycle,
+        "estimated_after_forecast": estimated_after_forecast,
         "projected_days": projected_days,
         "forecast_days": len(forecast_days),
         "summary": summary,
@@ -2665,11 +2699,21 @@ def forecast_number(weather: dict, key: str, default: float) -> float:
     return float(value)
 
 
-def projected_consumption_days(state: dict, forecast_days: list[dict], delivered_per_cycle: int) -> list[dict]:
+def projected_consumption_days(
+    state: dict,
+    forecast_days: list[dict],
+    delivered_per_cycle: int,
+    consumed_per_cycle: int | None = None,
+) -> list[dict]:
     balcony = state["balcony"]
     walls = state["walls"]
     plants = state["plants"]
     outlets = state["outlets"]
+    tank_consumption_per_cycle = (
+        calibrated_consumption_ml(delivered_per_cycle)
+        if consumed_per_cycle is None
+        else max(0, int(consumed_per_cycle))
+    )
     projections = []
     for weather in forecast_days:
         try:
@@ -2695,6 +2739,8 @@ def projected_consumption_days(state: dict, forecast_days: list[dict], delivered
                 "cycles": cycles,
                 "delivered_ml": cycles * delivered_per_cycle,
                 "delivered_per_cycle_ml": delivered_per_cycle,
+                "consumed_ml": cycles * tank_consumption_per_cycle,
+                "consumed_per_cycle_ml": tank_consumption_per_cycle,
                 "need_ml": round(calculated["total_need_ml"]),
                 "weather": {
                     "temperature_c": float(weather.get("temperature_c", 20)),
@@ -2711,33 +2757,62 @@ def projected_cycle_events(projected_days: list[dict], result: dict, now: dateti
     completed_today = int(result.get("cycles_completed_today", 0))
     for day in projected_days:
         day_date = date.fromisoformat(day["date"])
+        if day_date < today:
+            continue
         cycles = int(day["cycles"])
         windows = distributed_automation_windows(day_date, cycles, now.tzinfo)
-        for index, window in enumerate(windows):
-            if day_date == today and (window <= now or index < completed_today):
-                continue
-            events.append({"at": window, "delivered_ml": int(day["delivered_per_cycle_ml"]), "date": day["date"]})
+        consumed_ml = int(day.get("consumed_per_cycle_ml", day["delivered_per_cycle_ml"]))
+        if day_date == today:
+            remaining_windows = windows[min(completed_today, cycles):]
+            overdue_windows = [window for window in remaining_windows if window <= now]
+            if overdue_windows and result.get("automation", {}).get("run_now"):
+                events.append(
+                    {
+                        "at": now,
+                        "delivered_ml": int(day["delivered_per_cycle_ml"]),
+                        "consumed_ml": consumed_ml,
+                        "date": day["date"],
+                    }
+                )
+            windows = [window for window in remaining_windows if window > now]
+        for window in windows:
+            events.append(
+                {
+                    "at": window,
+                    "delivered_ml": int(day["delivered_per_cycle_ml"]),
+                    "consumed_ml": consumed_ml,
+                    "date": day["date"],
+                }
+            )
     return sorted(events, key=lambda item: item["at"])
 
 
 def estimate_depletion_after_forecast(
     projected_days: list[dict],
-    cycle_events: list[dict],
     remaining_ml: int,
-    delivered_per_cycle: int,
+    consumed_per_cycle: int,
     now: datetime,
-    timezone_name: str,
-) -> str:
-    daily_totals = [int(day["delivered_ml"]) for day in projected_days if int(day.get("delivered_ml", 0)) > 0]
-    if not daily_totals:
-        return ""
-    average_daily_ml = max(1, round(sum(daily_totals) / len(daily_totals)))
-    days_after_forecast = math.ceil(max(0, remaining_ml) / average_daily_ml)
+) -> tuple[str, str]:
+    watering_day_cycles = [
+        int(day["cycles"])
+        for day in projected_days
+        if int(day.get("cycles", 0)) > 0
+    ]
+    if not watering_day_cycles or consumed_per_cycle <= 0:
+        return "", ""
+    average_cycles = max(1, round(sum(watering_day_cycles) / len(watering_day_cycles)))
     last_date = date.fromisoformat(projected_days[-1]["date"]) if projected_days else now.date()
-    estimated_date = last_date + timedelta(days=max(1, days_after_forecast))
-    average_cycles = max(1, round(average_daily_ml / max(delivered_per_cycle, 1)))
-    windows = distributed_automation_windows(estimated_date, average_cycles, now.tzinfo)
-    return (windows[-1] if windows else datetime.combine(estimated_date, parse_hhmm(AUTOMATION_DAY_END), tzinfo=now.tzinfo)).isoformat()
+    supported_cycles = max(0, int(remaining_ml)) // consumed_per_cycle
+
+    def extrapolated_cycle_at(ordinal: int) -> datetime:
+        day_offset, cycle_index = divmod(max(1, ordinal) - 1, average_cycles)
+        estimated_date = last_date + timedelta(days=day_offset + 1)
+        windows = distributed_automation_windows(estimated_date, average_cycles, now.tzinfo)
+        return windows[cycle_index]
+
+    last_watering_at = extrapolated_cycle_at(supported_cycles).isoformat() if supported_cycles else ""
+    first_unserved_at = extrapolated_cycle_at(supported_cycles + 1).isoformat()
+    return last_watering_at, first_unserved_at
 
 
 def home_assistant_webhook_url() -> str:
