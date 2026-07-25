@@ -9,6 +9,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 COPY server.py README.md VERSION ./
+COPY watering_backend ./watering_backend
 COPY public ./public
 
 RUN mkdir -p /app/data

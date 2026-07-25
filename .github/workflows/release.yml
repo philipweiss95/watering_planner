@@ -19,7 +19,16 @@ jobs:
       - name: Verify tag and package version
         run: test "${GITHUB_REF_NAME#v}" = "$(cat VERSION)"
       - name: Test
+        env:
+          NOTIFICATION_WORKER_DISABLED: "true"
         run: python -m unittest discover -s tests -v
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Test frontend
+        run: npm run test:frontend
+      - name: Build container images
+        run: docker compose build
       - name: Package stable update
         run: python scripts/package_release.py
       - name: Build release changelog

@@ -4,7 +4,7 @@ import { confirmDialog, element, formDialog, showToast } from "./ui.js";
 let updateCheck = null;
 
 export function renderUpdater(state, updater) {
-  document.getElementById("versionBadge").textContent = `v${state?.version || "1.4.2"}`;
+  document.getElementById("versionBadge").textContent = `v${state?.version || "1.5.0"}`;
   const status = document.getElementById("updaterStatus");
   status.replaceChildren();
   if (!updater || updater.error) {

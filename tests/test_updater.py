@@ -15,6 +15,10 @@ RELEASE_NOTES_PATH = ROOT / "scripts" / "release_notes.py"
 RELEASE_NOTES_SPEC = importlib.util.spec_from_file_location("watering_release_notes", RELEASE_NOTES_PATH)
 release_notes = importlib.util.module_from_spec(RELEASE_NOTES_SPEC)
 RELEASE_NOTES_SPEC.loader.exec_module(release_notes)
+PACKAGE_RELEASE_PATH = ROOT / "scripts" / "package_release.py"
+PACKAGE_RELEASE_SPEC = importlib.util.spec_from_file_location("watering_package_release", PACKAGE_RELEASE_PATH)
+package_release = importlib.util.module_from_spec(PACKAGE_RELEASE_SPEC)
+PACKAGE_RELEASE_SPEC.loader.exec_module(package_release)
 
 
 class UpdaterTests(unittest.TestCase):
@@ -48,6 +52,28 @@ class UpdaterTests(unittest.TestCase):
             with zipfile.ZipFile(archive_path) as archive:
                 with self.assertRaisesRegex(ValueError, "invalid_release_archive_layout"):
                     updater.safe_zip_members(archive, "watering-planner-1.0.0")
+
+    def test_release_package_contains_modular_backend_and_is_updater_compatible(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory) / "dist"
+            archive_path = output_dir / f"watering-planner-{package_release.VERSION}.zip"
+            with (
+                patch.object(package_release, "OUTPUT_DIR", output_dir),
+                patch.object(package_release, "ARCHIVE", archive_path),
+            ):
+                package_release.main()
+
+            with zipfile.ZipFile(archive_path) as archive:
+                names = {item.filename for item in archive.infolist()}
+                root = f"watering-planner-{package_release.VERSION}"
+                self.assertIn(f"{root}/watering_backend/__init__.py", names)
+                self.assertIn(f"{root}/package.json", names)
+                updater.safe_zip_members(archive, root)
+
+        dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+        self.assertIn("COPY watering_backend ./watering_backend", dockerfile)
+        self.assertIn("watering_backend", updater.MANAGED_PATHS)
+        self.assertIn("watering_backend", package_release.INCLUDES)
 
     def test_runtime_override_uses_real_host_mounts(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -1,9 +1,25 @@
 # Migration auf das modulare Backend und die neue Oberfläche
 
 Die SQL-Migration selbst läuft beim ersten Start automatisch und wiederholbar.
-Ein Release oder eine produktive Installation ist in diesem Arbeitspaket nicht
-enthalten. Für die Übernahme in deine NAS-/Home-Assistant-Umgebung bleiben die
-folgenden Schritte.
+Für Installationen auf Version 1.4.2 erfolgt die Übernahme bewusst in zwei
+Updater-Schritten.
+
+## Updatepfad ab 1.4.2
+
+1. Zuerst ausschließlich das stabile Release **1.4.3** veröffentlichen und über
+   **Info > Updates** installieren.
+2. Prüfen, dass Planner und Updater beide wieder erreichbar sind und die
+   Oberfläche Version 1.4.3 meldet.
+3. Erst danach **1.5.0** als stabiles Release veröffentlichen. Solange 1.4.3
+   nicht installiert ist, darf 1.5.0 nicht das neueste stabile Release sein.
+4. Erneut über **Info > Updates** prüfen und 1.5.0 installieren.
+5. Während beider Updates das Browserfenster geöffnet lassen, bis der jeweilige
+   Updater den erfolgreichen Containerwechsel bestätigt.
+
+Version 1.4.3 ändert die Bewässerungsfachlogik nicht. Sie erweitert den
+bisherigen Updater lediglich so, dass er das neue Verzeichnis
+`watering_backend/` bei 1.5.0 übernehmen, sichern und bei einem Fehler
+zurückrollen kann.
 
 ## Vorher
 
@@ -25,11 +41,11 @@ cp .env.synology ".env.synology.backup-$(date +%Y%m%d-%H%M%S)"
 
 ## Programm und Datenbank
 
-1. Den vollständigen Projektstand übernehmen. Dazu gehören jetzt insbesondere
+1. Der Updater übernimmt den vollständigen Projektstand einschließlich
    `watering_backend/`, `public/js/`, `public/css/`, `public/sw.js` und
-   `server.py`; nur einzelne alte Dateien zu kopieren reicht nicht.
-2. Das bestehende `data`-Volume unverändert wieder einbinden.
-3. Den Container zunächst mit `NOTIFICATIONS_ENABLED=false` starten.
+   `server.py`.
+2. Das bestehende `data`-Volume bleibt unverändert eingebunden.
+3. `NOTIFICATIONS_ENABLED` für den ersten Start von 1.5.0 auf `false` lassen.
 4. Beim Start ergänzt `init_db()` automatisch Schema-Version 2:
    `run_id`-Spalten, Unique-Indizes sowie `notification_state` und
    `notification_log`. Vorhandene Ereignisse und Tankstände bleiben erhalten.

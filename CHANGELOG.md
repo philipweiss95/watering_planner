@@ -2,6 +2,24 @@
 
 Alle stabilen Änderungen am Watering Planner werden in dieser Datei dokumentiert.
 
+## [1.5.0] - 2026-07-25
+
+- Backend in klar getrennte Module für HTTP, Datenbank, Wetter, Pflanzenmodell,
+  Anschlussoptimierung, Planung, Tankprognose, Home Assistant und
+  Benachrichtigungen aufgeteilt.
+- Tageswetter, aktuelle Bedingungen und manuelle Simulationen fachlich
+  getrennt; veraltete Wetterdaten werden erkannt.
+- Chronologische 16-Tage-Tankprognose mit Bewässerungs- und Nachfüllereignissen
+  sowie eindeutigem erstem nicht versorgbaren Lauf ergänzt.
+- Bewässerungs- und Nachfüllbuchungen mit `run_id`, SQLite-Transaktionen und
+  Schutz vor doppelter Verbuchung abgesichert.
+- Globale Anschlussoptimierung, konfigurierbare Tanks und Zeitfenster sowie
+  persistente SMTP-Benachrichtigungen ergänzt.
+- Oberfläche modularisiert und für Dashboard, Prognose, Pflanzen, Schläuche,
+  Einstellungen, Diagnose und iPhone-PWA neu strukturiert.
+- Bestehende SQLite-Datenbanken werden beim ersten Start automatisch auf
+  Schema-Version 2 migriert.
+
 ## [1.4.2] - 2026-07-24
 
 - Tankprognose auf den letzten vollständig versorgbaren Gießlauf umgestellt und dabei Wettervorhersage, aktuelle Zyklusplanung sowie den kalibrierten tatsächlichen Tankverbrauch je Lauf berücksichtigt.

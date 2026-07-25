@@ -13,9 +13,9 @@ PACKAGE_ROOT = f"watering-planner-{VERSION}"
 OUTPUT_DIR = ROOT / "dist"
 ARCHIVE = OUTPUT_DIR / f"{PACKAGE_ROOT}.zip"
 INCLUDES = (
-    "server.py", "public", "updater", "home-assistant", "docs", "scripts", ".github",
+    "server.py", "watering_backend", "public", "updater", "home-assistant", "docs", "scripts", ".github",
     "Dockerfile", "docker-compose.yml", ".dockerignore", ".gitignore", ".env.synology.example",
-    "README.md", "CHANGELOG.md", "VERSION",
+    "README.md", "CHANGELOG.md", "VERSION", "package.json",
 )
 
 

@@ -74,7 +74,7 @@ async function refreshAll(options = {}) {
   document.getElementById("headerStatus").textContent = "Wird aktualisiert";
   try {
     const state = await api.get("/api/state");
-    document.documentElement.dataset.appVersion = `v${state.version || "1.4.2"}`;
+    document.documentElement.dataset.appVersion = `v${state.version || "1.5.0"}`;
     setStore({ state, loading: false });
     renderAll();
     const diagnosticsPromise = fetchOptional("/api/diagnostics/notifications");
