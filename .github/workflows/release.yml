@@ -13,12 +13,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
       - name: Verify tag and package version
         run: test "${GITHUB_REF_NAME#v}" = "$(cat VERSION)"
-      - name: Test
+      - name: Compile backend
+        run: python -m compileall -q server.py watering_backend
+      - name: Run backend tests
         env:
           NOTIFICATION_WORKER_DISABLED: "true"
         run: python -m unittest discover -s tests -v
@@ -27,10 +31,72 @@ jobs:
           node-version: "22"
       - name: Test frontend
         run: npm run test:frontend
+      - name: Prepare compose environment
+        run: |
+          cat > .env.synology <<'EOF'
+          NOTIFICATION_WORKER_DISABLED=true
+          NOTIFICATIONS_ENABLED=false
+          EOF
+      - name: Validate compose configuration
+        run: docker compose config
       - name: Build container images
         run: docker compose build
+      - name: Prepare v1.4.3 runtime fixture
+        run: |
+          PYTHONPATH=tests python - <<'PY'
+          import json
+          import sqlite3
+          from datetime import datetime, timezone
+          from pathlib import Path
+          from v143_fixture import create_v143_database
+
+          database = Path("data/watering.sqlite3")
+          database.unlink(missing_ok=True)
+          create_v143_database(database)
+          pending = {
+              "created_at": datetime.now(timezone.utc).isoformat(),
+              "run_id": "ci-prepared-refill",
+              "source": "release_runtime_check",
+              "target_date": datetime.now(timezone.utc).date().isoformat(),
+              "requested_ml": 2000,
+              "transferred_ml": 2000,
+              "duration_seconds": 90,
+              "window_label": "ci-runtime",
+          }
+          with sqlite3.connect(database) as connection:
+              connection.execute(
+                  "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)",
+                  ("pending_refill_request", json.dumps(pending)),
+              )
+              connection.commit()
+          PY
+          cat > .env.synology <<'EOF'
+          NOTIFICATION_WORKER_DISABLED=true
+          NOTIFICATIONS_ENABLED=false
+          SMTP_PASSWORD=ci-runtime-secret-must-not-leak
+          EOF
+      - name: Start and verify migrated release containers
+        run: |
+          docker compose up -d --no-build --wait --wait-timeout 120
+          python scripts/verify_release_runtime.py \
+            --expected-version "${GITHUB_REF_NAME#v}" \
+            --run-prefix "release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --forbidden-value ci-runtime-secret-must-not-leak
+      - name: Stop runtime containers
+        if: always()
+        run: |
+          touch .env.synology
+          docker compose down --remove-orphans
       - name: Package stable update
         run: python scripts/package_release.py
+      - name: Verify stable update package
+        run: |
+          python scripts/verify_release_package.py \
+            --expected-version "${GITHUB_REF_NAME#v}" \
+            --tag "$GITHUB_REF_NAME" \
+            --bridge-tag v1.4.3 \
+            --bridge-tag-object f08acb6c5216c987cb6581513de499c9360d9f1a \
+            --bridge-commit e02ceb198264104fd8f2bc68eb8db7b24ac00dc8
       - name: Build release changelog
         run: python scripts/release_notes.py --output dist/release-notes.md
       - name: Publish GitHub release
