@@ -1,162 +1,219 @@
 # Backend-Architektur
 
-`server.py` ist nur noch der kompatible Einstiegspunkt. Bestehende Python-Aufrufer
-können weiterhin `import server` verwenden; intern werden die Aufgaben im Paket
-`watering_backend` getrennt:
+Der Backendcode folgt einer gerichteten Schichtenstruktur:
 
-- `core.py`: Anwendungsorchestrierung und kompatible API-Fassade
-- `http_api.py`: Lebenszyklus des HTTP-Servers
-- `database.py` und `schema.py`: SQLite-Verbindungen, Schema und Migrationen
-- `validation.py`: zentrale Eingabe-, Enum- und Wertebereichsvalidierung
-- `weather.py`: Normalisierung von Tages-, Stunden- und Simulationswetter
-- `plant_model.py`: Pflanzenbedarf und einmalige Topf-Effizienz
-- `connections.py`: globale, kapazitätsbegrenzte Anschlussoptimierung
-- `scheduling.py` und `config.py`: Zeitfenster, zentrale Defaults und Validierung
-- `forecast.py`: chronologische Haupt-/Vorratstank-Simulation
-- `home_assistant.py`: Webhook-Transport
-- `notifications.py`: SMTP, Deduplizierung, Entwarnung, Protokoll und Worker
+```text
+server.py
+  -> watering_backend/core.py          Kompatibilitätsfassade
+  -> watering_backend/app.py           Composition Root
+       -> api/*                         HTTP-Adapter
+       -> services/*                    Fachlogik
+       -> repositories/*                SQL und Transaktionen
+       -> database.py / schema.py       Verbindung und Migrationen
+```
 
-Die Fachmodule importieren `core.py` nicht. Abhängigkeiten verlaufen von der
-Orchestrierung zu den Fachmodulen, wodurch keine zirkulären Abhängigkeiten
-entstehen.
+`services` und `api` importieren weder `core` noch `server`. Repositories
+enthalten den fachlich gruppierten SQLite-Zugriff. Die Services erhalten
+Repositories, Uhren, Netzwerktransporte und andere Service-Ports explizit.
 
-## Datenbankmigrationen
+## Module
 
-Beim Start führt `init_db()` additive, wiederholbar ausführbare Migrationen aus.
-Das aktuelle Schema hat `PRAGMA user_version = 3`. Jede Verbindung aktiviert
-zusätzlich `PRAGMA foreign_keys = ON`.
+### Anwendung und Konfiguration
 
-- `watering_events.run_id` und `refill_events.run_id`
-- partielle Unique-Indizes für beide nichtleeren `run_id`-Spalten
-- `notification_state` für aktive/deduplizierte Zustände
-- `notification_log` als persistentes Versand- und Fehlerprotokoll
-- `notification_state.last_attempt_at`, `last_error` und
-  `consecutive_failures` für kurze, persistente Wiederholungen nach SMTP-Fehlern
-- `refill_window_observations` speichert Bedarf und Ausführbarkeit je
-  Nachfüllfenster, damit verpasste Läufe erst nach Fensterende erkannt werden
+- `app.py`: erzeugt eine `Application`, verdrahtet alle Komponenten und
+  koordiniert Initialisierung, Worker, Serverstart und Shutdown.
+- `core.py`: schmale, patchbare Kompatibilitätsfassade für bestehende
+  `import server`-Aufrufer.
+- `config.py`: Planerkonfiguration, Zeitvalidierung und lokale Tagesgrenzen.
+- `catalog.py`: Pflanzenkatalog, Wasserprofile und fachliche Konstanten.
+- `models.py`: `TypedDict`- und `Literal`-Typen für Wetter, Planung,
+  Tankereignisse, Diagnose und Benachrichtigungen.
+- `validation.py`: zentrale Validierung von Pflanzen, Ausgängen, Wänden,
+  Tanks, Koordinaten, Enums und endlichen Zahlen.
 
-Bestehende Zeilen bleiben unverändert; ihre `run_id` ist `NULL`. Tankbuchungen
-mit neuer `run_id` laufen unter `BEGIN IMMEDIATE`, prüfen den Haupttank gegen den
-kalibrierten Verbrauch und geben bei einem Retry das vorhandene Ergebnis zurück.
+### Datenhaltung
 
-## Wettermodell
+- `database.py`: instanzgebundene `Database`; jede Verbindung setzt
+  `row_factory`, `PRAGMA foreign_keys = ON` und `busy_timeout`.
+- `schema.py`: Basisschema, additive idempotente Migrationen und Seeds.
+- `repositories/settings.py`: persistente Planer- und Kalibrierwerte.
+- `repositories/plants.py`: Pflanzenkatalog und Pflanzen-CRUD.
+- `repositories/hoses.py`: Schläuche, Zuordnung und Legacy-Spiegelwerte.
+- `repositories/tanks.py`: Balkon, Tanks, Ausgänge und Wände.
+- `repositories/events.py`: Bewässerung, Nachfüllung, Tankfüllung,
+  Kalibrierung und Nachfüllfenster-Beobachtungen.
+- `repositories/notifications.py`: Warnungszustände und Versandprotokoll.
 
-Open-Meteo liefert drei getrennte Bereiche:
+SQL steht ausschließlich in `schema.py`, `database.py` und den Repositories.
+HTTP-Routen enthalten keine SQL-Strings.
 
-- `planning_day` und die kompatiblen Top-Level-Werte stammen vollständig vom
-  ersten Tag der Tagesprognose.
-- `current` und `hourly` dienen ausschließlich Anzeige und Diagnose.
-- Manuelle Werte tragen `mode: "simulation"` und `simulation: true`.
+### Fachservices
 
-Der Zeitpunkt jedes erfolgreichen Abrufs wird persistent als
-`last_successful_weather_fetch_at` gespeichert. Die Warnschwelle steht in
-`planner_config.weather_stale_after_minutes`. Der davon unabhängige
-`weather_cache_minutes`-Wert verhindert minütliche Open-Meteo-Aufrufe. Ein
-manueller Abruf mit `GET /api/weather?force=true` umgeht den Cache. Bei einem
-temporären Fehler können letzte gültige Daten mit `cache_fallback: true`
-weiterverwendet werden. Zertifikatsfehler führen niemals zu einem unbestätigten
-TLS-Abruf.
+- `services/evaluation.py`: Pflanzenbedarf, Sonne, Schatten, ET0,
+  Saisonmodell und Zusammenstellung des Tagesergebnisses.
+- `services/routing.py`: globale Anschlussoptimierung und Bewertung der
+  festen Verschlauchung.
+- `services/scheduling.py`: lokale Zeit, DST-sichere Tagesfenster,
+  Bewässerungszeitpunkte, Pausen und Cooldowns.
+- `services/weather.py`: Open-Meteo-Abruf, persistenter Cache,
+  Tages-/Aktuell-/Stundenwerte und manuelle Simulation.
+- `services/forecast.py`: Verbrauchstage und chronologische Tankprognose.
+- `services/refill.py`: Nachfüllfenster, Status, Cooldown,
+  verpasste Fenster und manuelle Nachfüllpläne.
+- `services/watering.py`: atomare, idempotente Bewässerungs- und
+  Nachfüllbuchungen sowie manuelle Tankfüllungen.
+- `services/calibration.py`: Kalibrierung von Haupt- und Nachfüllpumpe.
+- `services/home_assistant.py`: Diagnose und Webhook-Transport.
+- `services/notifications.py`: Ermittlung der Warnungsbedingungen.
+- `services/diagnostics.py`: Wetter- und öffentlicher SMTP-Status.
+- `services/state.py`: stabiles `/api/state`-Dokument.
+- `services/history.py`: browserfreundliche Ereignisdarstellung.
+- `services/updater.py`: interner Updater-Client.
 
-## Tankprognose
+### HTTP
 
-`depletion.forecast_events` enthält den sicheren, bis zu 16-tägigen
-Open-Meteo-Horizont und einen als `estimated_weather` markierten
-Extrapolationsbereich bis Tag 45. Jedes Ereignis enthält Zeitpunkt, Typ,
-geplante Menge, beide Tankstände vor/nach dem Ereignis und `successful`,
-`estimated` oder `unserved`. Vorratswasser wird nur mit dem konfigurierten
-Pumpendurchsatz übertragen. Bei einem Gießlauf während des Transfers steht
-daher nur die bis zu diesem Zeitpunkt geförderte Teilmenge im Haupttank bereit.
+- `api/router.py`: Registrierung nach HTTP-Methode und Pfad, Pfadparameter,
+  verzögertes JSON-Lesen und gemeinsame Clientfehler-Abbildung.
+- `api/handler.py`: `SimpleHTTPRequestHandler`-Adapter, Sicherheitsheader
+  und statischer GET-Fallback.
+- `api/routes_*.py`: kleine Routen für Zustand, Pflanzen, Schläuche, Tanks,
+  Automatik, Diagnose und Updates.
+- `api/responses.py`: einheitliche JSON-Ein-/Ausgabe.
 
-Neue eindeutige Felder:
+Alle bisherigen URLs und Antwortformate bleiben erhalten.
 
-- `last_supported_watering_at`
-- `first_unserved_watering_at`
-- `forecast_events`
-- `main_tank_after_forecast_ml`
-- `refill_tank_after_forecast_ml`
+## Wetterauswertung
 
-Die bisherigen Felder bleiben für vorhandene Browser- und HA-Aufrufer erhalten.
-Sie stammen alle aus derselben Ereignissimulation:
+1. Die Route liest manuelle Werte oder ruft `WeatherService.fetch_weather()`.
+2. Der Service prüft den persistenten Cache und sperrt parallele Abrufe mit
+   einem prozesssicheren Lock.
+3. Open-Meteo-Tageswerte bilden `planning_day`; `current` und `hourly`
+   bleiben reine Anzeige- und Diagnosewerte.
+4. `EvaluationService` berechnet Pflanzenbedarf und Zyklen ausschließlich
+   aus den konsistenten Tageswerten.
+5. `ForecastService` baut daraus chronologische Ereignisse.
+6. Der erfolgreiche Abrufzeitpunkt und ein separater letzter Fehler werden
+   in den Einstellungen gespeichert.
 
-- `last_watering_at` ist ein Alias für `last_supported_watering_at`, also den
-  letzten lückenlos versorgten Lauf vor dem ersten Ausfall.
-- `first_unserved_at` ist ein Alias für `first_unserved_watering_at`.
-- `main_empty_at` bezeichnet den ersten Zeitpunkt, an dem der Haupttank einen
-  vollständigen Lauf nicht mehr versorgen kann.
-- `all_empty_at` bezeichnet diesen Zeitpunkt, wenn auch kein Vorratswasser für
-  einen späteren Transfer vorhanden ist.
-- Die Tankstände `*_after_forecast_ml` sind die simulierten Endstände; Haupt-
-  und Vorratstank werden dabei nie einfach addiert.
+`force=true` umgeht den Cache. Ein TLS-Zertifikatsfehler löst keinen
+unbestätigten zweiten Request aus.
 
-## API
+## Bewässerungslauf
 
-- `POST /api/settings`: validierte persistente Planer-Konfiguration
-- `GET /api/weather?force=true`: manueller, erzwungener Wetterabruf
-- `GET /api/diagnostics/notifications`: SMTP-Status ohne Passwort, aktive
-  Warnungen und Protokoll
-- `POST /api/diagnostics/notifications/check`: sofortiger Diagnosezyklus
-- `POST /api/notifications/test`: Test-E-Mail senden
-- `GET /api/diagnostics/home-assistant`: Konfiguration, letzter erfolgreicher
-  Kontakt und letzte Fehlermeldung ohne Webhook-Geheimnis
-- `POST /api/diagnostics/home-assistant/test`: prüft nur die Home-Assistant-
-  Basis-API; der private Webhook wird dabei nicht aufgerufen
+1. API oder Home Assistant übergibt `run_id` und Laufdaten.
+2. `WateringService.mark_run()` öffnet `Database.connection(immediate=True)`.
+3. `EventsRepository` sucht die `run_id` innerhalb derselben Transaktion.
+4. Bei einem Treffer wird das vorhandene Ergebnis unverändert zurückgegeben.
+5. Andernfalls wird der Haupttank gegen `consumed_per_cycle_ml` geprüft.
+6. Ereignis und Tankabzug werden gemeinsam gespeichert.
+7. Jeder Fehler rollt beide Änderungen zurück.
 
-`POST /api/homekit/mark-run`, `POST /api/refill/mark-run`,
-`POST /api/manual-run` und `POST /api/manual-refill` unterstützen `run_id`.
-Home Assistant soll die vom manuellen Webhook empfangene `run_id` an den
-Buchungsrequest weiterreichen. Die Beispiele tun dies.
+Die partiellen Unique-Indizes auf nichtleeren `run_id`-Werten sind die zweite
+Schutzlinie gegen parallele Doppelbuchungen.
 
-Alte Aufrufer ohne `run_id` bleiben vorübergehend funktionsfähig. Der Server
-erzeugt dann `legacy-<typ>-<uuid>` und kennzeichnet das Ergebnis mit
-`legacy_generated_run_id: true`. Da ein alter Retry keine stabile Kennung
-mitsendet, kann diese Übergangslösung nur Kompatibilität, nicht
-Retry-Idempotenz garantieren.
+## Nachfüllung
 
-## Persistente Konfiguration
+1. `RefillService` bewertet aktuelle Tankstände, Zeitfenster, Bedarf,
+   Pumpendurchsatz, Cooldown und bisherige Ereignisse.
+2. Abgeschlossene Fenster werden persistent beobachtet, damit ein verpasster
+   Lauf erst nach Fensterende gemeldet wird.
+3. `WateringService.mark_refill_run()` prüft die `run_id` unter
+   `BEGIN IMMEDIATE`.
+4. Die tatsächlich mögliche Menge wird erneut gegen Haupttankkapazität und
+   Vorratstank begrenzt.
+5. Beide Tankstände und das Nachfüllereignis werden atomar verbucht.
+6. Die Prognose stellt Wasser erst entsprechend Pumpendurchsatz und
+   Fertigstellungszeit im Haupttank bereit.
 
-`planner_config` umfasst:
+Vorratswasser versorgt niemals direkt einen Bewässerungslauf.
 
-- täglicher Bewässerungsbeginn und -ende
-- maximale gemeinsame Tageszyklen und Mindestabstand
-- beliebig viele überschneidungsfreie Nachfüllzeitfenster
-- Mindestabstand zwischen Nachfüllungen
-- Nachfüllstrategie `fraction` oder `target`
-- Wetteralter, Versorgungstage, Warnungsruhezeit, Entwarnung und Workerintervall
-- Wettercachezeit und kurze SMTP-Retryzeit nach fehlgeschlagenen Versuchen
+## Transaktionsgrenzen
 
-Tankgrößen und Pumpendurchsatz bleiben in `balcony_settings` gespeichert.
-Zeitformate, Überschneidungen, Kapazitäten, Koordinaten und nicht erfüllbare
-Zyklusabstände werden serverseitig abgelehnt.
+- `Database.connection()` führt Commit oder vollständigen Rollback aus.
+- `immediate=True` setzt `BEGIN IMMEDIATE` vor idempotenten Tankbuchungen.
+- `watering_events.run_id` und `refill_events.run_id` besitzen partielle
+  Unique-Indizes.
+- Die Benachrichtigungsentscheidung, der Logeintrag und der neue
+  Benachrichtigungszustand laufen in einer gemeinsamen
+  `NotificationsRepository`-Transaktion.
+- Kalibrierungsereignis und gemessener Tankstand werden gemeinsam gespeichert.
 
-## SMTP-Umgebung
+## Migrationen
+
+`Application.initialize()` führt `schema.initialize()` bei jedem Start aus.
+Die Schritte sind additiv und wiederholbar; `PRAGMA user_version` ist aktuell
+`3`.
+
+Wichtige Ergänzungen gegenüber 1.4.2:
+
+- `run_id` und Unique-Indizes für Bewässerung und Nachfüllung
+- `actual_consumed_ml`
+- flexible Tank-, Positions- und Wetterfelder
+- `notification_state` und `notification_log`
+- SMTP-Versuch, letzter Erfolg, Fehler und Fehlerzähler
+- `refill_window_observations`
+
+Legacy-Pflanzen und Schlauchzuordnungen werden ohne Duplikate übernommen.
+Ein realitätsnahes 1.4.2-Fixture wird zweimal migriert und auf Datenerhalt,
+Fremdschlüssel und Schema-Version geprüft.
+
+## Hintergrundworker
+
+`Application.start_notification_worker()` startet nur, wenn SMTP aktiviert
+und `NOTIFICATION_WORKER_DISABLED` nicht gesetzt ist. Der Worker:
+
+1. prüft regelmäßig die injizierten Benachrichtigungsbedingungen,
+2. verwendet den Wettercache statt minütlicher Netzabrufe,
+3. persistiert Deduplizierung und Retryzustand,
+4. überlebt einzelne Prüf- oder SMTP-Fehler,
+5. wird beim Server-Shutdown mit `stop()` und `join()` beendet.
+
+## Kompatibilität
+
+`server.py` bleibt der ausführbare Einstiegspunkt. Während der
+Übergangsphase aliasiert es `watering_backend.core`, damit ältere Tests und
+Integrationen weiterhin `server.DATA_DIR`, `server.local_now` oder
+`server.urlopen` patchen können. Dieser Mechanismus ist auf die kleine
+Kompatibilitätsfassade begrenzt; neue Tests importieren `Application`,
+Repositories, Services oder den Router direkt.
+
+Alte Aufrufer ohne `run_id` erhalten weiterhin
+`legacy-<typ>-<uuid>`. Das erhält die Aufrufkompatibilität, kann aber einen
+erneuten alten Request ohne stabile Kennung nicht deduplizieren.
+
+## Neue Route
+
+1. Die benötigte Operation dem `ApiContext`-Protocol hinzufügen.
+2. Sie in `Application` als Delegation an Repository oder Service anbieten.
+3. Eine kleine Funktion im passenden `api/routes_*.py` schreiben.
+4. Die Funktion in `register(router)` mit Methode und unverändertem Pfad
+   registrieren.
+5. Routertest mit Fake-Kontext und Integrationstest mit realer
+   `Application` ergänzen.
+
+Routen sollen nur HTTP übersetzen. Validierung gehört nach `validation.py`,
+SQL in ein Repository und Fachentscheidungen in einen Service.
+
+## Geheimnisse
+
+SMTP-Konfiguration kommt ausschließlich aus:
 
 - `NOTIFICATIONS_ENABLED`
-- `SMTP_HOST`
-- `SMTP_PORT`
-- `SMTP_USERNAME`
-- `SMTP_PASSWORD`
-- `SMTP_FROM`
-- `SMTP_TO` (mehrere Empfänger mit Komma oder Semikolon)
-- `SMTP_SECURITY` mit `ssl`, `starttls` oder `none`
+- `SMTP_HOST`, `SMTP_PORT`
+- `SMTP_USERNAME`, `SMTP_PASSWORD`
+- `SMTP_FROM`, `SMTP_TO`
+- `SMTP_SECURITY`
 - `NOTIFICATION_WORKER_DISABLED` für Tests
 
-`SMTP_PASSWORD` und Home-Assistant-Webhook-URLs werden weder in `/api/state`
-noch in Diagnoseantworten ausgegeben.
+Passwörter und Home-Assistant-Webhook-URLs erscheinen weder in
+`/api/state` noch in Diagnoseantworten.
 
-## Tests und Risiken
+## Verbleibende technische Schulden
 
-Die Unit-Tests prüfen Tages-/Aktuellwetter, Simulationen, Sommer-/Winterzeit,
-mehrere Nachfüllfenster, chronologische Tankversorgung, kalibrierten Verbrauch,
-sequentielle und parallele `run_id`-Retries, globale Anschlusswahl,
-Zusatzschläuche, alle Topfarten, flexible Zeitfenster, SMTP-Erfolg/Fehler,
-Deduplizierung/Entwarnung und Migrationen. `.github/workflows/tests.yml` führt
-Compile-, Python-, DOM-nahe JavaScript-Tests, Compose-Validierung und den
-Container-Build bei Pushes und Pull Requests aus.
-
-Verbleibende Risiken:
-
-- Wetter- und SMTP-Verfügbarkeit hängen vom lokalen Netzwerk und DNS ab.
-- Prognosen nach dem 16-Tage-Wetterhorizont schreiben den letzten sicheren
-  Tageswert fort. Diese Ereignisse sind ausdrücklich als geschätzt markiert.
-- Alte Aufrufer ohne stabile `run_id` können bei einem echten HTTP-Retry nicht
-  dedupliziert werden und sollten auf die dokumentierten HA-Beispiele umsteigen.
+- `server.py` nutzt für alte patchende Aufrufer noch den dokumentierten
+  Modulalias; neue Aufrufer sollen direkt `Application` verwenden.
+- Die zwei großen Legacy-Testmodule bleiben als Kompatibilitäts-Suite
+  bestehen. Neue Tests sind bereits nach Services, Router, Migration,
+  Regression, Architektur und Transaktionen getrennt.
+- Prognoseereignisse nach dem sicheren Open-Meteo-Horizont schreiben den
+  letzten Tageswert fort und sind deshalb ausdrücklich als geschätzt markiert.
