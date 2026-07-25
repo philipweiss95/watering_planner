@@ -18,7 +18,22 @@ Alle stabilen Änderungen am Watering Planner werden in dieser Datei dokumentier
 - Oberfläche modularisiert und für Dashboard, Prognose, Pflanzen, Schläuche,
   Einstellungen, Diagnose und iPhone-PWA neu strukturiert.
 - Bestehende SQLite-Datenbanken werden beim ersten Start automatisch auf
-  Schema-Version 2 migriert.
+  Schema-Version 3 migriert.
+- Updatepfad vom unveränderten Release 1.4.3 durch Paket-, Migrations-,
+  Rollback- und Fehlerfallprüfungen abgesichert.
+- Releaseprüfung um Paketinhalt, SHA-256-Prüfsumme, Versionskonsistenz und das
+  vollständige modulare Backend erweitert.
+
+## [1.4.3] - 2026-07-25
+
+- Bereits veröffentlichte Brückenversion für das Update von 1.4.x auf 1.5.0.
+- Updater auf die zukünftigen modularen Pfade einschließlich
+  `watering_backend/`, `package.json`, `public/`, `updater/`,
+  `home-assistant/`, `docs/` und `scripts/` vorbereitet.
+- Sicherung und Rollback so erweitert, dass neu hinzugekommene verwaltete
+  Pfade entfernt und zuvor vorhandene Programmdateien wiederhergestellt werden.
+- Persistente Daten unter `data/` und private Einstellungen in
+  `.env.synology` bleiben vom Dateiupdate unangetastet.
 
 ## [1.4.2] - 2026-07-24
 

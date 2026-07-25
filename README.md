@@ -90,6 +90,18 @@ Version 1.0 enthält außerdem auf der **Info-Seite** einen internen Synology-Up
 
 Der Updater erneuert sich am Ende eines Updates über einen unabhängigen, kurzlebigen Übergabecontainer. Dadurch bleibt der Compose-Befehl aktiv, während der alte Updater ersetzt wird. Seit Version 1.3.1 bestätigt der Helfer zusätzlich das erwartete Image und den Health-Status. Erst wenn anschließend genau ein Updater-Container übrig ist, wird das Update als erfolgreich markiert. Ein gestarteter Updater kann unterbrochene Ersetzungen außerdem selbst bereinigen und den kanonischen Containernamen wiederherstellen.
 
+### Update von 1.4.3 auf 1.5.0
+
+Version 1.4.3 ist die bereits veröffentlichte und notwendige Brückenversion.
+Vor dem Update muss die Oberfläche **Version 1.4.3** anzeigen. Anschließend
+`data/watering.sqlite3` und `.env.synology` sichern und 1.5.0 über den
+bestehenden Updater installieren. Nach dem Update Schema, Tankstände, Pflanzen
+und Schläuche prüfen, die Home-Assistant-Aufrufe auf stabile `run_id`-Werte
+umstellen, SMTP zunächst deaktiviert lassen und mit einer Test-E-Mail prüfen.
+Die iPhone-PWA danach vollständig schließen und neu laden. Der genaue Ablauf
+einschließlich Datei- und Datenbank-Rollback steht in
+[docs/migration.md](docs/migration.md).
+
 Die Berechnung nutzt Temperatur, Tagesniederschlag, Wind, FAO-Referenzverdunstung ET₀, Sonnenscheindauer, Balkon-/Terrassenausrichtung in Grad, Koordinaten, Pflanzenpositionen und die vier Wandhöhen nach Seite. Wenn Open-Meteo keine ET₀-Werte liefert oder manuelle Wetterdaten genutzt werden, schätzt die App ET₀ aus Temperatur, Sonnenscheindauer und Wind. Zusätzlich wird Wind als Balkon-Expositionsfaktor berechnet: hohe Windgeschwindigkeiten erhöhen Transpiration und Topfverdunstung, niedrige Wände schützen weniger.
 
 Für den letzten noch vollständig möglichen Gießlauf simuliert die App mindestens 16 Prognosetage chronologisch. Ein Gießlauf ist nur versorgt, wenn zu seinem Zeitpunkt genügend Wasser im Haupttank liegt. Vorratswasser wird erst nach einem zulässigen Nachfüllereignis verfügbar. Reicht der Ereignishorizont nicht bis zur Erschöpfung, bleibt die bisherige mittlere Langzeitschätzung als Kompatibilitätswert erhalten.
@@ -128,7 +140,7 @@ Ein manueller Sofortlauf kann über die Weboberfläche oder per iPhone-Kurzbefeh
 POST /api/manual-run
 Content-Type: application/json
 
-{"auto_weather":true}
+{"auto_weather":true,"run_id":"ios-20260725T150000Z"}
 ```
 
 Der Planer prüft zuerst, ob Tank und Verschlauchung einen vollständigen Zyklus zulassen. Anschließend ruft er den konfigurierten lokalen Home-Assistant-Webhook auf. Home Assistant schaltet die Steckdose und verbucht den Lauf nach dem Ausschalten.
@@ -140,11 +152,22 @@ Nach einem real ausgeführten Pumpenlauf kann HomeKit den Lauf verbuchen:
 POST /api/homekit/mark-run
 Content-Type: application/json
 
-{"auto_weather":true,"slot":"morning"}
+{"auto_weather":true,"slot":"morning","run_id":"ios-20260725T150000Z"}
 ```
 
 Dadurch zählt der Server die bereits erledigten Tageszyklen und reduziert den Haupttankstand.
 Die letzten Läufe erscheinen in der Übersicht als Protokoll unter `Bewässerungsvorgänge`.
+Die `run_id` wird für einen realen Lauf einmal erzeugt und bei jedem Retry
+unverändert wiederverwendet. Home Assistant muss denselben Wert vom
+Start-Webhook bis zur abschließenden Buchung durchreichen. Entsprechendes gilt
+für `POST /api/refill/mark-run`.
+
+```text
+POST /api/refill/mark-run
+Content-Type: application/json
+
+{"run_id":"refill-20260725T010000Z"}
+```
 
 ## API
 
@@ -166,12 +189,12 @@ Die letzten Läufe erscheinen in der Übersicht als Protokoll unter `Bewässerun
 - `POST /api/notifications/test`: SMTP-Test-E-Mail senden
 - `POST /api/manual-run`: vollständigen Pumpzyklus sofort über Home Assistant anfordern
 - `POST /api/manual-refill`: Nachfülllauf sofort über Home Assistant anfordern
-- `POST /api/homekit/mark-run`: Pumpenlauf verbuchen und Tank reduzieren
+- `POST /api/homekit/mark-run`: Pumpenlauf mit stabiler `run_id` idempotent verbuchen und Tank reduzieren
 
 Die modulare Backend-Architektur, Migrationen, neuen Prognosefelder,
 Konfigurationswerte, SMTP-Variablen und verbleibenden Risiken sind in
 [docs/backend-architecture.md](docs/backend-architecture.md) dokumentiert.
-- `POST /api/refill/mark-run`: nächtlichen Nachfülllauf verbuchen und Wasser vom Vorratstank in den Haupttank rechnen
+- `POST /api/refill/mark-run`: Nachfülllauf mit stabiler `run_id` idempotent verbuchen und Wasser vom Vorratstank in den Haupttank rechnen
 - `POST /api/tanks/main/fill`: Haupttank als voll markieren
 - `POST /api/tanks/refill/fill`: konfigurierbaren Vorratstank als voll markieren
 - `POST /api/calibration/main`: Hauptpumpenfaktor aus `measured_level_percent` kalibrieren
