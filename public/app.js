@@ -39,15 +39,26 @@ async function loadEvaluation() {
   }
 }
 
+async function reloadWeather() {
+  try {
+    await api.get("/api/weather?force=true");
+    showToast("Wetterdaten aktualisiert");
+    await refreshAll();
+  } catch (error) {
+    showToast(error.message, { error: true });
+  }
+}
+
 function renderAll() {
   const data = getStore();
   renderDashboard(data.state, data.evaluation, {
     "fill-main": fillMainTank,
     "fill-refill": fillRefillTank,
-    "reload-weather": () => refreshAll(),
+    "reload-weather": reloadWeather,
     "test-ha": testHomeAssistant,
     forecast: () => navigate("forecast"),
     "manual-run": runManualWatering,
+    "resume-automation": toggleAutomation,
   });
   if (data.state) {
     renderForecast(data.state, data.evaluation);
@@ -57,7 +68,7 @@ function renderAll() {
   }
   renderHistory(data.events);
   renderDiagnostics(data.state, data.evaluation, data.notificationDiagnostics, data.updater, {
-    "reload-weather": () => refreshAll(),
+    "reload-weather": reloadWeather,
     "test-ha": testHomeAssistant,
     "test-email": testEmail,
     "toggle-automation": toggleAutomation,
@@ -94,7 +105,7 @@ async function refreshAll(options = {}) {
     Promise.all([diagnosticsPromise, updaterPromise]).then(([notificationDiagnostics, updater]) => {
       setStore({ notificationDiagnostics, updater });
       renderDiagnostics(state, getStore().evaluation, notificationDiagnostics, updater, {
-        "reload-weather": () => refreshAll(),
+        "reload-weather": reloadWeather,
         "test-ha": testHomeAssistant,
         "test-email": testEmail,
         "toggle-automation": toggleAutomation,

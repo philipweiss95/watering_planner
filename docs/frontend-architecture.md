@@ -26,7 +26,8 @@ Regeln getrennt. Dynamische und nutzerdefinierte Inhalte werden mit
 
 - **Heute** beginnt mit genau einer priorisierten Aktion. Darunter stehen
   Tageszeitpunkte und vier Statusbereiche; das Ereignisprotokoll liegt unter
-  **Verlauf**.
+  **Verlauf**. Aktuell fällige Läufe stehen vor entfernten, extrapolierten
+  Reichweitenwarnungen.
 - **Prognose** zeigt Haupt- und Vorratstank, Bewässerungs- und
   Nachfüllmarkierungen, den ersten Ausfall und extrapolierte Bereiche.
 - **Pflanzen** zeigt Bedarf gegen tatsächliche Tagesversorgung. Modellwerte
@@ -59,8 +60,10 @@ keinen Seitenüberlauf.
 - Python-Strukturtests prüfen Module, PWA-Cache, Ansichten, sichere
   Textdarstellung, Touch-/Safe-Area-Regeln und lokale Assets.
 - Node-Modelltests prüfen Navigation, Dashboardprioritäten, Zeitleiste,
-  Prognosedaten, Zeitfenster, Pflanzenfilter, Schlauchwarnungen, Diagnose und
-  Escaping.
+  Prognosedaten, Zeitfenster, Pflanzenfilter, Schlauchwarnungen, Diagnose,
+  API-Fehler und Escaping. Eine kleine lokale DOM-Testumgebung prüft
+  String-Katalog-IDs, Pflanzenformulare, Wiederherstellung und Dialogaktionen
+  ohne zusätzliche Laufzeitabhängigkeit.
 - Ein isolierter Headless-Edge-Lauf hat Desktop und Mobil ohne
   JavaScript-Ladefehler gerendert; alle 27 PWA-Shell-Assets antworteten mit 200.
 - SMTP und externe Home-Assistant-/Open-Meteo-Verbindungen hängen weiterhin

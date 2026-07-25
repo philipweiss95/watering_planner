@@ -7,6 +7,7 @@ können weiterhin `import server` verwenden; intern werden die Aufgaben im Paket
 - `core.py`: Anwendungsorchestrierung und kompatible API-Fassade
 - `http_api.py`: Lebenszyklus des HTTP-Servers
 - `database.py` und `schema.py`: SQLite-Verbindungen, Schema und Migrationen
+- `validation.py`: zentrale Eingabe-, Enum- und Wertebereichsvalidierung
 - `weather.py`: Normalisierung von Tages-, Stunden- und Simulationswetter
 - `plant_model.py`: Pflanzenbedarf und einmalige Topf-Effizienz
 - `connections.py`: globale, kapazitätsbegrenzte Anschlussoptimierung
@@ -22,12 +23,17 @@ entstehen.
 ## Datenbankmigrationen
 
 Beim Start führt `init_db()` additive, wiederholbar ausführbare Migrationen aus.
-Das aktuelle Schema hat `PRAGMA user_version = 2`.
+Das aktuelle Schema hat `PRAGMA user_version = 3`. Jede Verbindung aktiviert
+zusätzlich `PRAGMA foreign_keys = ON`.
 
 - `watering_events.run_id` und `refill_events.run_id`
 - partielle Unique-Indizes für beide nichtleeren `run_id`-Spalten
 - `notification_state` für aktive/deduplizierte Zustände
 - `notification_log` als persistentes Versand- und Fehlerprotokoll
+- `notification_state.last_attempt_at`, `last_error` und
+  `consecutive_failures` für kurze, persistente Wiederholungen nach SMTP-Fehlern
+- `refill_window_observations` speichert Bedarf und Ausführbarkeit je
+  Nachfüllfenster, damit verpasste Läufe erst nach Fensterende erkannt werden
 
 Bestehende Zeilen bleiben unverändert; ihre `run_id` ist `NULL`. Tankbuchungen
 mit neuer `run_id` laufen unter `BEGIN IMMEDIATE`, prüfen den Haupttank gegen den
@@ -44,15 +50,22 @@ Open-Meteo liefert drei getrennte Bereiche:
 
 Der Zeitpunkt jedes erfolgreichen Abrufs wird persistent als
 `last_successful_weather_fetch_at` gespeichert. Die Warnschwelle steht in
-`planner_config.weather_stale_after_minutes`.
+`planner_config.weather_stale_after_minutes`. Der davon unabhängige
+`weather_cache_minutes`-Wert verhindert minütliche Open-Meteo-Aufrufe. Ein
+manueller Abruf mit `GET /api/weather?force=true` umgeht den Cache. Bei einem
+temporären Fehler können letzte gültige Daten mit `cache_fallback: true`
+weiterverwendet werden. Zertifikatsfehler führen niemals zu einem unbestätigten
+TLS-Abruf.
 
 ## Tankprognose
 
-`depletion.forecast_events` enthält mindestens den 16-tägigen
-Open-Meteo-Horizont. Jedes Ereignis enthält Zeitpunkt, Typ, geplante Menge,
-beide Tankstände vor/nach dem Ereignis und `successful`, `estimated` oder
-`unserved`. Vorratswasser wird erst durch ein zeitlich zulässiges
-Nachfüllereignis in den Haupttank übertragen.
+`depletion.forecast_events` enthält den sicheren, bis zu 16-tägigen
+Open-Meteo-Horizont und einen als `estimated_weather` markierten
+Extrapolationsbereich bis Tag 45. Jedes Ereignis enthält Zeitpunkt, Typ,
+geplante Menge, beide Tankstände vor/nach dem Ereignis und `successful`,
+`estimated` oder `unserved`. Vorratswasser wird nur mit dem konfigurierten
+Pumpendurchsatz übertragen. Bei einem Gießlauf während des Transfers steht
+daher nur die bis zu diesem Zeitpunkt geförderte Teilmenge im Haupttank bereit.
 
 Neue eindeutige Felder:
 
@@ -63,10 +76,22 @@ Neue eindeutige Felder:
 - `refill_tank_after_forecast_ml`
 
 Die bisherigen Felder bleiben für vorhandene Browser- und HA-Aufrufer erhalten.
+Sie stammen alle aus derselben Ereignissimulation:
+
+- `last_watering_at` ist ein Alias für `last_supported_watering_at`, also den
+  letzten lückenlos versorgten Lauf vor dem ersten Ausfall.
+- `first_unserved_at` ist ein Alias für `first_unserved_watering_at`.
+- `main_empty_at` bezeichnet den ersten Zeitpunkt, an dem der Haupttank einen
+  vollständigen Lauf nicht mehr versorgen kann.
+- `all_empty_at` bezeichnet diesen Zeitpunkt, wenn auch kein Vorratswasser für
+  einen späteren Transfer vorhanden ist.
+- Die Tankstände `*_after_forecast_ml` sind die simulierten Endstände; Haupt-
+  und Vorratstank werden dabei nie einfach addiert.
 
 ## API
 
 - `POST /api/settings`: validierte persistente Planer-Konfiguration
+- `GET /api/weather?force=true`: manueller, erzwungener Wetterabruf
 - `GET /api/diagnostics/notifications`: SMTP-Status ohne Passwort, aktive
   Warnungen und Protokoll
 - `POST /api/diagnostics/notifications/check`: sofortiger Diagnosezyklus
@@ -97,6 +122,7 @@ Retry-Idempotenz garantieren.
 - Mindestabstand zwischen Nachfüllungen
 - Nachfüllstrategie `fraction` oder `target`
 - Wetteralter, Versorgungstage, Warnungsruhezeit, Entwarnung und Workerintervall
+- Wettercachezeit und kurze SMTP-Retryzeit nach fehlgeschlagenen Versuchen
 
 Tankgrößen und Pumpendurchsatz bleiben in `balcony_settings` gespeichert.
 Zeitformate, Überschneidungen, Kapazitäten, Koordinaten und nicht erfüllbare
@@ -124,14 +150,13 @@ mehrere Nachfüllfenster, chronologische Tankversorgung, kalibrierten Verbrauch,
 sequentielle und parallele `run_id`-Retries, globale Anschlusswahl,
 Zusatzschläuche, alle Topfarten, flexible Zeitfenster, SMTP-Erfolg/Fehler,
 Deduplizierung/Entwarnung und Migrationen. `.github/workflows/tests.yml` führt
-Compile-, Python- und browserlose JavaScript-Modelltests bei Pushes und Pull
-Requests aus.
+Compile-, Python-, DOM-nahe JavaScript-Tests, Compose-Validierung und den
+Container-Build bei Pushes und Pull Requests aus.
 
 Verbleibende Risiken:
 
 - Wetter- und SMTP-Verfügbarkeit hängen vom lokalen Netzwerk und DNS ab.
-- Prognosen nach dem 16-Tage-Wetterhorizont verwenden weiterhin die
-  kompatible statistische Reichweitenschätzung; die Ereignisliste selbst
-  behauptet keine detaillierte Wetterkenntnis darüber hinaus.
+- Prognosen nach dem 16-Tage-Wetterhorizont schreiben den letzten sicheren
+  Tageswert fort. Diese Ereignisse sind ausdrücklich als geschätzt markiert.
 - Alte Aufrufer ohne stabile `run_id` können bei einem echten HTTP-Retry nicht
   dedupliziert werden und sollten auf die dokumentierten HA-Beispiele umsteigen.

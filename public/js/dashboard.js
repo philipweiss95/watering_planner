@@ -8,6 +8,25 @@ function nextUnfinishedWindow(evaluation) {
   return windows[completed] || automation.next_window || "";
 }
 
+function localDateKey(value, timezone) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone || "Europe/Berlin",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(value);
+  const get = (type) => parts.find((part) => part.type === type)?.value || "";
+  return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
+export function daysUntil(value, now = new Date(), timezone = "Europe/Berlin") {
+  const target = new Date(value);
+  if (Number.isNaN(target.getTime())) return null;
+  const targetDay = Date.parse(`${localDateKey(target, timezone)}T00:00:00Z`);
+  const currentDay = Date.parse(`${localDateKey(now, timezone)}T00:00:00Z`);
+  return Math.max(0, Math.round((targetDay - currentDay) / 86400000));
+}
+
 export function buildTimeline(evaluation, now = new Date()) {
   const automation = evaluation?.automation || {};
   const completed = Number(evaluation?.cycles_completed_today || 0);
@@ -68,29 +87,12 @@ export function buildDashboardModel(state, evaluation, now = new Date()) {
   const total = Number(evaluation.recommended_cycles_today || 0);
   const homeAssistant = state.home_assistant || {};
   const firstUnserved = evaluation.depletion?.first_unserved_watering_at;
-
-  if (evaluation.refill?.refill_tank?.empty) {
-    return {
-      tone: "warning", icon: "container", kicker: "Handlung nötig",
-      title: "Vorratstank auffüllen",
-      meta: "Für automatische Nachfüllungen steht kein Wasser bereit.",
-      action: "fill-refill",
-    };
-  }
   if (homeAssistant.configured && homeAssistant.last_error) {
     return {
       tone: "danger", icon: "activity", kicker: "Handlung nötig",
       title: "Home Assistant prüfen",
       meta: "Die letzte Verbindung ist fehlgeschlagen.",
       action: "test-ha",
-    };
-  }
-  if (firstUnserved) {
-    return {
-      tone: "warning", icon: "alert", kicker: "Vorausschau",
-      title: "Wasservorrat einplanen",
-      meta: `Erster nicht versorgbarer Lauf ${dateTime(firstUnserved)}`,
-      action: "forecast",
     };
   }
   if (evaluation.automation?.run_now) {
@@ -101,6 +103,37 @@ export function buildDashboardModel(state, evaluation, now = new Date()) {
       action: "manual-run",
     };
   }
+  const refill = evaluation.refill || {};
+  const refillBlocked = Boolean(
+    refill.status === "window_missed"
+    || (refill.blocked && refill.schedule_due),
+  );
+  if (evaluation.automation?.paused) {
+    return {
+      tone: "warning", icon: "pause", kicker: "Automatik pausiert",
+      title: "Bewässerung fortsetzen",
+      meta: `${remaining} von ${total} Läufen offen`,
+      action: "resume-automation",
+    };
+  }
+  if (evaluation.automation?.catch_up && remaining > 0) {
+    return {
+      tone: "danger", icon: "alert", kicker: "Lauf verpasst",
+      title: "Bewässerung prüfen",
+      meta: evaluation.automation.summary || `${remaining} Läufe sind noch offen.`,
+      action: "manual-run",
+    };
+  }
+  if (refillBlocked) {
+    return {
+      tone: refill.severity === "critical" ? "danger" : "warning",
+      icon: "container",
+      kicker: refill.status === "window_missed" ? "Nachfüllung verpasst" : "Nachfüllung blockiert",
+      title: refill.status === "refill_tank_empty" ? "Vorratstank auffüllen" : "Nachfüllung prüfen",
+      meta: refill.summary || "Der erforderliche Nachfülllauf konnte nicht stattfinden.",
+      action: refill.status === "refill_tank_empty" ? "fill-refill" : "",
+    };
+  }
   const nextWindow = nextUnfinishedWindow(evaluation);
   if (remaining > 0 && nextWindow) {
     return {
@@ -108,6 +141,18 @@ export function buildDashboardModel(state, evaluation, now = new Date()) {
       title: `Nächster Lauf ${time(nextWindow)}`,
       meta: `${remaining} von ${total} Läufen offen · Kein Eingreifen nötig`,
       action: "",
+    };
+  }
+  const timezone = state?.balcony?.timezone_name || "Europe/Berlin";
+  const warningDays = Number(state?.planner_config?.supply_warning_days ?? 3);
+  const unservedInDays = firstUnserved ? daysUntil(firstUnserved, now, timezone) : null;
+  if (firstUnserved && unservedInDays !== null && unservedInDays <= warningDays) {
+    const estimated = Boolean(evaluation.depletion?.first_unserved_is_estimated);
+    return {
+      tone: "warning", icon: "alert", kicker: estimated ? "Vorausschau · geschätzt" : "Vorausschau",
+      title: "Wasservorrat einplanen",
+      meta: `Erster nicht versorgbarer Lauf ${dateTime(firstUnserved)}`,
+      action: "forecast",
     };
   }
   return {
@@ -147,6 +192,7 @@ export function renderDashboard(state, evaluation, actions = {}) {
     "test-ha": "Verbindung testen",
     forecast: "Prognose öffnen",
     "manual-run": "Jetzt starten",
+    "resume-automation": "Fortsetzen",
   };
   if (model.action && actions[model.action]) {
     const button = element("button", { className: "primary", type: "button", text: actionLabels[model.action] });

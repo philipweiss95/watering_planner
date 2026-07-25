@@ -2,14 +2,85 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
+import { api, ApiError } from "../public/js/api.js";
 import { buildDashboardModel, buildTimeline } from "../public/js/dashboard.js";
 import { buildDiagnosticRows } from "../public/js/diagnostics.js";
 import { buildForecastModel } from "../public/js/forecast.js";
 import { validateHoses } from "../public/js/hoses.js";
 import { normalizeView } from "../public/js/navigation.js";
-import { filterPlants, plantSupplyStatus } from "../public/js/plants.js";
+import {
+  filterPlants,
+  plantForm,
+  plantPayload,
+  plantPayloadFromFormData,
+  plantSupplyStatus,
+  restorePlant,
+} from "../public/js/plants.js";
 import { previewSchedule, validateRefillWindows } from "../public/js/settings.js";
-import { escapeHTML } from "../public/js/ui.js";
+import { confirmDialog, escapeHTML } from "../public/js/ui.js";
+
+class FakeNode {
+  constructor(tagName = "", text = "") {
+    this.tagName = tagName.toUpperCase();
+    this.textContent = text;
+    this.children = [];
+    this.dataset = {};
+    this.style = { setProperty() {} };
+    this.listeners = {};
+    this.open = false;
+  }
+
+  append(...children) {
+    this.children.push(...children);
+  }
+
+  replaceChildren(...children) {
+    this.children = [...children];
+  }
+
+  setAttribute(name, value) {
+    this[name] = value;
+  }
+
+  addEventListener(name, handler) {
+    this.listeners[name] = handler;
+  }
+
+  click() {
+    this.listeners.click?.({ target: this, preventDefault() {} });
+  }
+
+  focus() {}
+
+  showModal() {
+    this.open = true;
+  }
+
+  close() {
+    this.open = false;
+  }
+}
+
+function installFakeDOM() {
+  const nodes = new Map();
+  globalThis.Node = FakeNode;
+  globalThis.document = {
+    createElement: (tag) => new FakeNode(tag),
+    createElementNS: (_namespace, tag) => new FakeNode(tag),
+    createTextNode: (text) => new FakeNode("#text", text),
+    getElementById: (id) => nodes.get(id) || null,
+  };
+  return nodes;
+}
+
+function findByName(node, name) {
+  if (node.name === name) return node;
+  for (const child of node.children || []) {
+    const found = findByName(child, name);
+    if (found) return found;
+  }
+  return null;
+}
 
 test("navigation accepts known views and rejects arbitrary hashes", () => {
   assert.equal(normalizeView("#forecast"), "forecast");
@@ -21,6 +92,8 @@ test("dashboard prioritizes concrete action states", () => {
   const baseState = {
     weather_status: { last_successful_fetch_at: "2026-07-25T08:00:00Z", stale: false },
     home_assistant: { configured: true, last_error: "" },
+    balcony: { timezone_name: "Europe/Berlin" },
+    planner_config: { supply_warning_days: 3 },
   };
   const baseEvaluation = {
     tank: { empty_soon: false },
@@ -39,6 +112,59 @@ test("dashboard prioritizes concrete action states", () => {
   );
   assert.equal(
     buildDashboardModel({ ...baseState, home_assistant: { configured: true, last_error: "timeout" } }, baseEvaluation).action,
+    "test-ha",
+  );
+  const farShortage = {
+    ...baseEvaluation,
+    depletion: { first_unserved_watering_at: "2026-08-20T15:00:00+02:00", first_unserved_is_estimated: true },
+  };
+  assert.equal(
+    buildDashboardModel(baseState, farShortage, new Date("2026-07-25T10:00:00+02:00")).title,
+    "Nächster Lauf 15:00",
+  );
+  assert.equal(
+    buildDashboardModel(
+      baseState,
+      { ...farShortage, automation: { ...farShortage.automation, run_now: true, active_window: "11:00" } },
+      new Date("2026-07-25T11:00:00+02:00"),
+    ).kicker,
+    "Jetzt fällig",
+  );
+  assert.equal(
+    buildDashboardModel(
+      baseState,
+      {
+        ...baseEvaluation,
+        remaining_cycles_today: 0,
+        depletion: { first_unserved_watering_at: "2026-07-27T15:00:00+02:00" },
+      },
+      new Date("2026-07-25T10:00:00+02:00"),
+    ).action,
+    "forecast",
+  );
+  assert.equal(
+    buildDashboardModel(
+      baseState,
+      { ...baseEvaluation, automation: { ...baseEvaluation.automation, paused: true } },
+    ).title,
+    "Bewässerung fortsetzen",
+  );
+  assert.equal(
+    buildDashboardModel(
+      baseState,
+      {
+        ...baseEvaluation,
+        automation: { ...baseEvaluation.automation, catch_up: true },
+        refill: { status: "window_missed", blocked: true, severity: "critical" },
+      },
+    ).title,
+    "Bewässerung prüfen",
+  );
+  assert.notEqual(
+    buildDashboardModel(
+      { ...baseState, home_assistant: { configured: false, last_error: "" } },
+      baseEvaluation,
+    ).action,
     "test-ha",
   );
 });
@@ -74,6 +200,7 @@ test("forecast model preserves tank paths and first unserved event", () => {
       {
         at: "2026-07-26T15:00:00+02:00", date: "2026-07-26", event_type: "watering",
         main_tank_after_ml: 200, refill_tank_after_ml: 14000, status: "unserved",
+        estimated_weather: true,
       },
     ],
   }, { main: 10000, refill: 20000 });
@@ -82,6 +209,7 @@ test("forecast model preserves tank paths and first unserved event", () => {
   assert.equal(model.events[1].refillPercent, 70);
   assert.equal(model.days[1].unserved, true);
   assert.equal(model.estimated, true);
+  assert.equal(model.estimatedStartTimestamp, new Date("2026-07-26T15:00:00+02:00").getTime());
 });
 
 test("schedule preview distributes cycles and detects impossible windows", () => {
@@ -101,6 +229,45 @@ test("plant filters use actual daily supply", () => {
   assert.equal(filterPlants(plants, "under")[0].id, 1);
   assert.equal(filterPlants(plants, "over")[0].id, 3);
   assert.equal(filterPlants(plants, "all").length, 3);
+});
+
+test("plant form and create, edit, restore payload keep olive as a string", async () => {
+  installFakeDOM();
+  const state = { catalog: [{ id: "olive", name: "Olive" }, { id: "tomato", name: "Tomate" }] };
+  const existing = {
+    id: 4,
+    catalog_id: "olive",
+    custom_name: "Olive",
+    size: "medium",
+    pot_liters: 30,
+    pot_type: "overflow",
+  };
+  const form = plantForm(state, existing);
+  const catalog = findByName(form, "catalog_id");
+  assert.equal(catalog.children.find((option) => option.selected).value, "olive");
+
+  const values = new Map([
+    ["catalog_id", "olive"],
+    ["custom_name", "Olive neu"],
+    ["size", "large"],
+    ["pot_liters", "35"],
+    ["pot_type", "reservoir"],
+  ]);
+  const created = plantPayloadFromFormData({ get: (key) => values.get(key) });
+  const edited = plantPayloadFromFormData({ get: (key) => values.get(key) }, existing);
+  assert.equal(created.catalog_id, "olive");
+  assert.equal(edited.catalog_id, "olive");
+  assert.equal(plantPayload(existing).catalog_id, "olive");
+
+  let restored;
+  await restorePlant(existing, {
+    post(path, payload) {
+      restored = { path, payload };
+      return Promise.resolve({ id: 9 });
+    },
+  });
+  assert.equal(restored.path, "/api/plants");
+  assert.equal(restored.payload.catalog_id, "olive");
 });
 
 test("hose validation reports duplicates, invalid outlets, limits and uncovered plants", () => {
@@ -135,6 +302,58 @@ test("diagnostics provide all required system rows without secrets", () => {
     "weather", "weather-age", "home-assistant", "watering", "refill", "smtp", "database", "updater",
   ]);
   assert.doesNotMatch(JSON.stringify(rows), /password|webhook/i);
+  const emptyRefill = buildDiagnosticRows(
+    { weather_status: {}, home_assistant: {}, notifications: {} },
+    {
+      automation: {},
+      refill: {
+        enabled: true,
+        status: "refill_tank_empty",
+        severity: "critical",
+        blocked: true,
+        blocked_reason: "refill_tank_empty",
+        summary: "Vorratstank ist leer.",
+      },
+    },
+    {},
+    {},
+  ).find((row) => row.id === "refill");
+  assert.equal(emptyRefill.status, "danger");
+});
+
+test("API errors and custom dialog confirmation are observable", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: false,
+    status: 422,
+    async json() {
+      return { error: "Ungültige Pflanzenart" };
+    },
+  });
+  await assert.rejects(api.post("/api/plants", {}), (error) => {
+    assert.ok(error instanceof ApiError);
+    assert.equal(error.status, 422);
+    assert.equal(error.message, "Ungültige Pflanzenart");
+    return true;
+  });
+  globalThis.fetch = originalFetch;
+
+  const nodes = installFakeDOM();
+  const dialog = new FakeNode("dialog");
+  const nativeCancel = new FakeNode("button");
+  dialog.querySelector = () => nativeCancel;
+  nodes.set("appDialog", dialog);
+  nodes.set("dialogTitle", new FakeNode("h2"));
+  nodes.set("dialogContent", new FakeNode("div"));
+  const actions = new FakeNode("div");
+  nodes.set("dialogActions", actions);
+
+  const accepted = confirmDialog({ title: "Löschen", message: "Sicher?" });
+  actions.children[1].click();
+  assert.equal(await accepted, true);
+  const cancelled = confirmDialog({ title: "Löschen", message: "Sicher?" });
+  actions.children[0].click();
+  assert.equal(await cancelled, false);
 });
 
 test("escaping neutralizes user supplied markup", () => {

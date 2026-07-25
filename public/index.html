@@ -193,6 +193,7 @@
             <div class="field-grid">
               <label>Reichweitenwarnung <span class="input-unit"><input name="supply_warning_days" type="number" min="1"><span>Tage</span></span></label>
               <label>Ruhezeit <span class="input-unit"><input name="notification_cooldown_minutes" type="number" min="0"><span>min</span></span></label>
+              <label>Wiederholung bei Fehler <span class="input-unit"><input name="notification_retry_minutes" type="number" min="1"><span>min</span></span></label>
               <label class="toggle-label"><span>Entwarnung senden</span><input name="notification_resolved_enabled" type="checkbox"><span class="switch" aria-hidden="true"></span></label>
               <label>Wetterwarnung ab <span class="input-unit"><input name="weather_stale_after_minutes" type="number" min="1"><span>min</span></span></label>
             </div>
@@ -203,6 +204,7 @@
             <div class="field-grid">
               <label>Toleranz bei verpasstem Lauf <span class="input-unit"><input name="missed_watering_tolerance_minutes" type="number" min="1"><span>min</span></span></label>
               <label>Diagnoseintervall <span class="input-unit"><input name="notification_worker_interval_seconds" type="number" min="10"><span>s</span></span></label>
+              <label>Wettercache <span class="input-unit"><input name="weather_cache_minutes" type="number" min="1"><span>min</span></span></label>
             </div>
             <details class="nested-details"><summary>Wetterwerte simulieren</summary>
               <div id="weatherSimulationForm" class="field-grid">

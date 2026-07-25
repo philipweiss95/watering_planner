@@ -46,11 +46,13 @@ cp .env.synology ".env.synology.backup-$(date +%Y%m%d-%H%M%S)"
    `server.py`.
 2. Das bestehende `data`-Volume bleibt unverändert eingebunden.
 3. `NOTIFICATIONS_ENABLED` für den ersten Start von 1.5.0 auf `false` lassen.
-4. Beim Start ergänzt `init_db()` automatisch Schema-Version 2:
+4. Beim Start ergänzt `init_db()` automatisch bis Schema-Version 3:
    `run_id`-Spalten, Unique-Indizes sowie `notification_state` und
-   `notification_log`. Vorhandene Ereignisse und Tankstände bleiben erhalten.
+   `notification_log`. Schema 3 ergänzt additive SMTP-Versuchsfelder und
+   `refill_window_observations`. Vorhandene Ereignisse und Tankstände bleiben
+   erhalten; alle SQLite-Verbindungen erzwingen danach Fremdschlüssel.
 5. Nach dem Start `GET /api/health` und `GET /api/state` prüfen. Optional per
-   SQLite `PRAGMA user_version;` kontrollieren; erwartet wird `2`.
+   SQLite `PRAGMA user_version;` kontrollieren; erwartet wird `3`.
 
 Alte Aufrufer ohne `run_id` funktionieren übergangsweise weiter. Sie sind bei
 einem HTTP-Retry aber nicht idempotent. Deshalb müssen alle produktiven
@@ -82,7 +84,8 @@ Nach der Migration einmal kontrollieren und speichern:
 - alle Nachfüllfenster und deren Mindestabstand
 - Nachfüllstrategie, Anteil oder Zielmenge
 - Pumpendurchsatz und bestehende Kalibrierungsfaktoren
-- Wetteralter, Reichweitenwarnung, Ruhezeit und Entwarnung
+- Wetteralter, Wettercache, Reichweitenwarnung, Ruhezeit, kurze Fehler-Retryzeit
+  und Entwarnung
 
 Die frühere Annahme eines festen 30-Liter-Vorratstanks gilt nicht mehr. Ein
 vorhandener Wert wird migriert und kann jetzt geändert werden.

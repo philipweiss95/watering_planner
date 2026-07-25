@@ -61,9 +61,9 @@ export function connectionRecommendation(plant, unassigned = []) {
   return { action: "rewire", title: "Ausgang wechseln", text: plant.connection_note || plant.suggested_tube_label || "" };
 }
 
-function plantPayload(plant, overrides = {}) {
+export function plantPayload(plant, overrides = {}) {
   return {
-    catalog_id: Number(plant.catalog_id),
+    catalog_id: String(plant.catalog_id ?? ""),
     custom_name: plant.custom_name || "",
     size: plant.size || "medium",
     pot_liters: Number(plant.pot_liters || 10),
@@ -79,12 +79,16 @@ function formField(labelText, control) {
   return element("label", {}, [element("span", { text: labelText }), control]);
 }
 
-function plantForm(state, plant = null) {
+export function plantForm(state, plant = null) {
   const form = element("form", { className: "field-grid" });
   const name = element("input", { name: "custom_name", required: true, maxLength: 80, value: plant?.custom_name || "" });
   const catalog = element("select", { name: "catalog_id", required: true });
   for (const item of state.catalog || []) {
-    catalog.append(element("option", { value: String(item.id), text: item.name, selected: Number(plant?.catalog_id) === Number(item.id) }));
+    catalog.append(element("option", {
+      value: String(item.id),
+      text: item.name,
+      selected: String(plant?.catalog_id ?? "") === String(item.id),
+    }));
   }
   const size = element("select", { name: "size" });
   [["small", "Klein"], ["medium", "Mittel"], ["large", "Groß"]].forEach(([value, label]) => {
@@ -104,17 +108,25 @@ function plantForm(state, plant = null) {
   return form;
 }
 
+export function plantPayloadFromFormData(data, plant = null) {
+  return plantPayload(plant || {}, {
+    catalog_id: String(data.get("catalog_id") ?? ""),
+    custom_name: String(data.get("custom_name") ?? ""),
+    size: String(data.get("size") ?? ""),
+    pot_liters: Number(data.get("pot_liters")),
+    pot_type: String(data.get("pot_type") ?? ""),
+  });
+}
+
+export async function restorePlant(snapshot, client = api) {
+  return client.post("/api/plants", plantPayload(snapshot));
+}
+
 async function editPlant(state, plant, onChanged) {
   const form = plantForm(state, plant);
   const data = await formDialog({ title: plant ? "Pflanze bearbeiten" : "Pflanze hinzufügen", form, submitText: "Speichern" });
   if (!data) return;
-  const payload = plantPayload(plant || {}, {
-    catalog_id: Number(data.get("catalog_id")),
-    custom_name: String(data.get("custom_name")),
-    size: String(data.get("size")),
-    pot_liters: Number(data.get("pot_liters")),
-    pot_type: String(data.get("pot_type")),
-  });
+  const payload = plantPayloadFromFormData(data, plant);
   if (plant) await api.put(`/api/plants/${plant.id}`, payload);
   else await api.post("/api/plants", payload);
   showToast(plant ? "Pflanze gespeichert" : "Pflanze hinzugefügt");
@@ -135,7 +147,7 @@ async function removePlant(state, plant, onChanged) {
   showToast("Pflanze gelöscht", {
     actionLabel: "Rückgängig",
     onAction: async () => {
-      await api.post("/api/plants", snapshot);
+      await restorePlant(snapshot);
       await onChanged();
       showToast("Pflanze wiederhergestellt");
     },
@@ -244,5 +256,3 @@ export function initPlants(getData, onChanged) {
     editPlant(state, null, onChanged).catch((error) => showToast(error.message, { error: true }));
   });
 }
-
-export { plantPayload };

@@ -12,9 +12,9 @@ export function buildDiagnosticRows(state, evaluation, diagnostics, updater) {
     {
       id: "weather",
       label: "Wetterdienst",
-      status: weather.last_successful_fetch_at ? "success" : "danger",
+      status: weather.last_error ? "danger" : weather.last_successful_fetch_at ? "success" : "danger",
       lastContact: weather.last_successful_fetch_at,
-      message: weather.last_successful_fetch_at ? "Open-Meteo erreichbar" : "Noch kein erfolgreicher Abruf",
+      message: weather.last_error || (weather.last_successful_fetch_at ? "Open-Meteo erreichbar" : "Noch kein erfolgreicher Abruf"),
       action: "reload-weather",
       actionLabel: "Neu laden",
     },
@@ -48,9 +48,13 @@ export function buildDiagnosticRows(state, evaluation, diagnostics, updater) {
     {
       id: "refill",
       label: "Nachfüllautomatik",
-      status: !refill.enabled ? "warning" : refill.blocked_reason ? "danger" : "success",
+      status: refill.severity === "critical"
+        ? "danger"
+        : refill.severity === "warning" || refill.status === "disabled"
+          ? "warning"
+          : "success",
       lastContact: refill.last_event?.ran_at,
-      message: !refill.enabled ? "Deaktiviert" : refill.blocked_reason || refill.summary || "Bereit",
+      message: refill.summary || refill.blocked_reason || "Bereit",
       action: "manual-refill",
       actionLabel: "Nachfüllen",
     },

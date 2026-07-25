@@ -53,6 +53,7 @@ export function buildForecastModel(depletion, capacities = {}) {
     days,
     firstUnservedAt: depletion?.first_unserved_watering_at || "",
     estimated: Boolean(depletion?.estimated_after_forecast),
+    estimatedStartTimestamp: parsed.find((event) => event.estimated_weather)?.timestamp || null,
   };
 }
 
@@ -100,11 +101,16 @@ export function renderForecast(state, evaluation) {
       );
     }
     if (model.estimated) {
+      const min = model.events[0].timestamp;
+      const max = Math.max(min + 1, model.events.at(-1).timestamp);
+      const estimatedStart = model.estimatedStartTimestamp || max;
+      const estimatedX = margins.left
+        + (estimatedStart - min) / (max - min) * (width - margins.left - margins.right);
       chart.append(svgElement("rect", {
-        x: width * 0.82, y: margins.top, width: width * 0.18 - margins.right,
+        x: estimatedX, y: margins.top, width: Math.max(0, width - margins.right - estimatedX),
         height: height - margins.top - margins.bottom, class: "estimated-area",
       }));
-      const estimatedLabel = svgElement("text", { x: width * 0.83, y: margins.top + 18, class: "axis-label" });
+      const estimatedLabel = svgElement("text", { x: estimatedX + 8, y: margins.top + 18, class: "axis-label" });
       estimatedLabel.textContent = "Extrapoliert";
       chart.append(estimatedLabel);
     }
