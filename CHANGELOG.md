@@ -2,6 +2,13 @@
 
 Alle stabilen Änderungen am Watering Planner werden in dieser Datei dokumentiert.
 
+## [1.4.3] - 2026-07-25
+
+- Updater auf die Übernahme, Sicherung und den Rollback des neuen modularen
+  Backend-Verzeichnisses vorbereitet.
+- Diese Übergangsversion enthält noch keine neue Bewässerungsfachlogik und
+  dient ausschließlich als sichere Brücke von 1.4.2 auf 1.5.0.
+
 ## [1.4.2] - 2026-07-24
 
 - Tankprognose auf den letzten vollständig versorgbaren Gießlauf umgestellt und dabei Wettervorhersage, aktuelle Zyklusplanung sowie den kalibrierten tatsächlichen Tankverbrauch je Lauf berücksichtigt.

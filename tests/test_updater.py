@@ -49,6 +49,26 @@ class UpdaterTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "invalid_release_archive_layout"):
                     updater.safe_zip_members(archive, "watering-planner-1.0.0")
 
+    def test_bridge_updater_requires_modular_backend_in_future_releases(self):
+        required = (
+            "server.py",
+            "public/index.html",
+            "updater/Dockerfile",
+            "docker-compose.yml",
+            "CHANGELOG.md",
+            "VERSION",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            archive_path = Path(directory) / "release.zip"
+            with zipfile.ZipFile(archive_path, "w") as archive:
+                for path in required:
+                    archive.writestr(f"watering-planner-1.5.0/{path}", "")
+            with zipfile.ZipFile(archive_path) as archive:
+                with self.assertRaisesRegex(ValueError, "release_archive_missing_watering_backend"):
+                    updater.safe_zip_members(archive, "watering-planner-1.5.0")
+
+        self.assertIn("watering_backend", updater.MANAGED_PATHS)
+
     def test_runtime_override_uses_real_host_mounts(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "runtime.yml"

@@ -33,9 +33,9 @@ SHARED_TOKEN_PATH = Path("/data/.updater-token")
 COMPOSE_FILE = PROJECT_DIR / "docker-compose.yml"
 ASSET_PREFIX = "watering-planner"
 MANAGED_PATHS = (
-    "server.py", "public", "updater", "home-assistant", "docs", "scripts", ".github",
+    "server.py", "watering_backend", "public", "updater", "home-assistant", "docs", "scripts", ".github",
     "Dockerfile", "docker-compose.yml", ".dockerignore", ".gitignore", ".env.synology.example",
-    "README.md", "CHANGELOG.md", "VERSION",
+    "README.md", "CHANGELOG.md", "VERSION", "package.json",
 )
 INSTALL_RUNNING = threading.Event()
 
@@ -412,7 +412,15 @@ def safe_zip_members(archive: zipfile.ZipFile, expected_root: str) -> list[zipfi
         if member.filename.startswith("/") or ".." in path.parts or not member.filename.startswith(prefix):
             raise ValueError("invalid_release_archive_layout")
     names = {member.filename.rstrip("/") for member in members}
-    for required in ("server.py", "public/index.html", "updater/Dockerfile", "docker-compose.yml", "CHANGELOG.md", "VERSION"):
+    for required in (
+        "server.py",
+        "watering_backend/__init__.py",
+        "public/index.html",
+        "updater/Dockerfile",
+        "docker-compose.yml",
+        "CHANGELOG.md",
+        "VERSION",
+    ):
         if f"{expected_root}/{required}" not in names:
             raise ValueError(f"release_archive_missing_{required}")
     return members

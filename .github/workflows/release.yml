@@ -20,6 +20,8 @@ jobs:
         run: test "${GITHUB_REF_NAME#v}" = "$(cat VERSION)"
       - name: Test
         run: python -m unittest discover -s tests -v
+      - name: Build container images
+        run: docker compose build
       - name: Package stable update
         run: python scripts/package_release.py
       - name: Build release changelog
