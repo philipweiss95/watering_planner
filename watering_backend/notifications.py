@@ -128,6 +128,7 @@ class NotificationService:
         *,
         cooldown_minutes: int,
         send_resolved: bool,
+        retry_minutes: int = 5,
     ) -> dict:
         if severity not in SEVERITIES:
             raise ValueError("Unbekannter Schweregrad")
@@ -143,32 +144,49 @@ class NotificationService:
                 if row and row["last_notified_at"]
                 else None
             )
+            last_attempt = (
+                datetime.fromisoformat(str(row["last_attempt_at"]))
+                if row and row["last_attempt_at"]
+                else None
+            )
+            consecutive_failures = int(row["consecutive_failures"] or 0) if row else 0
+            previous_error = str(row["last_error"] or "") if row else ""
+            retry_due = (
+                consecutive_failures > 0
+                and (
+                    last_attempt is None
+                    or now - last_attempt.astimezone(timezone.utc)
+                    >= timedelta(minutes=max(0, retry_minutes))
+                )
+            )
             should_send = active and (
                 not was_active
                 or last_notified is None
                 or now - last_notified.astimezone(timezone.utc) >= timedelta(minutes=max(0, cooldown_minutes))
-            )
+            ) and (consecutive_failures == 0 or retry_due)
             event_state = "active"
             send_subject = subject
             send_message_text = message
             if not active and was_active and send_resolved:
-                should_send = True
+                should_send = consecutive_failures == 0 or retry_due
                 event_state = "resolved"
                 send_subject = f"Entwarnung: {subject}"
                 send_message_text = f"Der zuvor gemeldete Zustand ist behoben.\n\n{message}"
             sent_at = None
             attempted_at = None
             status = "deduplicated" if active else "inactive"
-            error = ""
+            error = previous_error if consecutive_failures else ""
             if should_send:
                 attempted_at = now.isoformat()
                 try:
                     send_email(SMTPConfig.from_env(), send_subject, send_message_text)
                     sent_at = now.isoformat()
                     status = "sent"
+                    consecutive_failures = 0
                 except Exception as exc:
                     status = "failed"
                     error = str(exc)
+                    consecutive_failures += 1
                 self._log(
                     alert_key,
                     severity,
@@ -181,11 +199,21 @@ class NotificationService:
                     conn=conn,
                     sent_at=sent_at,
                 )
+            persisted_active = bool(
+                active
+                or (
+                    event_state == "resolved"
+                    and (status == "failed" or consecutive_failures > 0)
+                )
+            )
             conn.execute(
                 """
                 INSERT INTO notification_state
-                    (alert_key, severity, active, last_changed_at, last_notified_at, message)
-                VALUES (?, ?, ?, ?, ?, ?)
+                    (
+                        alert_key, severity, active, last_changed_at, last_notified_at,
+                        last_attempt_at, last_error, consecutive_failures, message
+                    )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(alert_key) DO UPDATE SET
                     severity = excluded.severity,
                     active = excluded.active,
@@ -194,14 +222,20 @@ class NotificationService:
                         ELSE notification_state.last_changed_at
                     END,
                     last_notified_at = COALESCE(excluded.last_notified_at, notification_state.last_notified_at),
+                    last_attempt_at = COALESCE(excluded.last_attempt_at, notification_state.last_attempt_at),
+                    last_error = excluded.last_error,
+                    consecutive_failures = excluded.consecutive_failures,
                     message = excluded.message
                 """,
                 (
                     alert_key,
                     severity,
-                    int(active),
+                    int(persisted_active),
                     now.isoformat(),
+                    sent_at,
                     attempted_at,
+                    error,
+                    consecutive_failures,
                     message,
                 ),
             )

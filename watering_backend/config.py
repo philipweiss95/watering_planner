@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime, timedelta
+import math
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -20,8 +21,10 @@ DEFAULT_PLANNER_CONFIG: dict[str, Any] = {
     "refill_fraction": 0.5,
     "refill_target_ml": 0,
     "weather_stale_after_minutes": 180,
+    "weather_cache_minutes": 20,
     "missed_watering_tolerance_minutes": 30,
     "notification_cooldown_minutes": 360,
+    "notification_retry_minutes": 5,
     "notification_resolved_enabled": True,
     "supply_warning_days": 3,
     "notification_worker_interval_seconds": 60,
@@ -53,7 +56,7 @@ def _bounded_float(value: object, field: str, minimum: float, maximum: float) ->
         result = float(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{field} muss eine Zahl sein") from exc
-    if not minimum <= result <= maximum:
+    if not math.isfinite(result) or not minimum <= result <= maximum:
         raise ValueError(f"{field} muss zwischen {minimum:g} und {maximum:g} liegen")
     return result
 
@@ -123,6 +126,12 @@ def validate_planner_config(value: object) -> dict[str, Any]:
         1,
         10080,
     )
+    result["weather_cache_minutes"] = _bounded_int(
+        result["weather_cache_minutes"],
+        "weather_cache_minutes",
+        1,
+        1440,
+    )
     result["missed_watering_tolerance_minutes"] = _bounded_int(
         result["missed_watering_tolerance_minutes"],
         "missed_watering_tolerance_minutes",
@@ -134,6 +143,12 @@ def validate_planner_config(value: object) -> dict[str, Any]:
         "notification_cooldown_minutes",
         0,
         43200,
+    )
+    result["notification_retry_minutes"] = _bounded_int(
+        result["notification_retry_minutes"],
+        "notification_retry_minutes",
+        1,
+        1440,
     )
     result["notification_resolved_enabled"] = bool(result["notification_resolved_enabled"])
     result["supply_warning_days"] = _bounded_int(result["supply_warning_days"], "supply_warning_days", 1, 365)

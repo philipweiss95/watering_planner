@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
@@ -56,6 +56,24 @@ def migrate(conn: sqlite3.Connection) -> None:
             status TEXT NOT NULL,
             error TEXT NOT NULL DEFAULT ''
         );
+        """
+    )
+    _add_column(conn, "notification_state", "last_attempt_at", "TEXT")
+    _add_column(conn, "notification_state", "last_error", "TEXT NOT NULL DEFAULT ''")
+    _add_column(conn, "notification_state", "consecutive_failures", "INTEGER NOT NULL DEFAULT 0")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS refill_window_observations (
+            target_date TEXT NOT NULL,
+            window_label TEXT NOT NULL,
+            window_start TEXT NOT NULL,
+            window_end TEXT NOT NULL,
+            need_detected INTEGER NOT NULL DEFAULT 0,
+            eligible INTEGER NOT NULL DEFAULT 0,
+            blocking_reason TEXT NOT NULL DEFAULT '',
+            observed_at TEXT NOT NULL,
+            PRIMARY KEY (target_date, window_label)
+        )
         """
     )
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")

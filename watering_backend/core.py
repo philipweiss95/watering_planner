@@ -6,6 +6,7 @@ import os
 import re
 import sqlite3
 import ssl
+import threading
 import uuid
 from copy import deepcopy
 from datetime import date, datetime, time, timedelta, timezone
@@ -37,6 +38,15 @@ from watering_backend.weather import (
     manual_simulation,
     normalize_daily_forecast,
 )
+from watering_backend.validation import (
+    finite_integer,
+    finite_number,
+    normalize_hose_numbers as validated_hose_numbers,
+    validate_outlets,
+    validate_plant_payload,
+    validate_position_payload,
+    validate_walls,
+)
 
 
 ROOT = Path(__file__).parent.parent
@@ -47,6 +57,7 @@ VERSION_PATH = ROOT / "VERSION"
 APP_VERSION = VERSION_PATH.read_text(encoding="utf-8").strip() if VERSION_PATH.exists() else "0.0.0"
 UPDATER_URL = os.environ.get("UPDATER_URL", "http://updater:3188").rstrip("/")
 UPDATER_TOKEN_FILE = Path(os.environ.get("UPDATER_TOKEN_FILE", DATA_DIR / ".updater-token"))
+_weather_fetch_lock = threading.Lock()
 
 
 PLANT_CATALOG = [
@@ -213,6 +224,7 @@ REFILL_COOLDOWN_MINUTES_PER_LITER = 30
 REFILL_MIN_COOLDOWN_MINUTES = 15
 REFILL_MAX_COOLDOWN_MINUTES = 12 * 60
 WEATHER_FORECAST_DAYS = 16
+TANK_FORECAST_DAYS = 45
 _notification_worker: NotificationWorker | None = None
 
 
@@ -733,11 +745,7 @@ def seed_plants(conn: sqlite3.Connection) -> None:
 
 
 def parse_hose_numbers(value: object) -> list[str]:
-    hose_numbers = []
-    for hose_number in re.findall(r"\d+", str(value or "")):
-        if hose_number not in hose_numbers:
-            hose_numbers.append(hose_number)
-    return hose_numbers
+    return validated_hose_numbers(value)
 
 
 def normalize_hose_numbers(value: object) -> str:
@@ -1073,19 +1081,32 @@ def calibrate_refill_pump(measured_level_percent: int | float) -> dict:
 def weather_diagnostics() -> dict:
     config = planner_config()
     fetched_at = get_setting("last_successful_weather_fetch_at", "")
+    attempted_at = get_setting("last_weather_fetch_attempt_at", "")
+    last_error = get_setting("last_weather_fetch_error", "")
     stale = True
+    age_minutes = None
     if fetched_at:
         try:
             fetched = datetime.fromisoformat(fetched_at)
             if fetched.tzinfo is None:
                 fetched = fetched.replace(tzinfo=timezone.utc)
-            stale = datetime.now(timezone.utc) - fetched.astimezone(timezone.utc) > timedelta(
-                minutes=int(config["weather_stale_after_minutes"])
+            age_minutes = max(
+                0,
+                round(
+                    (datetime.now(timezone.utc) - fetched.astimezone(timezone.utc)).total_seconds()
+                    / 60,
+                    1,
+                ),
             )
+            stale = age_minutes > int(config["weather_stale_after_minutes"])
         except ValueError:
             stale = True
     return {
         "last_successful_fetch_at": fetched_at,
+        "last_attempt_at": attempted_at,
+        "last_error": last_error,
+        "data_age_minutes": age_minutes,
+        "cache_minutes": int(config["weather_cache_minutes"]),
         "stale_after_minutes": int(config["weather_stale_after_minutes"]),
         "stale": stale,
     }
@@ -1641,10 +1662,84 @@ def estimate_sun_hours(
     }
 
 
-def fetch_weather(balcony: dict) -> dict:
+def _weather_cache_key(latitude: float, longitude: float, timezone_name: str) -> dict:
+    return {
+        "latitude": round(latitude, 6),
+        "longitude": round(longitude, 6),
+        "timezone": timezone_name,
+    }
+
+
+def _read_weather_cache(cache_key: dict) -> dict | None:
+    raw = get_setting("weather_cache", "")
+    if not raw:
+        return None
+    try:
+        cached = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(cached, dict) or cached.get("cache_key") != cache_key:
+        return None
+    result = cached.get("weather")
+    return deepcopy(result) if isinstance(result, dict) else None
+
+
+def _weather_age_minutes(weather: dict) -> float | None:
+    try:
+        fetched = datetime.fromisoformat(str(weather.get("fetched_at", "")))
+        if fetched.tzinfo is None:
+            fetched = fetched.replace(tzinfo=timezone.utc)
+        return max(
+            0,
+            (datetime.now(timezone.utc) - fetched.astimezone(timezone.utc)).total_seconds() / 60,
+        )
+    except (TypeError, ValueError):
+        return None
+
+
+def _cached_weather(cache_key: dict, max_age_minutes: int) -> dict | None:
+    cached = _read_weather_cache(cache_key)
+    age = _weather_age_minutes(cached or {})
+    if cached is None or age is None or age > max_age_minutes:
+        return None
+    cached["cache_hit"] = True
+    cached["cache_fallback"] = False
+    cached["data_age_minutes"] = round(age, 1)
+    return cached
+
+
+def fetch_weather(balcony: dict, force: bool = False) -> dict:
     latitude = float(balcony.get("latitude", DEFAULT_BALCONY["latitude"]))
     longitude = float(balcony.get("longitude", DEFAULT_BALCONY["longitude"]))
     timezone_name = balcony.get("timezone_name") or "Europe/Berlin"
+    config = planner_config()
+    cache_key = _weather_cache_key(latitude, longitude, str(timezone_name))
+    cache_minutes = int(config["weather_cache_minutes"])
+    if not force:
+        cached = _cached_weather(cache_key, cache_minutes)
+        if cached:
+            return cached
+    with _weather_fetch_lock:
+        if not force:
+            cached = _cached_weather(cache_key, cache_minutes)
+            if cached:
+                return cached
+        return _fetch_weather_uncached(
+            latitude,
+            longitude,
+            str(timezone_name),
+            cache_key,
+            int(config["weather_stale_after_minutes"]),
+        )
+
+
+def _fetch_weather_uncached(
+    latitude: float,
+    longitude: float,
+    timezone_name: str,
+    cache_key: dict,
+    stale_after_minutes: int,
+) -> dict:
     params = {
         "latitude": latitude,
         "longitude": longitude,
@@ -1655,23 +1750,31 @@ def fetch_weather(balcony: dict) -> dict:
         "forecast_days": WEATHER_FORECAST_DAYS,
     }
     url = "https://api.open-meteo.com/v1/forecast?" + urlencode(params)
-    tls_verified = True
+    attempted_at = now_iso()
+    set_setting("last_weather_fetch_attempt_at", attempted_at)
     try:
         with urlopen(url, timeout=8) as response:
             payload = json.loads(response.read().decode("utf-8"))
-    except ssl.SSLCertVerificationError:
-        tls_verified = False
-        with urlopen(url, timeout=8, context=ssl._create_unverified_context()) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except URLError as exc:
-        if isinstance(exc.reason, ssl.SSLCertVerificationError):
-            tls_verified = False
-            with urlopen(url, timeout=8, context=ssl._create_unverified_context()) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-        else:
-            raise ValueError(f"Wetterdaten konnten nicht abgerufen werden: {exc}") from exc
     except (OSError, URLError, TimeoutError, json.JSONDecodeError) as exc:
-        raise ValueError(f"Wetterdaten konnten nicht abgerufen werden: {exc}") from exc
+        certificate_error = isinstance(exc, ssl.SSLCertVerificationError) or (
+            isinstance(exc, URLError) and isinstance(exc.reason, ssl.SSLCertVerificationError)
+        )
+        error = (
+            "TLS-Zertifikat des Wetterdienstes konnte nicht bestaetigt werden."
+            if certificate_error
+            else "Wetterdienst ist voruebergehend nicht erreichbar."
+        )
+        set_setting("last_weather_fetch_error", error)
+        fallback_limit = max(stale_after_minutes, 24 * 60)
+        cached = _cached_weather(cache_key, fallback_limit)
+        if cached:
+            cached["cache_fallback"] = True
+            cached["weather_error"] = error
+            cached["stale"] = bool(
+                float(cached.get("data_age_minutes", 0)) > stale_after_minutes
+            )
+            return cached
+        raise ValueError(error) from exc
 
     current = payload.get("current", {})
     hourly = payload.get("hourly", {})
@@ -1717,10 +1820,19 @@ def fetch_weather(balcony: dict) -> dict:
         },
         "planning_day": planning_day,
         "forecast": forecast,
-        "tls_verified": tls_verified,
+        "tls_verified": True,
         "fetched_at": fetched_at,
+        "cache_hit": False,
+        "cache_fallback": False,
+        "data_age_minutes": 0,
+        "stale": False,
     }
     set_setting("last_successful_weather_fetch_at", fetched_at)
+    set_setting("last_weather_fetch_error", "")
+    set_setting(
+        "weather_cache",
+        json.dumps({"cache_key": cache_key, "weather": result}, ensure_ascii=False),
+    )
     return result
 
 
@@ -2686,13 +2798,17 @@ def refill_status(balcony: dict) -> dict:
         (
             window_datetime(now.date(), item["start"], now.tzinfo),
             window_datetime(now.date(), item["end"], now.tzinfo),
+            item["start"],
         )
         for item in config["refill_windows"]
     ]
     refill_windows = [item[0] for item in refill_window_pairs]
-    elapsed_windows = [item for item in refill_windows if item <= now]
+    elapsed_windows = [
+        start for start, end, _label in refill_window_pairs
+        if end < now
+    ]
     eligible_windows = [
-        start for start, end in refill_window_pairs
+        start for start, end, _label in refill_window_pairs
         if start <= now <= end
     ]
     pending_windows = [
@@ -2702,11 +2818,6 @@ def refill_status(balcony: dict) -> dict:
     completed_windows = [
         item for item in elapsed_windows
         if refill_event_for_target_date(target_date, item.strftime("%H:%M"))
-    ]
-    missed_windows = [
-        item for item in elapsed_windows
-        if item not in eligible_windows
-        and not refill_event_for_target_date(target_date, item.strftime("%H:%M"))
     ]
     active_window = pending_windows[0] if pending_windows else None
     active_window_label = active_window.strftime("%H:%M") if active_window else ""
@@ -2729,31 +2840,120 @@ def refill_status(balcony: dict) -> dict:
     need_exists = bool(transferable_ml > 0 and pump_ml_per_min > 0)
     run_now = bool(enabled and schedule_due and need_exists and not cooldown_active)
     catch_up = False
+    eligible_now = bool(
+        enabled
+        and main_missing_ml > 0
+        and refill_current > 0
+        and pump_ml_per_min > 0
+        and not cooldown_active
+    )
+    if active_window:
+        active_pair = next(
+            (item for item in refill_window_pairs if item[0] == active_window),
+            None,
+        )
+        if active_pair:
+            blocking_reason = (
+                "disabled" if not enabled
+                else "main_tank_full" if main_missing_ml <= 0
+                else "refill_tank_empty" if refill_current <= 0
+                else "pump_flow_missing" if pump_ml_per_min <= 0
+                else "cooldown" if cooldown_active
+                else ""
+            )
+            with connect() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO refill_window_observations
+                        (
+                            target_date, window_label, window_start, window_end,
+                            need_detected, eligible, blocking_reason, observed_at
+                        )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(target_date, window_label) DO UPDATE SET
+                        need_detected = MAX(refill_window_observations.need_detected, excluded.need_detected),
+                        eligible = MAX(refill_window_observations.eligible, excluded.eligible),
+                        blocking_reason = excluded.blocking_reason,
+                        observed_at = excluded.observed_at
+                    """,
+                    (
+                        target_date.isoformat(),
+                        active_pair[2],
+                        active_pair[0].isoformat(),
+                        active_pair[1].isoformat(),
+                        int(main_missing_ml > 0),
+                        int(eligible_now),
+                        blocking_reason,
+                        now.isoformat(),
+                    ),
+                )
+    with connect() as conn:
+        observed = {
+            str(row["window_label"]): dict(row)
+            for row in conn.execute(
+                "SELECT * FROM refill_window_observations WHERE target_date = ?",
+                (target_date.isoformat(),),
+            )
+        }
+    missed_windows = [
+        start
+        for start, end, label in refill_window_pairs
+        if end < now
+        and not refill_event_for_target_date(target_date, label)
+        and bool(observed.get(label, {}).get("need_detected"))
+        and bool(observed.get(label, {}).get("eligible"))
+    ]
 
     if not enabled:
+        status, severity, blocked, blocked_reason = "disabled", "info", False, "disabled"
         summary = "Automatisches Nachfüllen ist deaktiviert."
     elif pump_ml_per_min <= 0:
+        status, severity, blocked, blocked_reason = (
+            "pump_flow_missing", "critical", main_missing_ml > 0, "pump_flow_missing"
+        )
         summary = "Durchsatz der Nachfüllpumpe fehlt."
-    elif main_missing_ml <= 0:
-        summary = "Haupttank ist voll."
     elif refill_current <= 0:
+        status, severity, blocked, blocked_reason = (
+            "refill_tank_empty", "critical", main_missing_ml > 0, "refill_tank_empty"
+        )
         summary = "Vorratstank ist leer."
+    elif main_missing_ml <= 0:
+        status, severity, blocked, blocked_reason = "main_tank_full", "info", False, ""
+        summary = "Haupttank ist voll."
     elif cooldown_active:
+        status, severity, blocked, blocked_reason = (
+            "cooldown", "warning", schedule_due, "cooldown" if schedule_due else ""
+        )
         summary = f"Nachfüllpause aktiv. Frühester nächster Lauf um {cooldown_until.strftime('%H:%M')}."
     elif transferable_ml < target_transfer_ml:
+        status = "ready" if run_now else "window_pending"
+        severity, blocked, blocked_reason = "warning", False, ""
         summary = f"Nachfüllung auf {format_liters_for_text(transferable_ml)} begrenzt."
     elif run_now:
+        status, severity, blocked, blocked_reason = "ready", "info", False, ""
         summary = "Nachfüllbedarf besteht, Nachfüllpumpe darf laufen."
     elif missed_windows:
-        summary = f"Nachtfenster für heute verpasst. Nächste Nachfüllung um {next_window.strftime('%H:%M')}."
+        status, severity, blocked, blocked_reason = (
+            "window_missed", "critical", True, "window_missed"
+        )
+        summary = f"Nachfüllfenster verpasst. Nächste Nachfüllung um {next_window.strftime('%H:%M')}."
+    elif completed_windows:
+        status, severity, blocked, blocked_reason = "completed", "info", False, ""
+        summary = "Nachfüllung im heutigen Zeitfenster abgeschlossen."
     elif next_window and now < next_window:
+        status, severity, blocked, blocked_reason = "window_pending", "info", False, ""
         summary = f"Nächste Nachfüllung um {next_window.strftime('%H:%M')}."
     else:
+        status, severity, blocked, blocked_reason = "window_pending", "info", False, ""
         summary = "Nachfüllung wartet auf den nächsten geplanten Zeitpunkt."
 
     refill_percent = round(refill_current / refill_capacity * 100)
     return {
         "run_now": run_now,
+        "status": status,
+        "severity": severity,
+        "blocked": blocked,
+        "blocked_reason": blocked_reason,
         "enabled": enabled,
         "target_date": target_date.isoformat(),
         "scheduled_time": (active_window or next_window).strftime("%H:%M") if (active_window or next_window) else "",
@@ -2775,6 +2975,7 @@ def refill_status(balcony: dict) -> dict:
         "limited_by_refill_tank": bool(target_transfer_ml > 0 and transferable_ml < min(target_transfer_ml, main_missing_ml)),
         "already_done": bool(completed_windows),
         "missed_today": bool(missed_windows),
+        "missed_windows": [item.strftime("%H:%M") for item in missed_windows],
         "cooldown_active": cooldown_active,
         "cooldown_minutes": int(config["refill_min_interval_minutes"]),
         "cooldown_until": cooldown_until.isoformat() if cooldown_until else "",
@@ -2810,16 +3011,10 @@ def depletion_forecast(result: dict, weather: dict | None = None) -> dict:
     refill = result.get("refill", {})
     refill_tank = refill.get("refill_tank", {})
     refill_ml = max(0, int(refill_tank.get("current_ml", balcony.get("refill_tank_current_ml", 0))))
-    refill_enabled = refill.get("enabled")
-    if refill_enabled is None:
-        refill_enabled = refill_automation_enabled()
-    refill_usable = bool(
-        refill_enabled
-        and int(refill.get("pump_ml_per_min", balcony.get("refill_pump_ml_per_min", 0))) > 0
-    )
-    usable_refill_ml = refill_ml if refill_usable else 0
-    total_ml = main_ml + usable_refill_ml
-    forecast_days = normalized_forecast_days(weather or result.get("weather") or result.get("inputs", {}), now.date())
+    weather_payload = weather or result.get("weather") or result.get("inputs", {})
+    raw_forecast = weather_payload.get("forecast") if isinstance(weather_payload, dict) else None
+    safe_forecast_days = len(raw_forecast) if isinstance(raw_forecast, list) else 0
+    forecast_days = normalized_forecast_days(weather_payload, now.date())
     projected_days = projected_consumption_days(
         state,
         forecast_days,
@@ -2827,40 +3022,14 @@ def depletion_forecast(result: dict, weather: dict | None = None) -> dict:
         consumed_per_cycle,
     )
     cycle_events = projected_cycle_events(projected_days, result, now, timezone_name)
-    main_remaining = main_ml
-    total_remaining = total_ml
-    main_empty_at = ""
-    first_unserved_at = ""
-    last_watering_at = ""
-    estimated_after_forecast = False
     next_cycle_at = cycle_events[0]["at"].isoformat() if cycle_events else ""
 
     if consumed_per_cycle <= 0:
         summary = "Noch kein Wasserverbrauch pro Zyklus berechenbar."
+    elif not cycle_events:
+        summary = "Für die Wetterprognose sind keine Gießläufe geplant."
     else:
-        summary = "Letzten vollständig versorgbaren Gießlauf anhand der Wetterprognose berechnet."
-        for event in cycle_events:
-            amount = int(event["consumed_ml"])
-            if not main_empty_at and main_remaining < amount:
-                main_empty_at = event["at"].isoformat()
-            if total_remaining < amount:
-                first_unserved_at = event["at"].isoformat()
-                break
-            main_remaining = max(0, main_remaining - amount)
-            total_remaining = max(0, total_remaining - amount)
-            last_watering_at = event["at"].isoformat()
-        if not first_unserved_at:
-            estimated_last, first_unserved_at = estimate_depletion_after_forecast(
-                projected_days,
-                total_remaining,
-                consumed_per_cycle,
-                now,
-            )
-            if estimated_last:
-                last_watering_at = estimated_last
-            estimated_after_forecast = bool(first_unserved_at)
-        if not cycle_events and not first_unserved_at:
-            summary = "Für die Wetterprognose sind keine Gießläufe geplant."
+        summary = "Reichweite aus chronologischen Gieß- und Nachfüllereignissen berechnet."
 
     simulation = chronological_depletion_simulation(
         result=result,
@@ -2869,31 +3038,48 @@ def depletion_forecast(result: dict, weather: dict | None = None) -> dict:
         cycle_events=cycle_events,
         now=now,
     )
-    if simulation["first_unserved_watering_at"]:
-        first_unserved_at = simulation["first_unserved_watering_at"]
-    if simulation["first_unserved_watering_at"] and simulation["last_supported_watering_at"]:
-        last_watering_at = simulation["last_supported_watering_at"]
+    first_unserved_at = simulation["first_unserved_watering_at"]
+    last_supported_at = simulation["last_supported_watering_at"]
+    transferred_refill_ml = sum(
+        int(event.get("transferred_ml", 0))
+        for event in simulation["forecast_events"]
+        if event.get("event_type") == "refill"
+    )
+    first_unserved_event = next(
+        (
+            event
+            for event in simulation["forecast_events"]
+            if event.get("event_type") == "watering" and event.get("status") == "unserved"
+        ),
+        None,
+    )
+    estimated_after_forecast = any(day.get("estimated") for day in projected_days)
     return {
-        "main_empty_at": simulation["first_unserved_watering_at"],
-        # Kept for API compatibility: this is the first cycle that the combined
-        # tank stock can no longer supply completely.
-        "all_empty_at": first_unserved_at,
+        # Compatibility aliases derive from this same simulation. "Last" means
+        # the last continuously supported watering before the first failure.
+        "main_empty_at": simulation["main_empty_at"],
+        "all_empty_at": simulation["all_empty_at"],
         "first_unserved_at": first_unserved_at,
-        "last_watering_at": last_watering_at,
-        "last_supported_watering_at": last_watering_at,
+        "last_watering_at": last_supported_at,
+        "last_supported_watering_at": last_supported_at,
         "first_unserved_watering_at": first_unserved_at,
         "forecast_events": simulation["forecast_events"],
         "main_tank_after_forecast_ml": simulation["main_tank_after_forecast_ml"],
         "refill_tank_after_forecast_ml": simulation["refill_tank_after_forecast_ml"],
         "next_cycle_at": next_cycle_at,
-        "total_available_ml": total_ml,
+        "total_available_ml": main_ml + transferred_refill_ml,
         "main_available_ml": main_ml,
         "refill_available_ml": refill_ml,
-        "usable_refill_ml": usable_refill_ml,
+        "usable_refill_ml": transferred_refill_ml,
         "consumption_per_cycle_ml": consumed_per_cycle,
         "estimated_after_forecast": estimated_after_forecast,
+        "first_unserved_is_estimated": bool(
+            first_unserved_event and first_unserved_event.get("estimated_weather")
+        ),
         "projected_days": projected_days,
-        "forecast_days": len(forecast_days),
+        "forecast_days": min(len(forecast_days), WEATHER_FORECAST_DAYS),
+        "forecast_horizon_days": len(forecast_days),
+        "safe_weather_forecast_days": min(safe_forecast_days, len(forecast_days)),
         "summary": summary,
     }
 
@@ -2960,7 +3146,7 @@ def normalized_forecast_days(weather: dict, today: date) -> list[dict]:
     forecast = weather.get("forecast") if isinstance(weather, dict) else None
     if isinstance(forecast, list) and forecast:
         items = [dict(item) for item in forecast if isinstance(item, dict)]
-        while items and len(items) < WEATHER_FORECAST_DAYS:
+        while items and len(items) < TANK_FORECAST_DAYS:
             previous = dict(items[-1])
             try:
                 previous_date = date.fromisoformat(str(previous["date"]))
@@ -2969,7 +3155,7 @@ def normalized_forecast_days(weather: dict, today: date) -> list[dict]:
             previous["date"] = (previous_date + timedelta(days=1)).isoformat()
             previous["estimated_from_last_forecast_day"] = True
             items.append(previous)
-        return items[:WEATHER_FORECAST_DAYS]
+        return items[:TANK_FORECAST_DAYS]
     return [
         {
             "date": (today + timedelta(days=index)).isoformat(),
@@ -2979,7 +3165,7 @@ def normalized_forecast_days(weather: dict, today: date) -> list[dict]:
             "sunshine_hours": forecast_number(weather, "sunshine_hours", 6),
             "et0_mm": forecast_number(weather, "et0_mm", 0),
         }
-        for index in range(WEATHER_FORECAST_DAYS)
+        for index in range(TANK_FORECAST_DAYS)
     ]
 
 
@@ -3040,6 +3226,7 @@ def projected_consumption_days(
                 "consumed_ml": cycles * tank_consumption_per_cycle,
                 "consumed_per_cycle_ml": tank_consumption_per_cycle,
                 "need_ml": round(calculated["total_need_ml"]),
+                "estimated": bool(weather.get("estimated_from_last_forecast_day", False)),
                 "weather": {
                     "temperature_c": float(weather.get("temperature_c", 20)),
                     "rain_mm": float(weather.get("rain_mm", 0)),
@@ -3070,6 +3257,7 @@ def projected_cycle_events(projected_days: list[dict], result: dict, now: dateti
                         "delivered_ml": int(day["delivered_per_cycle_ml"]),
                         "consumed_ml": consumed_ml,
                         "date": day["date"],
+                        "estimated": bool(day.get("estimated", False)),
                     }
                 )
             windows = [window for window in remaining_windows if window > now]
@@ -3080,37 +3268,10 @@ def projected_cycle_events(projected_days: list[dict], result: dict, now: dateti
                     "delivered_ml": int(day["delivered_per_cycle_ml"]),
                     "consumed_ml": consumed_ml,
                     "date": day["date"],
+                    "estimated": bool(day.get("estimated", False)),
                 }
             )
     return sorted(events, key=lambda item: item["at"])
-
-
-def estimate_depletion_after_forecast(
-    projected_days: list[dict],
-    remaining_ml: int,
-    consumed_per_cycle: int,
-    now: datetime,
-) -> tuple[str, str]:
-    watering_day_cycles = [
-        int(day["cycles"])
-        for day in projected_days
-        if int(day.get("cycles", 0)) > 0
-    ]
-    if not watering_day_cycles or consumed_per_cycle <= 0:
-        return "", ""
-    average_cycles = max(1, round(sum(watering_day_cycles) / len(watering_day_cycles)))
-    last_date = date.fromisoformat(projected_days[-1]["date"]) if projected_days else now.date()
-    supported_cycles = max(0, int(remaining_ml)) // consumed_per_cycle
-
-    def extrapolated_cycle_at(ordinal: int) -> datetime:
-        day_offset, cycle_index = divmod(max(1, ordinal) - 1, average_cycles)
-        estimated_date = last_date + timedelta(days=day_offset + 1)
-        windows = distributed_automation_windows(estimated_date, average_cycles, now.tzinfo)
-        return windows[cycle_index]
-
-    last_watering_at = extrapolated_cycle_at(supported_cycles).isoformat() if supported_cycles else ""
-    first_unserved_at = extrapolated_cycle_at(supported_cycles + 1).isoformat()
-    return last_watering_at, first_unserved_at
 
 
 def home_assistant_webhook_url() -> str:
@@ -3488,6 +3649,7 @@ def notification_condition(
         "subject": subject,
         "message": message,
         "cooldown_minutes": int(config["notification_cooldown_minutes"]),
+        "retry_minutes": int(config["notification_retry_minutes"]),
         "send_resolved": bool(config["notification_resolved_enabled"]),
     }
 
@@ -3537,16 +3699,7 @@ def notification_conditions() -> list[dict]:
         ),
     ]
     refill = refill_status(balcony)
-    refill_blocked = bool(
-        refill.get("schedule_due")
-        and refill.get("main_missing_ml", 0) > 0
-        and not refill.get("run_now")
-        and (
-            refill.get("blocked_by_empty_refill_tank")
-            or int(refill.get("pump_ml_per_min", 0)) <= 0
-            or refill.get("cooldown_active")
-        )
-    )
+    refill_blocked = bool(refill.get("blocked"))
     conditions.append(
         notification_condition(
             "automatic_refill_blocked",
@@ -3556,6 +3709,36 @@ def notification_conditions() -> list[dict]:
             str(refill.get("summary", "Automatische Nachfuellung konnte nicht laufen.")),
         )
     )
+    active_missed_keys: set[str] = set()
+    for window_label in refill.get("missed_windows", []):
+        alert_key = f"refill_run_missed:{refill['target_date']}:{window_label}"
+        active_missed_keys.add(alert_key)
+        conditions.append(
+            notification_condition(
+                alert_key,
+                True,
+                "critical",
+                "Nachfuelllauf verpasst",
+                f"Im Nachfuellfenster {window_label} bestand Bedarf, aber es wurde kein Lauf verbucht.",
+            )
+        )
+    with connect() as conn:
+        previous_missed_keys = {
+            str(row["alert_key"])
+            for row in conn.execute(
+                "SELECT alert_key FROM notification_state WHERE alert_key LIKE 'refill_run_missed:%'"
+            )
+        }
+    for alert_key in sorted(previous_missed_keys - active_missed_keys):
+        conditions.append(
+            notification_condition(
+                alert_key,
+                False,
+                "critical",
+                "Nachfuelllauf verpasst",
+                "Das betroffene Nachfuellfenster ist nicht mehr offen.",
+            )
+        )
     try:
         weather = fetch_weather(balcony)
         evaluation = evaluate_weather(weather)
@@ -3596,7 +3779,7 @@ def notification_conditions() -> list[dict]:
     conditions.append(
         notification_condition(
             "weather_stale",
-            bool(weather_status["stale"]),
+            bool(weather_status["stale"] or weather_status["last_error"]),
             "warning",
             "Wetterdaten fehlen oder sind veraltet",
             (
@@ -3703,7 +3886,14 @@ class AppHandler(SimpleHTTPRequestHandler):
             return
         if parsed.path == "/api/weather":
             try:
-                send_json(self, fetch_weather(get_state()["balcony"]))
+                params = parse_qs(parsed.query)
+                send_json(
+                    self,
+                    fetch_weather(
+                        get_state()["balcony"],
+                        force=truthy(first(params, "force", "false")),
+                    ),
+                )
             except ValueError as exc:
                 send_json(self, {"error": str(exc)}, HTTPStatus.BAD_GATEWAY)
             return
@@ -3970,22 +4160,26 @@ def save_balcony(payload: dict) -> None:
         if key not in payload:
             raise KeyError(f"{key} fehlt")
 
-    orientation_deg = float(payload["orientation_deg"]) % 360
-    width_m = float(payload["width_m"])
-    depth_m = float(payload["depth_m"])
-    latitude = float(payload["latitude"])
-    longitude = float(payload["longitude"])
-    main_capacity = int(payload["tank_capacity_ml"])
-    refill_capacity = int(payload.get("refill_tank_capacity_ml", DEFAULT_BALCONY["refill_tank_capacity_ml"]))
-    refill_flow = int(payload["refill_pump_ml_per_min"])
-    if not 0.1 <= width_m <= 100 or not 0.1 <= depth_m <= 100:
-        raise ValueError("Breite und Tiefe muessen zwischen 0,1 und 100 Metern liegen")
-    if not -90 <= latitude <= 90 or not -180 <= longitude <= 180:
-        raise ValueError("Ungueltige Koordinaten")
-    if not 100 <= main_capacity <= 1_000_000 or not 100 <= refill_capacity <= 1_000_000:
-        raise ValueError("Tankgroessen muessen zwischen 100 und 1.000.000 ml liegen")
-    if not 0 <= refill_flow <= 1_000_000:
-        raise ValueError("Der Pumpendurchsatz muss zwischen 0 und 1.000.000 ml/min liegen")
+    orientation_deg = finite_number(payload["orientation_deg"], "orientation_deg") % 360
+    width_m = finite_number(payload["width_m"], "width_m", minimum=0.1, maximum=100)
+    depth_m = finite_number(payload["depth_m"], "depth_m", minimum=0.1, maximum=100)
+    latitude = finite_number(payload["latitude"], "latitude", minimum=-90, maximum=90)
+    longitude = finite_number(payload["longitude"], "longitude", minimum=-180, maximum=180)
+    main_capacity = finite_integer(
+        payload["tank_capacity_ml"], "tank_capacity_ml", minimum=100, maximum=1_000_000
+    )
+    refill_capacity = finite_integer(
+        payload.get("refill_tank_capacity_ml", DEFAULT_BALCONY["refill_tank_capacity_ml"]),
+        "refill_tank_capacity_ml",
+        minimum=100,
+        maximum=1_000_000,
+    )
+    refill_flow = finite_integer(
+        payload["refill_pump_ml_per_min"],
+        "refill_pump_ml_per_min",
+        minimum=0,
+        maximum=1_000_000,
+    )
     try:
         ZoneInfo(payload.get("timezone_name") or "Europe/Berlin")
     except ZoneInfoNotFoundError as exc:
@@ -3997,20 +4191,23 @@ def save_balcony(payload: dict) -> None:
     refill_cooldown = payload.get("refill_cooldown_minutes_per_liter")
     main_consumption_factor = payload.get("main_pump_calibration_factor")
     if amount_percent is not None:
-        amount_percent = float(amount_percent)
+        amount_percent = finite_number(amount_percent, "watering_amount_percent")
         if not MIN_WATERING_AMOUNT_PERCENT <= amount_percent <= MAX_WATERING_AMOUNT_PERCENT:
             raise ValueError(
                 f"Gießmenge muss zwischen {MIN_WATERING_AMOUNT_PERCENT:g} und "
                 f"{MAX_WATERING_AMOUNT_PERCENT:g} Prozent liegen"
             )
     if calibration_percent is not None:
-        calibration_percent = float(calibration_percent)
+        calibration_percent = finite_number(calibration_percent, "water_model_calibration_percent")
         if not MIN_WATER_MODEL_CALIBRATION_PERCENT <= calibration_percent <= MAX_WATER_MODEL_CALIBRATION_PERCENT:
             raise ValueError(
                 f"Wasser-Skalierung muss zwischen {MIN_WATER_MODEL_CALIBRATION_PERCENT:g} und "
                 f"{MAX_WATER_MODEL_CALIBRATION_PERCENT:g} Prozent liegen"
             )
     with connect() as conn:
+        outlet_ids = [int(row["id"]) for row in conn.execute("SELECT id FROM pump_outlets")]
+        outlets = validate_outlets(payload["outlets"], outlet_ids)
+        walls = validate_walls(payload["walls"])
         conn.execute(
             """
             UPDATE balcony_settings
@@ -4029,7 +4226,7 @@ def save_balcony(payload: dict) -> None:
                 latitude,
                 longitude,
                 payload.get("timezone_name") or "Europe/Berlin",
-                max(float(wall["height_m"]) for wall in payload["walls"]),
+                max(wall["height_m"] for wall in walls),
                 main_capacity,
                 main_capacity,
                 refill_capacity,
@@ -4038,14 +4235,14 @@ def save_balcony(payload: dict) -> None:
                 now_iso(),
             ),
         )
-        for outlet in payload["outlets"]:
+        for outlet in outlets:
             conn.execute(
                 "UPDATE pump_outlets SET name = ?, ml_per_run = ? WHERE id = ?",
                 (outlet["name"], int(outlet["ml_per_run"]), int(outlet["id"])),
             )
         for plant in conn.execute("SELECT id FROM plants"):
             sync_legacy_plant_connection(conn, int(plant["id"]))
-        for wall in payload["walls"]:
+        for wall in walls:
             conn.execute(
                 """
                 INSERT INTO terrace_walls (side, height_m)
@@ -4071,12 +4268,9 @@ def save_balcony(payload: dict) -> None:
 
 
 def add_plant(payload: dict) -> int:
-    required = ["catalog_id", "custom_name", "size", "pot_liters", "pot_type"]
-    for key in required:
-        if key not in payload:
-            raise KeyError(f"{key} fehlt")
-    hose_numbers = normalize_hose_numbers(payload.get("hose_numbers", ""))
     with connect() as conn:
+        catalog_ids = [str(row["id"]) for row in conn.execute("SELECT id FROM plant_catalog")]
+        plant = validate_plant_payload(payload, catalog_ids)
         outlet_id = default_outlet_id_for_conn(conn)
         cursor = conn.execute(
             """
@@ -4086,32 +4280,28 @@ def add_plant(payload: dict) -> int:
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                payload["catalog_id"],
-                payload["custom_name"].strip() or "Pflanze",
-                payload["size"],
-                float(payload["pot_liters"]),
-                payload["pot_type"],
+                plant["catalog_id"],
+                plant["custom_name"],
+                plant["size"],
+                plant["pot_liters"],
+                plant["pot_type"],
                 outlet_id,
-                float(payload.get("pos_x", 0.5)),
-                float(payload.get("pos_y", 0.5)),
-                hose_numbers,
+                plant["pos_x"],
+                plant["pos_y"],
+                plant["hose_numbers"],
                 None,
                 now_iso(),
             ),
         )
         plant_id = int(cursor.lastrowid)
-        assign_hoses_to_plant(conn, plant_id, hose_numbers)
+        assign_hoses_to_plant(conn, plant_id, plant["hose_numbers"])
         return plant_id
 
 
 def update_plant(plant_id: int, payload: dict) -> None:
-    required = ["catalog_id", "custom_name", "size", "pot_liters", "pot_type"]
-    for key in required:
-        if key not in payload:
-            raise KeyError(f"{key} fehlt")
-
-    hose_numbers = normalize_hose_numbers(payload.get("hose_numbers", ""))
     with connect() as conn:
+        catalog_ids = [str(row["id"]) for row in conn.execute("SELECT id FROM plant_catalog")]
+        plant = validate_plant_payload(payload, catalog_ids)
         cursor = conn.execute(
             """
             UPDATE plants
@@ -4123,17 +4313,17 @@ def update_plant(plant_id: int, payload: dict) -> None:
             WHERE id = ?
             """,
             (
-                payload["catalog_id"],
-                payload["custom_name"].strip() or "Pflanze",
-                payload["size"],
-                float(payload["pot_liters"]),
-                payload["pot_type"],
+                plant["catalog_id"],
+                plant["custom_name"],
+                plant["size"],
+                plant["pot_liters"],
+                plant["pot_type"],
                 plant_id,
             ),
         )
         if cursor.rowcount == 0:
             raise ValueError("Pflanze nicht gefunden")
-        assign_hoses_to_plant(conn, plant_id, hose_numbers)
+        assign_hoses_to_plant(conn, plant_id, plant["hose_numbers"])
 
 
 def default_outlet_id() -> int:
@@ -4142,11 +4332,14 @@ def default_outlet_id() -> int:
 
 
 def update_plant_position(plant_id: int, payload: dict) -> None:
+    pos_x, pos_y = validate_position_payload(payload)
     with connect() as conn:
-        conn.execute(
+        cursor = conn.execute(
             "UPDATE plants SET pos_x = ?, pos_y = ? WHERE id = ?",
-            (clamp(float(payload["pos_x"]), 0, 1), clamp(float(payload["pos_y"]), 0, 1), plant_id),
+            (pos_x, pos_y, plant_id),
         )
+        if cursor.rowcount == 0:
+            raise ValueError("Pflanze nicht gefunden")
 
 
 def normalize_run_id(run_id: object, event_type: str) -> tuple[str, bool]:

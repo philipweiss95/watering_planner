@@ -316,6 +316,8 @@ class WateringPlannerTests(unittest.TestCase):
         with server.connect() as conn:
             conn.execute("UPDATE balcony_settings SET tank_current_ml = tank_capacity_ml - 2000 WHERE id = 1")
 
+        with patch("server.local_now", return_value=datetime(2026, 6, 3, 1, 30, tzinfo=ZoneInfo("Europe/Berlin"))):
+            server.refill_status(server.get_state()["balcony"])
         with patch("server.local_now", return_value=now):
             status = server.refill_status(server.get_state()["balcony"])
 
@@ -327,13 +329,15 @@ class WateringPlannerTests(unittest.TestCase):
         self.assertEqual(status["next_window"], "06:00")
         self.assertEqual(status["planned_transfer_ml"], 1000)
         self.assertEqual(status["duration_seconds"], 60)
-        self.assertIn("Nachtfenster für heute verpasst", status["summary"])
+        self.assertIn("Nachfüllfenster verpasst", status["summary"])
 
     def test_second_refill_window_can_run_when_first_window_was_missed(self):
         second_window = datetime(2026, 6, 3, 6, 15, tzinfo=ZoneInfo("Europe/Berlin"))
         with server.connect() as conn:
             conn.execute("UPDATE balcony_settings SET tank_current_ml = tank_capacity_ml - 2000 WHERE id = 1")
 
+        with patch("server.local_now", return_value=datetime(2026, 6, 3, 1, 30, tzinfo=ZoneInfo("Europe/Berlin"))):
+            server.refill_status(server.get_state()["balcony"])
         with patch("server.local_now", return_value=second_window):
             status = server.refill_status(server.get_state()["balcony"])
 
@@ -349,6 +353,10 @@ class WateringPlannerTests(unittest.TestCase):
         with server.connect() as conn:
             conn.execute("UPDATE balcony_settings SET tank_current_ml = tank_capacity_ml - 2000 WHERE id = 1")
 
+        with patch("server.local_now", return_value=datetime(2026, 6, 3, 1, 30, tzinfo=ZoneInfo("Europe/Berlin"))):
+            server.refill_status(server.get_state()["balcony"])
+        with patch("server.local_now", return_value=datetime(2026, 6, 3, 6, 30, tzinfo=ZoneInfo("Europe/Berlin"))):
+            server.refill_status(server.get_state()["balcony"])
         with patch("server.local_now", return_value=daytime):
             status = server.refill_status(server.get_state()["balcony"])
 
@@ -981,6 +989,7 @@ class WateringPlannerTests(unittest.TestCase):
 
         (server.DATA_DIR / "table.xlsx").write_bytes(source.read_bytes())
         with server.connect() as conn:
+            conn.execute("DELETE FROM irrigation_hoses")
             conn.execute("DELETE FROM plants")
         server.init_db()
 
