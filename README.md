@@ -80,11 +80,11 @@ Die Antwort enthält zwei Entscheidungen:
 - `should_run`: Heute besteht grundsätzlich noch Bewässerungsbedarf.
 - `run_now`: Ein lokaler Automations-Controller wie Home Assistant soll im aktuellen Zeitfenster jetzt einen Zyklus starten.
 
-Der Planer verteilt die empfohlenen Zyklen gleichmäßig zwischen `07:00` und `19:00`. Bei vier Zyklen entstehen zum Beispiel die Zeitpunkte `07:00`, `11:00`, `15:00`, `19:00`. Manuell verbuchte Läufe zählen dabei mit. Home Assistant fragt den Planer alle 15 Minuten erneut ab. Dadurch geht ein Lauf nicht verloren, wenn eine einzelne Sensoraktualisierung ausfällt; ein verpasster geplanter Lauf wird später nachgeholt. Nach einem verbuchten Pumpenlauf setzt der Planer zusätzlich eine Sicherheitspause von 30 Minuten, damit Zyklen nicht direkt hintereinander starten.
+Der Planer verteilt die empfohlenen Zyklen gleichmäßig im konfigurierten täglichen Bewässerungszeitraum. Beginn, Ende, maximale Zykluszahl und Mindestabstand sind persistent einstellbar. Manuell verbuchte Läufe zählen dabei mit. Home Assistant fragt den Planer alle 15 Minuten erneut ab. Dadurch geht ein Lauf nicht verloren, wenn eine einzelne Sensoraktualisierung ausfällt; ein verpasster geplanter Lauf wird später nachgeholt.
 
-Zusätzlich verwaltet der Planer einen 30-l-Vorratstank mit eigener Nachfüllpumpe. Die deaktivierbare Automatik arbeitet in zwei festen Nachtfenstern von `01:00` bis `02:00` und `06:00` bis `07:00`. Jedes Fenster kann höchstens einen Lauf auslösen; zwischen zwei Nachfüllvorgängen liegen immer mindestens drei Stunden. Jeder Lauf füllt die Hälfte des dann im Haupttank fehlenden Wassers nach und wird auf den Rest im Vorratstank begrenzt. Verpasste Fenster werden tagsüber nicht nachgeholt.
+Zusätzlich verwaltet der Planer einen konfigurierbaren Vorratstank mit eigener Nachfüllpumpe. Die deaktivierbare Automatik arbeitet in beliebig vielen validierten Zeitfenstern. Mindestabstand und Nachfüllstrategie (Anteil des fehlenden Wassers oder feste Zielmenge) sind persistent einstellbar. Jeder Transfer wird auf Haupttankkapazität, Pumpendurchsatz, Fensterdauer und tatsächlichen Vorrat begrenzt; verpasste Fenster werden nicht nachgeholt.
 
-Beide Pumpen können unter **Einstellungen > Pumpen kalibrieren** anhand eines abgelesenen Füllstands von 0 bis 100 Prozent kalibriert werden. Für die Wasserpumpe wird aus dem letzten Vollstand beziehungsweise der letzten Messung, den Bewässerungszyklen, zwischenzeitlichen Nachfüllungen und dem prozentual gemessenen Haupttankstand ein Verbrauchsfaktor ermittelt. Er verändert ausschließlich die Tankbilanz, nie die ml-Angaben der Pflanzen. Für die Nachfüllpumpe berechnet der Planer aus dem prozentualen Vorratstankverlust und der protokollierten Pumpzeit einen neuen Durchsatz in ml/min und überschreibt damit den bisherigen Wert.
+Beide Pumpen können unter **Einstellungen > Pumpen und Kalibrierung** anhand eines abgelesenen Füllstands von 0 bis 100 Prozent kalibriert werden. Für die Wasserpumpe wird aus dem letzten Vollstand beziehungsweise der letzten Messung, den Bewässerungszyklen, zwischenzeitlichen Nachfüllungen und dem prozentual gemessenen Haupttankstand ein Verbrauchsfaktor ermittelt. Er verändert ausschließlich die Tankbilanz, nie die ml-Angaben der Pflanzen. Für die Nachfüllpumpe berechnet der Planer aus dem prozentualen Vorratstankverlust und der protokollierten Pumpzeit einen neuen Durchsatz in ml/min und überschreibt damit den bisherigen Wert.
 
 Version 1.0 enthält außerdem auf der **Info-Seite** einen internen Synology-Updater. Er liest ausschließlich stabile GitHub-Releases, prüft die SHA-256-Prüfsumme, sichert die bestehende Programmversion, baut beide Container neu und führt bei einem Fehler einen Rollback aus. Der GitHub-Token wird dauerhaft nur im persistenten `data`-Volume gespeichert und nicht an den Browser zurückgegeben. Zu jedem Release wird der passende Abschnitt aus [CHANGELOG.md](CHANGELOG.md) veröffentlicht und vor sowie nach der Installation im Updater angezeigt.
 
@@ -92,7 +92,7 @@ Der Updater erneuert sich am Ende eines Updates über einen unabhängigen, kurzl
 
 Die Berechnung nutzt Temperatur, Tagesniederschlag, Wind, FAO-Referenzverdunstung ET₀, Sonnenscheindauer, Balkon-/Terrassenausrichtung in Grad, Koordinaten, Pflanzenpositionen und die vier Wandhöhen nach Seite. Wenn Open-Meteo keine ET₀-Werte liefert oder manuelle Wetterdaten genutzt werden, schätzt die App ET₀ aus Temperatur, Sonnenscheindauer und Wind. Zusätzlich wird Wind als Balkon-Expositionsfaktor berechnet: hohe Windgeschwindigkeiten erhöhen Transpiration und Topfverdunstung, niedrige Wände schützen weniger.
 
-Für den letzten noch vollständig möglichen Gießlauf nutzt die App die längste reguläre Open-Meteo-Vorhersage von 16 Tagen. Sie berechnet für jeden Vorhersagetag die wetterabhängige Zahl der Pumpzyklen und zieht pro Lauf den aktuell kalibrierten Tankverbrauch ab. Der Vorratstank zählt nur mit, wenn die Nachfüllautomatik und ein nutzbarer Pumpendurchsatz konfiguriert sind. Reichen beide nutzbaren Tanks länger als die Vorhersage, wird die mittlere Zykluszahl der Bewässerungstage für die weitere Schätzung verwendet; der angezeigte Zeitpunkt entspricht dabei dem letzten vollständig versorgbaren Lauf und nicht dem ersten ausfallenden Lauf.
+Für den letzten noch vollständig möglichen Gießlauf simuliert die App mindestens 16 Prognosetage chronologisch. Ein Gießlauf ist nur versorgt, wenn zu seinem Zeitpunkt genügend Wasser im Haupttank liegt. Vorratswasser wird erst nach einem zulässigen Nachfüllereignis verfügbar. Reicht der Ereignishorizont nicht bis zur Erschöpfung, bleibt die bisherige mittlere Langzeitschätzung als Kompatibilitätswert erhalten.
 
 Der Wasserbedarf pro Pflanze wird aus einem Pflanzenprofil berechnet:
 
@@ -116,7 +116,7 @@ Die Pflanzen können in der Draufsicht des Balkons platziert werden. Aus Positio
 
 ## HomeKit / iOS Kurzbefehle
 
-Die Weboberfläche zeigt die Kurzbefehle-Schritte und URLs an. Maschinenlesbar gibt es sie hier:
+Die Kurzbefehle-Schritte und URLs gibt es maschinenlesbar hier:
 
 ```text
 GET /api/shortcuts?base_url=https://deine-domain.example
@@ -158,15 +158,30 @@ Die letzten Läufe erscheinen in der Übersicht als Protokoll unter `Bewässerun
 - `POST /api/evaluate`: Empfehlung berechnen, mit `{"auto_weather": true}` automatisch
 - `GET /api/homekit/check`: kompakte HomeKit-Entscheidung
 - `GET /api/watering-events`: Protokoll der letzten Bewässerungs-, Nachfüll- und Tankfüllstand-Ereignisse
+- `POST /api/settings`: Zeitfenster, Abstände, Zyklusgrenzen, Nachfüllstrategie und Warnschwellen speichern
+- `GET /api/diagnostics/notifications`: SMTP-, Warnungs- und Benachrichtigungsstatus ohne Geheimnisse
+- `GET /api/diagnostics/home-assistant`: letzter Home-Assistant-Status ohne Webhook-URL
+- `POST /api/diagnostics/notifications/check`: Warnbedingungen sofort prüfen
+- `POST /api/diagnostics/home-assistant/test`: Home Assistant erreichen, ohne den privaten Webhook auszulösen
+- `POST /api/notifications/test`: SMTP-Test-E-Mail senden
 - `POST /api/manual-run`: vollständigen Pumpzyklus sofort über Home Assistant anfordern
 - `POST /api/manual-refill`: Nachfülllauf sofort über Home Assistant anfordern
 - `POST /api/homekit/mark-run`: Pumpenlauf verbuchen und Tank reduzieren
+
+Die modulare Backend-Architektur, Migrationen, neuen Prognosefelder,
+Konfigurationswerte, SMTP-Variablen und verbleibenden Risiken sind in
+[docs/backend-architecture.md](docs/backend-architecture.md) dokumentiert.
 - `POST /api/refill/mark-run`: nächtlichen Nachfülllauf verbuchen und Wasser vom Vorratstank in den Haupttank rechnen
 - `POST /api/tanks/main/fill`: Haupttank als voll markieren
-- `POST /api/tanks/refill/fill`: 30-l-Vorratstank als voll markieren
+- `POST /api/tanks/refill/fill`: konfigurierbaren Vorratstank als voll markieren
 - `POST /api/calibration/main`: Hauptpumpenfaktor aus `measured_level_percent` kalibrieren
 - `POST /api/calibration/refill`: Nachfüllpumpen-Durchsatz aus `measured_level_percent` kalibrieren
 - `GET /api/update/status`: internen Updater-Status lesen
 - `POST /api/update/setup`, `/api/update/check`, `/api/update/install`: stabilen GitHub-Updater verwalten
 - `POST /api/automation/pause`: Automatik bis morgen pausieren
 - `POST /api/automation/resume`: Automatik wieder aktivieren
+
+Frontend-Module, Bedienänderungen und geprüfte Desktop-/Mobilzustände stehen in
+[docs/frontend-architecture.md](docs/frontend-architecture.md). Die konkreten
+Schritte für Datenbank, Home Assistant, Umgebungsvariablen, PWA und Rollback
+stehen in [docs/migration.md](docs/migration.md).

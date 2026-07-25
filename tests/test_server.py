@@ -34,6 +34,10 @@ class WateringPlannerTests(unittest.TestCase):
         self.assertIn("routing_plan", result)
         self.assertEqual(len(result["routing_plan"]["assignments"]), len(result["plants"]))
         self.assertIn("automation", result)
+        self.assertIn("forecast_events", result["depletion"])
+        self.assertEqual(result["depletion"]["forecast_days"], 16)
+        self.assertIn("last_supported_watering_at", result["depletion"])
+        self.assertIn("first_unserved_watering_at", result["depletion"])
         self.assertIn("run_now", result)
         self.assertIn("next_window", result["automation"])
         self.assertIn("water_model", result["plants"][0])
@@ -201,9 +205,9 @@ class WateringPlannerTests(unittest.TestCase):
         self.assertEqual(released["active_window"], "06:00")
         self.assertEqual(second["planned_transfer_ml"], 500)
 
-    def test_refill_schedule_times_are_fixed(self):
+    def test_refill_schedule_times_are_configurable(self):
         server.save_refill_schedule_times(["05:30", "21:15"])
-        self.assertEqual(server.get_state()["settings"]["refill_schedule_times"], ["01:00", "06:00"])
+        self.assertEqual(server.get_state()["settings"]["refill_schedule_times"], ["05:30", "21:15"])
 
     def test_refill_automation_can_be_disabled(self):
         server.save_refill_automation_enabled(False)
@@ -1049,14 +1053,16 @@ class WateringPlannerTests(unittest.TestCase):
         self.assertEqual(assignment["connection_status"], "urgent")
         self.assertIn("Unerlässlich", assignment["connection_note"])
 
-    def test_static_connection_plan_never_adds_more_tubes_than_existing(self):
+    def test_static_connection_plan_can_recommend_additional_tubes(self):
         result = server.evaluate(temperature_c=26, rain_mm=0, wind_kmh=8, sunshine_hours=7)
 
-        for assignment in result["connection_plan"]["assignments"]:
-            plant = next(item for item in result["plants"] if item["id"] == assignment["plant_id"])
-            recommended_tubes = sum(tube["count"] for tube in assignment["tubes"])
-
-            self.assertLessEqual(recommended_tubes, plant["current_tube_count"])
+        additions = [
+            assignment
+            for assignment in result["connection_plan"]["assignments"]
+            if assignment["recommended_tube_count"] > assignment["current_tube_count"]
+        ]
+        self.assertTrue(additions)
+        self.assertTrue(all(item["connection_action"] == "add_hose" for item in additions))
 
     def test_tube_optimizer_can_combine_30_and_15_ml(self):
         outlets = [

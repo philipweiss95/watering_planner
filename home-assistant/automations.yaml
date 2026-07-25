@@ -10,10 +10,6 @@
       minutes: "/15"
 
   action:
-    - condition: time
-      after: "06:59:00"
-      before: "19:21:00"
-
     - action: homeassistant.update_entity
       target:
         entity_id: sensor.bewaesserung_planner
@@ -44,6 +40,8 @@
 
   action:
     - action: script.bewaesserung_pumpzyklus
+      data:
+        run_id: "{{ trigger.json.run_id }}"
 
 - id: bewaesserung_manuelle_nachfuellung
   alias: Bewaesserung - Manuelle Nachfuellung
@@ -72,6 +70,7 @@
 
     - action: script.bewaesserung_nachfuellen
       data:
+        run_id: "{{ trigger.json.run_id }}"
         duration_seconds: >
           {{ (state_attr('sensor.bewaesserung_planner', 'manual_refill') or {}).get('duration_seconds', 0) | int(0) }}
 
@@ -85,15 +84,6 @@
       minutes: "/15"
 
   action:
-    - condition: or
-      conditions:
-        - condition: time
-          after: "00:59:00"
-          before: "02:01:00"
-        - condition: time
-          after: "05:59:00"
-          before: "07:01:00"
-
     - action: homeassistant.update_entity
       target:
         entity_id: sensor.bewaesserung_planner

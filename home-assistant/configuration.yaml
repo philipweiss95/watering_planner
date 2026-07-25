@@ -31,13 +31,13 @@ rest_command:
     method: POST
     headers:
       Content-Type: "application/json"
-    payload: '{"auto_weather": true, "slot": "morning"}'
+    payload: '{"auto_weather": true, "slot": "morning", "run_id": "{{ run_id }}"}'
   bewaesserung_mark_refill:
     url: "http://192.168.178.116:8080/api/refill/mark-run"
     method: POST
     headers:
       Content-Type: "application/json"
-    payload: '{}'
+    payload: '{"run_id": "{{ run_id }}"}'
 
 script:
   bewaesserung_pumpzyklus:
@@ -45,6 +45,9 @@ script:
     description: Setzt die Pumpe zurueck, schaltet sie fuer einen vollstaendigen Zyklus ein und verbucht den Lauf.
     mode: single
     sequence:
+      - variables:
+          watering_run_id: "{{ run_id | default(context.id, true) }}"
+
       - alias: Pumpe vor dem Start ausschalten
         action: switch.turn_off
         target:
@@ -70,6 +73,8 @@ script:
 
       - alias: Pumpzyklus im Planner verbuchen
         action: rest_command.bewaesserung_mark_run
+        data:
+          run_id: "{{ watering_run_id }}"
 
       - alias: Planner-Aktualisierung abwarten
         delay:
@@ -85,6 +90,9 @@ script:
     description: Schaltet die zweite Pumpe fuer die vom Planner berechnete Nachfuelldauer.
     mode: single
     sequence:
+      - variables:
+          refill_run_id: "{{ run_id | default(context.id, true) }}"
+
       - alias: Nachfuellpumpe vor dem Start ausschalten
         action: switch.turn_off
         target:
@@ -110,6 +118,8 @@ script:
 
       - alias: Nachfuelllauf im Planner verbuchen
         action: rest_command.bewaesserung_mark_refill
+        data:
+          run_id: "{{ refill_run_id }}"
 
       - alias: Planner-Aktualisierung abwarten
         delay:
