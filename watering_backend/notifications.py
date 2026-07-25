@@ -9,6 +9,8 @@ from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from typing import Callable, Iterable
 
+from watering_backend.repositories.notifications import NotificationsRepository
+
 
 SEVERITIES = {"info", "warning", "critical"}
 
@@ -94,8 +96,19 @@ def send_email(config: SMTPConfig, subject: str, body: str) -> None:
 
 
 class NotificationService:
-    def __init__(self, connect: Callable, now: Callable[[], datetime] | None = None):
+    def __init__(
+        self,
+        connect: Callable | None = None,
+        now: Callable[[], datetime] | None = None,
+        *,
+        repository: NotificationsRepository | None = None,
+    ):
+        if repository is None:
+            if connect is None:
+                raise TypeError("NotificationService requires connect or repository")
+            repository = NotificationsRepository(connect)
         self._connect = connect
+        self._repository = repository
         self._now = now or (lambda: datetime.now(timezone.utc))
 
     def send_test(self) -> dict:
@@ -133,11 +146,8 @@ class NotificationService:
         if severity not in SEVERITIES:
             raise ValueError("Unbekannter Schweregrad")
         now = self._now().astimezone(timezone.utc)
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM notification_state WHERE alert_key = ?",
-                (alert_key,),
-            ).fetchone()
+        with self._repository.transaction() as transaction:
+            row = transaction.state(alert_key)
             was_active = bool(row["active"]) if row else False
             last_notified = (
                 datetime.fromisoformat(str(row["last_notified_at"]))
@@ -187,16 +197,15 @@ class NotificationService:
                     status = "failed"
                     error = str(exc)
                     consecutive_failures += 1
-                self._log(
-                    alert_key,
-                    severity,
-                    event_state,
-                    send_subject,
-                    send_message_text,
-                    now.isoformat(),
-                    status,
-                    error,
-                    conn=conn,
+                transaction.append_log(
+                    alert_key=alert_key,
+                    severity=severity,
+                    event_state=event_state,
+                    subject=send_subject,
+                    message=send_message_text,
+                    created_at=now.isoformat(),
+                    status=status,
+                    error=error,
                     sent_at=sent_at,
                 )
             persisted_active = bool(
@@ -206,50 +215,21 @@ class NotificationService:
                     and (status == "failed" or consecutive_failures > 0)
                 )
             )
-            conn.execute(
-                """
-                INSERT INTO notification_state
-                    (
-                        alert_key, severity, active, last_changed_at, last_notified_at,
-                        last_attempt_at, last_error, consecutive_failures, message
-                    )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(alert_key) DO UPDATE SET
-                    severity = excluded.severity,
-                    active = excluded.active,
-                    last_changed_at = CASE
-                        WHEN notification_state.active <> excluded.active THEN excluded.last_changed_at
-                        ELSE notification_state.last_changed_at
-                    END,
-                    last_notified_at = COALESCE(excluded.last_notified_at, notification_state.last_notified_at),
-                    last_attempt_at = COALESCE(excluded.last_attempt_at, notification_state.last_attempt_at),
-                    last_error = excluded.last_error,
-                    consecutive_failures = excluded.consecutive_failures,
-                    message = excluded.message
-                """,
-                (
-                    alert_key,
-                    severity,
-                    int(persisted_active),
-                    now.isoformat(),
-                    sent_at,
-                    attempted_at,
-                    error,
-                    consecutive_failures,
-                    message,
-                ),
+            transaction.upsert_state(
+                alert_key=alert_key,
+                severity=severity,
+                active=persisted_active,
+                changed_at=now.isoformat(),
+                notified_at=sent_at,
+                attempted_at=attempted_at,
+                error=error,
+                consecutive_failures=consecutive_failures,
+                message=message,
             )
         return {"alert_key": alert_key, "active": active, "status": status, "error": error}
 
     def diagnostics(self, limit: int = 50) -> dict:
-        with self._connect() as conn:
-            active = [dict(row) for row in conn.execute(
-                "SELECT * FROM notification_state WHERE active = 1 ORDER BY severity DESC, last_changed_at DESC"
-            )]
-            log = [dict(row) for row in conn.execute(
-                "SELECT * FROM notification_log ORDER BY created_at DESC, id DESC LIMIT ?",
-                (max(1, min(int(limit), 200)),),
-            )]
+        active, log = self._repository.diagnostics(limit)
         try:
             smtp_status = SMTPConfig.from_env().public_status()
         except ValueError as exc:
@@ -271,24 +251,19 @@ class NotificationService:
         status: str,
         error: str,
         *,
-        conn=None,
         sent_at: str | None = None,
     ) -> None:
-        def insert(active_conn) -> None:
-            active_conn.execute(
-                """
-                INSERT INTO notification_log
-                    (alert_key, severity, event_state, subject, message, created_at, sent_at, status, error)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (alert_key, severity, event_state, subject, message, created_at, sent_at, status, error),
-            )
-
-        if conn is not None:
-            insert(conn)
-        else:
-            with self._connect() as active_conn:
-                insert(active_conn)
+        self._repository.append_log(
+            alert_key=alert_key,
+            severity=severity,
+            event_state=event_state,
+            subject=subject,
+            message=message,
+            created_at=created_at,
+            sent_at=sent_at,
+            status=status,
+            error=error,
+        )
 
 
 class NotificationWorker:

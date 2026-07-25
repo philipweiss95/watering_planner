@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 import math
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -166,6 +166,27 @@ def local_timezone(name: str):
         return ZoneInfo(name or "Europe/Berlin")
     except ZoneInfoNotFoundError:
         return ZoneInfo("Europe/Berlin")
+
+
+def parse_hhmm(value: str) -> time:
+    try:
+        return datetime.strptime(value, "%H:%M").time()
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Zeit muss im Format HH:MM angegeben werden") from exc
+
+
+def local_now(timezone_name: str) -> datetime:
+    return datetime.now(timezone.utc).astimezone(local_timezone(timezone_name))
+
+
+def window_datetime(day: date, value: str, tzinfo) -> datetime:
+    return datetime.combine(day, parse_hhmm(value), tzinfo=tzinfo)
+
+
+def local_day_utc_bounds(day: date, tzinfo) -> tuple[datetime, datetime]:
+    start = datetime.combine(day, time.min, tzinfo=tzinfo)
+    end = datetime.combine(day + timedelta(days=1), time.min, tzinfo=tzinfo)
+    return start.astimezone(timezone.utc), end.astimezone(timezone.utc)
 
 
 def distributed_windows(day, total_cycles: int, timezone_name: str, config: dict[str, Any]):
