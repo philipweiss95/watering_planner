@@ -4,6 +4,7 @@ from watering_backend.repositories.events import EventsRepository
 from watering_backend.repositories.hoses import HosesRepository
 from watering_backend.repositories.notifications import NotificationsRepository
 from watering_backend.repositories.plants import PlantsRepository
+from watering_backend.repositories.refill_runs import RefillRunsRepository
 from watering_backend.repositories.settings import SettingsRepository
 from watering_backend.repositories.tanks import TanksRepository
 
@@ -12,6 +13,7 @@ __all__ = [
     "HosesRepository",
     "NotificationsRepository",
     "PlantsRepository",
+    "RefillRunsRepository",
     "SettingsRepository",
     "TanksRepository",
 ]

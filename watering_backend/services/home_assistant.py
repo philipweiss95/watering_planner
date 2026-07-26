@@ -79,8 +79,6 @@ class HomeAssistantService:
             [dict[str, Any]],
             dict[str, Any],
         ],
-        save_pending_refill_request: Callable[[dict[str, Any]], None],
-        clear_pending_refill_request: Callable[[], None],
         health_notifier: Callable[[bool, str], None] | None = None,
         environment: Mapping[str, str] | None = None,
         opener: Callable[..., Any] = urlopen,
@@ -88,8 +86,6 @@ class HomeAssistantService:
         self.settings = settings
         self.now_iso = now_iso
         self.manual_refill_plan = manual_refill_plan
-        self.save_pending_refill_request = save_pending_refill_request
-        self.clear_pending_refill_request = clear_pending_refill_request
         self.health_notifier = health_notifier or (lambda _ok, _detail: None)
         self.environment = environment if environment is not None else os.environ
         self.opener = opener
@@ -222,6 +218,13 @@ class HomeAssistantService:
         manual_plan = self.manual_refill_plan(result)
         if int(manual_plan.get("planned_transfer_ml", 0)) <= 0:
             reason = manual_plan.get("summary") or "Keine Nachfüllung nötig."
+        elif result.get("refill", {}).get("active_run"):
+            reason = "Ein Nachfülllauf ist bereits reserviert oder aktiv."
+        elif result.get("refill", {}).get("manual_review_required"):
+            reason = (
+                "Ein früherer Nachfülllauf ist unbestätigt. "
+                "Tankstände zuerst manuell prüfen."
+            )
         elif result.get("refill", {}).get("cooldown_active"):
             reason = (
                 result["refill"].get("summary")
@@ -281,42 +284,40 @@ class HomeAssistantService:
         self.record_health(True, "Webhook ist wieder erreichbar.")
         return normalized_run_id
 
-    def trigger_manual_refill(
+    def trigger_reserved_refill(
         self,
-        result: dict[str, Any],
-        run_id: object = None,
-    ) -> str:
-        status = self.manual_refill_status(result)
-        if not status["available"]:
-            raise ValueError(status["reason"])
-        normalized_run_id, _ = normalize_run_id(run_id, "refill")
-        self.save_pending_refill_request(
-            {**status, "run_id": normalized_run_id}
+        reservation: dict[str, Any],
+    ) -> None:
+        """Notify Home Assistant about an already persisted manual run."""
+        run_id = str(reservation.get("run_id", "")).strip()
+        duration_seconds = int(
+            reservation.get("duration_seconds", 0)
         )
+        planned_transfer_ml = int(
+            reservation.get("planned_transfer_ml", 0)
+        )
+        if not run_id or duration_seconds <= 0 or planned_transfer_ml <= 0:
+            raise ValueError("Ungültige Nachfüllreservierung")
         try:
             post_webhook(
                 self.refill_webhook_url(),
                 {
                     "source": "watering-planner",
                     "requested_at": self.now_iso(),
-                    "run_id": normalized_run_id,
-                    "planned_transfer_ml": status.get(
-                        "planned_transfer_ml",
-                        0,
+                    "run_id": run_id,
+                    "run_type": str(
+                        reservation.get("run_type", "manual")
                     ),
-                    "duration_seconds": status.get(
-                        "duration_seconds",
-                        0,
+                    "planned_transfer_ml": planned_transfer_ml,
+                    "duration_seconds": duration_seconds,
+                    "expected_complete_at": reservation.get(
+                        "expected_complete_at",
+                        "",
                     ),
                 },
                 self.opener,
             )
-        except ValueError:
-            self.clear_pending_refill_request()
-            self.record_health(
-                False,
-                "Nachfuell-Webhook ist nicht erreichbar.",
-            )
+        except ValueError as exc:
+            self.record_health(False, str(exc))
             raise
         self.record_health(True, "Webhook ist wieder erreichbar.")
-        return normalized_run_id

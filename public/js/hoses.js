@@ -105,18 +105,15 @@ export async function persistHoses(rows, state, client = api) {
   const hardWarnings = validateHoses(rows, state.outlets || [], state.plants || []).filter((item) =>
     ["missing-number", "duplicate", "invalid-outlet", "invalid-plant", "outlet-limit"].includes(item.code));
   if (hardWarnings.length) throw new Error(hardWarnings[0].message);
-  await client.post("/api/hoses", { hoses: rows.map(({ number, outlet_id }) => ({ number, outlet_id })) });
-  for (const plant of state.plants || []) {
-    const assigned = rows.filter((row) => Number(row.plant_id) === Number(plant.id)).map((row) => row.number).join(", ");
-    await client.put(`/api/plants/${plant.id}`, {
-      catalog_id: plant.catalog_id,
-      custom_name: plant.custom_name,
-      size: plant.size,
-      pot_liters: plant.pot_liters,
-      pot_type: plant.pot_type,
-      hose_numbers: assigned,
-    });
-  }
+  await client.post("/api/hoses", {
+    hoses: rows.map(({ number, outlet_id, plant_id }) => ({
+      number,
+      outlet_id,
+      plant_id: plant_id === "" || plant_id === null || plant_id === undefined
+        ? null
+        : Number(plant_id),
+    })),
+  });
 }
 
 export function renderHoses(state, onChanged = async () => {}) {
@@ -172,6 +169,7 @@ export function renderHoses(state, onChanged = async () => {}) {
 }
 
 export function initHoses(getState, onChanged) {
+  let saving = false;
   document.getElementById("addHoseButton").addEventListener("click", () => {
     const state = getState();
     const table = document.getElementById("hoseTable");
@@ -180,16 +178,25 @@ export function initHoses(getState, onChanged) {
     table.append(hoseRow({ number: String(highest + 1), outlet_id: state.outlets?.[0]?.id, plant_id: null }, state, (row) => row.remove()));
     table.querySelector(".hose-row:last-child input")?.focus();
   });
-  document.getElementById("hoseForm").addEventListener("submit", async (event) => {
+  const form = document.getElementById("hoseForm");
+  form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (saving) return;
+    saving = true;
+    const submit = form.querySelector('button[type="submit"]');
+    if (submit) submit.disabled = true;
     const state = getState();
     try {
       await persistHoses(hoseDataFromForm(document.getElementById("hoseTable")), state);
-      showToast("Schlauchzuordnung gespeichert");
       await onChanged({ afterMutation: true });
+      showToast("Schlauchzuordnung gespeichert");
     } catch (error) {
       showToast(error.message, { error: true });
       document.getElementById("hoseWarnings").prepend(...warningNodes([{ message: error.message }]));
+      await onChanged({ afterMutation: true });
+    } finally {
+      saving = false;
+      if (submit) submit.disabled = false;
     }
   });
 }

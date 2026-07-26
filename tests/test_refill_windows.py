@@ -378,21 +378,47 @@ class RefillWindowPersistenceTests(unittest.TestCase):
             datetime(2026, 7, 25, 1, 10, tzinfo=BERLIN)
         )
 
-        def simulate_process_crash() -> None:
-            raise RuntimeError("simulated crash after commit")
-
-        self.application.watering._refresh_refill_plans = (
-            simulate_process_crash
+        original_reconcile = (
+            self.application.events.reconcile_refill_plans_after_event
         )
+
+        def simulate_transaction_failure(*_args, **_kwargs) -> None:
+            raise RuntimeError("simulated crash during transaction")
+
+        self.application.events.reconcile_refill_plans_after_event = (
+            simulate_transaction_failure
+        )
+        tank_before = self.application.tanks.balcony()
         with self.assertRaisesRegex(RuntimeError, "simulated crash"):
             self.application.mark_refill_run(
                 source="test",
                 run_id="refill-before-crash",
             )
+        self.application.events.reconcile_refill_plans_after_event = (
+            original_reconcile
+        )
+        with self.application.database.connection() as conn:
+            self.assertIsNone(
+                self.application.events.refill_by_run_id(
+                    "refill-before-crash",
+                    conn=conn,
+                )
+            )
+            self.assertEqual(
+                self.application.tanks.balcony(conn=conn),
+                tank_before,
+            )
+        self.assertEqual(
+            self.application.get_refill_run(
+                "refill-before-crash"
+            )["status"],
+            "reserved",
+        )
 
-        # A status calculation may have started before the event committed and
-        # then acquire the write lock afterwards. Its newer timestamp must not
-        # restore the stale executable snapshot.
+        self.application.complete_refill_run("refill-before-crash")
+
+        # A status calculation may have started before completion committed.
+        # Its newer timestamp must not restore the stale executable snapshot.
         stale_second = before[1]
         self.application.events.upsert_refill_window_plan(
             window_key=str(stale_second["window_key"]),

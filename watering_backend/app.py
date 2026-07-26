@@ -35,6 +35,7 @@ from watering_backend.repositories import (
     HosesRepository,
     NotificationsRepository,
     PlantsRepository,
+    RefillRunsRepository,
     SettingsRepository,
     TanksRepository,
 )
@@ -56,6 +57,7 @@ from watering_backend.services.notifications import (
     NotificationConditionsService,
 )
 from watering_backend.services.refill import RefillService
+from watering_backend.services.refill_runs import RefillRunService
 from watering_backend.services.routing import (
     apply_fixed_connection_to_weather,
     configured_connection_plan,
@@ -147,6 +149,7 @@ class Application:
             lambda: self.now_iso(),
         )
         self.events = EventsRepository(self.database)
+        self.refill_run_repository = RefillRunsRepository(self.database)
         self.tanks = TanksRepository(self.database)
         self.notification_repository = NotificationsRepository(self.database)
 
@@ -165,6 +168,17 @@ class Application:
                 timezone.utc
             ),
             tank_low_percent=TANK_LOW_PERCENT,
+            run_diagnostics=lambda: self.refill_runs.diagnostics(),
+        )
+        self.refill_runs = RefillRunService(
+            database=self.database,
+            runs=self.refill_run_repository,
+            events=self.events,
+            settings=self.settings,
+            tanks=self.tanks,
+            now=lambda: self.local_now(
+                "Europe/Berlin"
+            ).astimezone(timezone.utc),
         )
         self.calibration = CalibrationService(
             self.database,
@@ -191,10 +205,6 @@ class Application:
             settings=self.settings,
             now_iso=lambda: self.now_iso(),
             manual_refill_plan=self.refill.manual_plan,
-            save_pending_refill_request=self.refill.save_pending_request,
-            clear_pending_refill_request=lambda: self.settings.delete(
-                "pending_refill_request"
-            ),
             health_notifier=self.record_home_assistant_health,
             environment=self.environment,
             opener=self.opener,
@@ -510,7 +520,58 @@ class Application:
         return self.watering.mark_run(*args, **kwargs)
 
     def mark_refill_run(self, *args, **kwargs) -> dict[str, Any]:
-        return self.watering.mark_refill_run(*args, **kwargs)
+        pending = self.refill.pending_request()
+        result = self.refill_runs.complete_legacy(
+            *args,
+            run_type="manual" if pending else "automatic",
+            **kwargs,
+        )
+        if pending:
+            self.settings.delete("pending_refill_request")
+        return result
+
+    def start_refill_run(
+        self,
+        *,
+        run_type: str,
+        run_id: object,
+        source: str = "home_assistant",
+    ) -> dict[str, Any]:
+        return self.refill_runs.start(
+            run_type=run_type,
+            run_id=run_id,
+            source=source,
+        )
+
+    def mark_refill_running(self, run_id: object) -> dict[str, Any]:
+        return self.refill_runs.mark_running(run_id)
+
+    def complete_refill_run(
+        self,
+        run_id: object,
+        *,
+        completion_reason: str = "pump_stopped",
+    ) -> dict[str, Any]:
+        return self.refill_runs.complete(
+            run_id,
+            completion_reason=completion_reason,
+        )
+
+    def fail_refill_run(
+        self,
+        run_id: object,
+        *,
+        error: object = "",
+        may_have_transferred: bool | None = None,
+    ) -> dict[str, Any]:
+        return self.refill_runs.fail(
+            run_id,
+            error=error,
+            may_have_transferred=may_have_transferred,
+        )
+
+    def get_refill_run(self, run_id: object) -> dict[str, Any]:
+        return self.refill_runs.get(run_id)
 
     def fill_tank(self, tank_name: str) -> None:
         self.watering.fill_tank(tank_name)
@@ -527,7 +588,27 @@ class Application:
         result: dict[str, Any],
         run_id: object = None,
     ) -> str:
-        return self.home_assistant.trigger_manual_refill(result, run_id)
+        status = self.home_assistant.manual_refill_status(result)
+        if not status["available"]:
+            raise ValueError(status["reason"])
+        reservation = self.start_refill_run(
+            run_type="manual",
+            run_id=run_id,
+            source="manual",
+        )
+        try:
+            self.home_assistant.trigger_reserved_refill(reservation)
+        except ValueError:
+            self.fail_refill_run(
+                reservation["run_id"],
+                error=(
+                    "Home-Assistant-Webhook ohne sichere Rückmeldung; "
+                    "Pumpenstart kann nicht ausgeschlossen werden."
+                ),
+                may_have_transferred=True,
+            )
+            raise
+        return str(reservation["run_id"])
 
     def weather_diagnostics(self) -> dict[str, Any]:
         return self.diagnostics.weather()

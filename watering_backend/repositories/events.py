@@ -125,6 +125,7 @@ class EventsRepository:
         *,
         target_date: str,
         window_label: str,
+        window_key: str = "",
         ran_at: str,
         cooldown_until: str,
     ) -> None:
@@ -135,7 +136,22 @@ class EventsRepository:
         transaction prevents an executable pre-window snapshot from becoming a
         false missed run after restart.
         """
-        if window_label:
+        if window_key:
+            conn.execute(
+                """
+                UPDATE refill_window_plans
+                SET fulfilled_at = COALESCE(fulfilled_at, ?),
+                    last_checked_at = CASE
+                        WHEN julianday(?) >= julianday(last_checked_at)
+                            THEN ?
+                        ELSE last_checked_at
+                    END
+                WHERE window_key = ?
+                  AND cancelled_at IS NULL
+                """,
+                (ran_at, ran_at, ran_at, window_key),
+            )
+        elif window_label:
             conn.execute(
                 """
                 UPDATE refill_window_plans
@@ -368,13 +384,19 @@ class EventsRepository:
             "duration_seconds": int(row["duration_seconds"]),
         }
 
-    def latest_refill(self) -> dict[str, Any] | None:
-        with self.database.connection() as conn:
-            return _row_dict(
-                conn.execute(
-                    "SELECT * FROM refill_events ORDER BY ran_at DESC, id DESC LIMIT 1"
-                ).fetchone()
-            )
+    def latest_refill(
+        self,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> dict[str, Any] | None:
+        if conn is None:
+            with self.database.connection() as active:
+                return self.latest_refill(conn=active)
+        return _row_dict(
+            conn.execute(
+                "SELECT * FROM refill_events ORDER BY ran_at DESC, id DESC LIMIT 1"
+            ).fetchone()
+        )
 
     def refill_windows(self) -> list[dict[str, Any]]:
         with self.database.connection() as conn:
@@ -424,6 +446,8 @@ class EventsRepository:
         self,
         target_date: date | str,
         window_label: str = "",
+        *,
+        conn: sqlite3.Connection | None = None,
     ) -> dict[str, Any] | None:
         target = target_date.isoformat() if isinstance(target_date, date) else target_date
         query = "SELECT * FROM refill_events WHERE target_date = ?"
@@ -432,8 +456,14 @@ class EventsRepository:
             query += " AND window_label = ?"
             params.append(window_label)
         query += " ORDER BY ran_at DESC, id DESC LIMIT 1"
-        with self.database.connection() as conn:
-            return _row_dict(conn.execute(query, params).fetchone())
+        if conn is None:
+            with self.database.connection() as active:
+                return self.refill_for_target(
+                    target_date,
+                    window_label,
+                    conn=active,
+                )
+        return _row_dict(conn.execute(query, params).fetchone())
 
     def history(self, limit: int = 12) -> list[dict[str, Any]]:
         bounded = max(1, min(int(limit), 200))

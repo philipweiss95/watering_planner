@@ -42,8 +42,59 @@ Pläne. Historische Beobachtungen werden nicht nachträglich umgedeutet. UTC-
 Grenzen halten die Schlüssel bei Sommer- und Winterzeit eindeutig.
 
 Frühe 1.5-Daten aus `refill_window_observations` werden additiv und
-wiederholbar übernommen. Schema-Version 4 verändert keine vorhandenen
+wiederholbar übernommen. Schema-Version 5 verändert keine vorhandenen
 Bewässerungs-, Nachfüll-, Pflanzen- oder Tankdaten.
+
+## Persistente Nachfüllläufe
+
+Ein physischer Nachfülllauf besteht aus zwei persistenten Phasen:
+
+1. `RefillRunService.start()` öffnet `BEGIN IMMEDIATE`, prüft `run_id`,
+   Automatik, Fenster, Cooldown, aktive Läufe, Tankplatz, Vorrat und
+   Pumpendurchsatz und schreibt eine Reservierung in `refill_runs`.
+2. Bei automatischen Läufen begrenzen Fensterende minus zehn Sekunden
+   Sicherheitsreserve und der Pumpendurchsatz die freigegebene Menge.
+3. Home Assistant bestätigt nach dem Einschalten optional `running` und
+   meldet nach dem sicheren Ausschalten dieselbe `run_id` an
+   `/api/refill/complete`.
+4. Der Abschluss verwendet ausschließlich die reservierte Menge und Dauer.
+   Fensterende und später geänderte Konfiguration werden nicht neu geprüft.
+5. Tankbilanz, `refill_event`, Abschlussstatus und Erfüllung des exakten
+   Fensterplans werden gemeinsam unter `BEGIN IMMEDIATE` gespeichert.
+
+Die freigegebene Pumpmenge, die anhand des aktuellen Vorrats physisch mögliche
+Menge und die im Haupttank noch bilanzierbare Menge bleiben getrennt sichtbar.
+Der Haupttank überschreitet nie seine Kapazität, der Vorrat wird nie negativ.
+Jede Differenz erzeugt einen persistenten Konsistenzhinweis und verlangt eine
+manuelle Tankprüfung.
+
+Reservierungen laufen 15 Minuten nach dem erwarteten Abschluss aus und geben
+den exklusiven Startplatz frei. Sie werden nicht als sicher „nicht gelaufen“
+behandelt: `expired`, ein fehlgeschlagener bereits laufender Vorgang und eine
+unvollständige Buchung bleiben in der Diagnose sichtbar. Ein verspäteter
+Abschluss einer abgelaufenen Reservierung ist weiterhin möglich und
+idempotent. Zwei parallele Starts werden über `BEGIN IMMEDIATE` und den
+partiellen Unique-Index auf `active_slot` serialisiert; die `run_id` und der
+Unique-Index von `refill_events` verhindern doppelte Abschlussbuchungen.
+
+Die Home-Assistant-Vorlage merkt die aktive Kennung in `input_text`, startet
+einen restaurierbaren Sicherheitstimer und schaltet die Pumpe sowohl beim
+Timerablauf als auch bei einem Home-Assistant-Neustart aus. Ein Neustart kann
+die bis dahin tatsächlich übertragene Teilmenge nicht rekonstruieren; der Lauf
+wird deshalb als unklar gemeldet und muss anhand der Tankstände geprüft werden.
+
+## Atomare Konfiguration
+
+`HosesRepository.save()` validiert die vollständige Schlauchliste, alle
+Fremdschlüssel und Anschlussgrenzen vor der ersten Änderung. Entfernen,
+Hinzufügen, Umhängen sowie die Legacy-Felder der Pflanzen werden gemeinsam
+committet.
+
+`ConfigurationService.save_balcony()` normalisiert Balkon, Zeitzone, Tanks,
+Pumpe, Ausgänge, Wände, Kalibrierungen, Automatik und die komplette
+`planner_config`, bevor es schreibt. Alle beteiligten Repositories verwenden
+danach dieselbe SQLite-Verbindung. Ein Fehler an beliebiger Stelle rollt die
+gesamte Einstellungsseite zurück.
 
 ## Worker und Benachrichtigungen
 

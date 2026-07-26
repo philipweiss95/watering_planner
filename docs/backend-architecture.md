@@ -42,6 +42,8 @@ Repositories, Uhren, Netzwerktransporte und andere Service-Ports explizit.
 - `repositories/tanks.py`: Balkon, Tanks, Ausgänge und Wände.
 - `repositories/events.py`: Bewässerung, Nachfüllung, Tankfüllung,
   Kalibrierung und Nachfüllfenster-Beobachtungen.
+- `repositories/refill_runs.py`: persistente Reservierungen und
+  Zustandsübergänge physischer Nachfüllläufe.
 - `repositories/notifications.py`: Warnungszustände und Versandprotokoll.
 
 SQL steht ausschließlich in `schema.py`, `database.py` und den Repositories.
@@ -60,8 +62,11 @@ HTTP-Routen enthalten keine SQL-Strings.
 - `services/forecast.py`: Verbrauchstage und chronologische Tankprognose.
 - `services/refill.py`: Nachfüllfenster, Status, Cooldown,
   verpasste Fenster und manuelle Nachfüllpläne.
-- `services/watering.py`: atomare, idempotente Bewässerungs- und
-  Nachfüllbuchungen sowie manuelle Tankfüllungen.
+- `services/refill_runs.py`: atomarer Start, Laufbestätigung, Abschluss,
+  Fehler, Ablauf und Diagnose persistenter Nachfüllläufe.
+- `services/watering.py`: atomare, idempotente Bewässerungsbuchungen sowie
+  manuelle Tankfüllungen; der alte Nachfüllaufruf bleibt nur als
+  Kompatibilitätsschicht.
 - `services/calibration.py`: Kalibrierung von Haupt- und Nachfüllpumpe.
 - `services/home_assistant.py`: Diagnose und Webhook-Transport.
 - `services/notifications.py`: Ermittlung der Warnungsbedingungen.
@@ -128,12 +133,19 @@ Schutzlinie gegen parallele Doppelbuchungen.
 4. Nach Fensterende wird ein ausführbarer, benötigter und nicht erfüllter Plan
    als `window_missed` gemeldet. Historische Pläne bleiben unverändert;
    Konfigurationsänderungen stornieren nur noch nicht begonnene Zukunftspläne.
-5. `WateringService.mark_refill_run()` prüft die `run_id` unter
-   `BEGIN IMMEDIATE`.
-6. Die tatsächlich mögliche Menge wird erneut gegen Haupttankkapazität und
-   Vorratstank begrenzt.
-7. Beide Tankstände und das Nachfüllereignis werden atomar verbucht.
-8. Die Prognose stellt Wasser erst entsprechend Pumpendurchsatz und
+5. `RefillRunService.start()` reserviert vor dem Einschalten unter
+   `BEGIN IMMEDIATE` die feste Menge, Dauer, Tank-Ausgangswerte und das exakte
+   Fenster. Bei automatischen Läufen begrenzt die verbleibende Fensterzeit
+   abzüglich zehn Sekunden Sicherheitsreserve die Freigabe.
+6. Home Assistant meldet nach dem Ausschalten dieselbe `run_id`. Das Fenster
+   darf zu diesem Zeitpunkt bereits geschlossen sein.
+7. Der Abschluss verwendet keine neu geplante Menge. Physischer
+   Vorratsverbrauch, im Haupttank bilanzierbarer Zugang, Ereignis,
+   Reservierungsstatus und Fenstererfüllung werden atomar gespeichert.
+8. Doppelte oder parallele Abschlussmeldungen geben dasselbe persistierte
+   Ergebnis zurück. Ablauf und unklare Pumpenzustände bleiben als manuelle
+   Prüfhinweise sichtbar.
+9. Die Prognose stellt Wasser erst entsprechend Pumpendurchsatz und
    Fertigstellungszeit im Haupttank bereit.
 
 Vorratswasser versorgt niemals direkt einen Bewässerungslauf.
@@ -144,6 +156,13 @@ Vorratswasser versorgt niemals direkt einen Bewässerungslauf.
 - `immediate=True` setzt `BEGIN IMMEDIATE` vor idempotenten Tankbuchungen.
 - `watering_events.run_id` und `refill_events.run_id` besitzen partielle
   Unique-Indizes.
+- `refill_runs.run_id` ist Primärschlüssel; ein partieller Unique-Index auf
+  `active_slot` erlaubt höchstens einen reservierten oder laufenden
+  Nachfüllvorgang.
+- Nachfüllabschluss, Tankbilanz, Ereignis und Fenstererfüllung teilen eine
+  `BEGIN IMMEDIATE`-Transaktion.
+- Schlauch-Snapshot und vollständige Einstellungsseite verwenden jeweils eine
+  gemeinsame Transaktion über alle beteiligten Repositories.
 - Die Benachrichtigungsentscheidung, der Logeintrag und der neue
   Benachrichtigungszustand laufen in einer gemeinsamen
   `NotificationsRepository`-Transaktion.
@@ -153,7 +172,7 @@ Vorratswasser versorgt niemals direkt einen Bewässerungslauf.
 
 `Application.initialize()` führt `schema.initialize()` bei jedem Start aus.
 Die Schritte sind additiv und wiederholbar; `PRAGMA user_version` ist aktuell
-`4`.
+`5`.
 
 Wichtige Ergänzungen gegenüber 1.4.2:
 
@@ -165,6 +184,9 @@ Wichtige Ergänzungen gegenüber 1.4.2:
 - `refill_window_observations`
 - `refill_window_plans` mit absoluten UTC-Grenzen, Bedarf,
   Ausführbarkeit, Transfermenge, Erfüllung und Stornierung
+- `refill_runs` mit Zwei-Phasen-Status, reservierter Menge und Dauer,
+  Start-/Ablaufzeiten, physischer und bilanzierter Menge sowie
+  Konsistenzhinweisen
 
 Legacy-Pflanzen und Schlauchzuordnungen werden ohne Duplikate übernommen.
 Ein realitätsnahes 1.4.2-Fixture wird zweimal migriert und auf Datenerhalt,

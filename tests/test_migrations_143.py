@@ -137,6 +137,7 @@ class Migration143Tests(unittest.TestCase):
                 "notification_log",
                 "refill_window_observations",
                 "refill_window_plans",
+                "refill_runs",
             }
             <= table_names
         )
@@ -208,6 +209,44 @@ class Migration143Tests(unittest.TestCase):
                 "ix_refill_window_plans_due",
             }
             <= refill_plan_indexes
+        )
+        refill_run_columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(refill_runs)")
+        }
+        self.assertTrue(
+            {
+                "run_id",
+                "run_type",
+                "status",
+                "planned_transfer_ml",
+                "physical_transfer_ml",
+                "main_accounted_ml",
+                "planned_duration_seconds",
+                "main_tank_start_ml",
+                "refill_tank_start_ml",
+                "expected_complete_at",
+                "expires_at",
+                "consistency_delta_ml",
+                "needs_manual_review",
+            }
+            <= refill_run_columns
+        )
+        refill_run_indexes = {
+            row["name"]
+            for row in conn.execute(
+                """
+                SELECT name FROM sqlite_master
+                WHERE type = 'index' AND tbl_name = 'refill_runs'
+                """
+            )
+        }
+        self.assertTrue(
+            {
+                "ux_refill_runs_active_slot",
+                "ix_refill_runs_status_updated",
+            }
+            <= refill_run_indexes
         )
 
     @staticmethod

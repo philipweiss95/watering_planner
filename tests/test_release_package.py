@@ -73,8 +73,12 @@ class ReleasePackageTests(unittest.TestCase):
         with zipfile.ZipFile(self.archive) as archive:
             names = {info.filename for info in archive.infolist()}
         self.assertIn(f"{PACKAGE_ROOT}/watering_backend/services/weather.py", names)
+        self.assertIn(f"{PACKAGE_ROOT}/watering_backend/services/refill_runs.py", names)
+        self.assertIn(f"{PACKAGE_ROOT}/watering_backend/repositories/refill_runs.py", names)
         self.assertIn(f"{PACKAGE_ROOT}/public/js/dashboard.js", names)
         self.assertIn(f"{PACKAGE_ROOT}/public/css/responsive.css", names)
+        self.assertIn(f"{PACKAGE_ROOT}/home-assistant/configuration.yaml", names)
+        self.assertIn(f"{PACKAGE_ROOT}/home-assistant/automations.yaml", names)
         self.assertIn(f"{PACKAGE_ROOT}/scripts/verify_release_runtime.py", names)
         for entry in package_release.INCLUDES:
             prefix = f"{PACKAGE_ROOT}/{entry}"

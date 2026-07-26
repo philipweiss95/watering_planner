@@ -657,7 +657,10 @@ def trigger_home_assistant_manual_refill(
     result: dict[str, Any],
     run_id: object = None,
 ) -> str:
-    return _application().home_assistant.trigger_manual_refill(result, run_id)
+    return _application().trigger_home_assistant_manual_refill(
+        result,
+        run_id,
+    )
 
 
 def evaluate(*args, **kwargs) -> dict[str, Any]:
@@ -737,7 +740,10 @@ def mark_refill_run(
     source: str = "home_assistant",
     run_id: object = None,
 ) -> dict[str, Any]:
-    return _application().watering.mark_refill_run(source, run_id)
+    return _application().mark_refill_run(
+        source=source,
+        run_id=run_id,
+    )
 
 
 def fill_tank(tank_name: str) -> None:

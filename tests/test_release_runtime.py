@@ -12,7 +12,7 @@ class FakeRuntimeClient:
         self.refill_tank = 41_007
         self.mutate_duplicate = mutate_duplicate
         self.watering_events = {}
-        self.refill_events = {}
+        self.refill_runs = {}
 
     def state(self):
         return {
@@ -66,22 +66,53 @@ class FakeRuntimeClient:
                     "idempotent_replay": replay,
                 }
             }
-        if path == "/api/refill/mark-run":
+        if path == "/api/refill/start":
             run_id = payload["run_id"]
-            replay = run_id in self.refill_events
-            if not replay:
-                self.refill_events[run_id] = {
-                    "id": 301,
+            if run_id not in self.refill_runs:
+                self.refill_runs[run_id] = {
                     "run_id": run_id,
-                    "transferred_ml": 2_000,
+                    "status": "reserved",
+                    "planned_transfer_ml": 2_000,
+                    "physical_transfer_ml": None,
                 }
+            return {
+                "refill_run": copy.deepcopy(
+                    self.refill_runs[run_id]
+                )
+            }
+        if path == "/api/refill/running":
+            run_id = payload["run_id"]
+            self.refill_runs[run_id]["status"] = "running"
+            return {
+                "refill_run": copy.deepcopy(
+                    self.refill_runs[run_id]
+                )
+            }
+        if path == "/api/refill/complete":
+            run_id = payload["run_id"]
+            replay = self.refill_runs[run_id]["status"] == "completed"
+            if not replay:
+                self.refill_runs[run_id].update(
+                    {
+                        "status": "completed",
+                        "physical_transfer_ml": 2_000,
+                        "transferred_ml": 2_000,
+                    }
+                )
                 self.main_tank += 2_000
                 self.refill_tank -= 2_000
             return {
-                "refill": {
-                    **self.refill_events[run_id],
+                "refill_run": {
+                    **self.refill_runs[run_id],
                     "idempotent_replay": replay,
                 }
+            }
+        if path.startswith("/api/refill/runs/"):
+            run_id = path.rsplit("/", 1)[-1]
+            return {
+                "refill_run": copy.deepcopy(
+                    self.refill_runs[run_id]
+                )
             }
         if path == "/api/diagnostics/notifications":
             return {"smtp": {"enabled": False}, "worker_running": False}

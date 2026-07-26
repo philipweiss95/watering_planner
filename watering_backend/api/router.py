@@ -69,6 +69,33 @@ class ApiContext(Protocol):
         run_id: object = None,
     ) -> dict[str, Any]: ...
 
+    def start_refill_run(
+        self,
+        *,
+        run_type: str,
+        run_id: object,
+        source: str = "home_assistant",
+    ) -> dict[str, Any]: ...
+
+    def mark_refill_running(self, run_id: object) -> dict[str, Any]: ...
+
+    def complete_refill_run(
+        self,
+        run_id: object,
+        *,
+        completion_reason: str = "pump_stopped",
+    ) -> dict[str, Any]: ...
+
+    def fail_refill_run(
+        self,
+        run_id: object,
+        *,
+        error: object = "",
+        may_have_transferred: bool | None = None,
+    ) -> dict[str, Any]: ...
+
+    def get_refill_run(self, run_id: object) -> dict[str, Any]: ...
+
     def trigger_home_assistant_manual_run(
         self,
         result: dict[str, Any],

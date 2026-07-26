@@ -1,6 +1,35 @@
 import { relativeAge } from "./format.js";
 import { badge, element, emptyState } from "./ui.js";
 
+function refillRunMessage(refill) {
+  const active = refill.active_run;
+  if (active) {
+    const amount = Number(active.authorized_transfer_ml || active.planned_transfer_ml || 0);
+    const liters = (amount / 1000).toLocaleString("de-DE", { maximumFractionDigits: 2 });
+    const state = active.status === "running" ? "läuft" : "ist reserviert";
+    const startedAt = active.started_at || active.authorized_at;
+    const elapsed = Math.max(0, Number(active.elapsed_seconds || 0));
+    const elapsedText = elapsed >= 60
+      ? `${Math.floor(elapsed / 60)} min`
+      : `${elapsed} s`;
+    const limits = {
+      refill_tank: "durch Vorrat begrenzt",
+      main_tank_capacity: "durch Tankkapazität begrenzt",
+      window_remaining: "durch Fensterrestzeit begrenzt",
+    };
+    const limitText = (active.limit_reasons || [])
+      .map((reason) => limits[reason] || reason)
+      .join(", ");
+    return `Nachfülllauf ${state}: ${liters} l. Start ${relativeAge(startedAt)}, ${elapsedText} verstrichen. Abschluss erwartet ${relativeAge(active.expected_complete_at)}${limitText ? `, ${limitText}` : ""}.`;
+  }
+  const uncertain = refill.uncertain_runs?.[0];
+  if (uncertain) {
+    const note = uncertain.consistency_note || uncertain.error_text || "Abschlussmeldung fehlt.";
+    return `${note} Tankstände manuell prüfen.`;
+  }
+  return refill.summary || refill.blocked_reason || "Bereit";
+}
+
 export function buildDiagnosticRows(state, evaluation, diagnostics, updater) {
   const weather = {
     ...(state?.weather_status || {}),
@@ -63,14 +92,17 @@ export function buildDiagnosticRows(state, evaluation, diagnostics, updater) {
     {
       id: "refill",
       label: "Nachfüllautomatik",
-      status: refill.severity === "critical"
+      status: refill.manual_review_required || refill.severity === "critical"
         ? "danger"
-        : refill.severity === "warning" || refill.status === "disabled"
+        : refill.active_run || refill.severity === "warning" || refill.status === "disabled"
           ? "warning"
           : "success",
-      lastContact: refill.last_event?.ran_at,
-      message: refill.summary || refill.blocked_reason || "Bereit",
-      action: "manual-refill",
+      lastContact: refill.active_run?.authorized_at
+        || refill.last_successful_run?.completed_at
+        || refill.last_failed_run?.completed_at
+        || refill.last_event?.ran_at,
+      message: refillRunMessage(refill),
+      action: refill.active_run || refill.manual_review_required ? "" : "manual-refill",
       actionLabel: "Nachfüllen",
     },
     {

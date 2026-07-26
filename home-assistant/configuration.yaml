@@ -3,6 +3,18 @@
 # Load the HTTP endpoint used by webhook automation triggers.
 webhook:
 
+input_text:
+  watering_refill_active_run_id:
+    name: Aktiver Nachfuelllauf
+    max: 128
+    initial: ""
+
+timer:
+  watering_refill_pump_guard:
+    name: Nachfuellpumpe Sicherheitsabschaltung
+    duration: "00:10:00"
+    restore: true
+
 sensor:
   - platform: rest
     name: Bewaesserung Planner
@@ -32,12 +44,30 @@ rest_command:
     headers:
       Content-Type: "application/json"
     payload: '{"auto_weather": true, "slot": "morning", "run_id": "{{ run_id }}"}'
-  bewaesserung_mark_refill:
-    url: "http://192.168.178.116:8080/api/refill/mark-run"
+  bewaesserung_refill_start:
+    url: "http://192.168.178.116:8080/api/refill/start"
+    method: POST
+    headers:
+      Content-Type: "application/json"
+    payload: '{"run_id": "{{ run_id }}", "run_type": "{{ run_type }}", "source": "home_assistant"}'
+  bewaesserung_refill_running:
+    url: "http://192.168.178.116:8080/api/refill/running"
     method: POST
     headers:
       Content-Type: "application/json"
     payload: '{"run_id": "{{ run_id }}"}'
+  bewaesserung_refill_complete:
+    url: "http://192.168.178.116:8080/api/refill/complete"
+    method: POST
+    headers:
+      Content-Type: "application/json"
+    payload: '{"run_id": "{{ run_id }}", "completion_reason": "pump_stopped"}'
+  bewaesserung_refill_fail:
+    url: "http://192.168.178.116:8080/api/refill/fail"
+    method: POST
+    headers:
+      Content-Type: "application/json"
+    payload: '{"run_id": "{{ run_id }}", "error": "{{ error }}", "may_have_transferred": {{ may_have_transferred | default(false) | lower }}}'
 
 script:
   bewaesserung_pumpzyklus:
@@ -87,39 +117,136 @@ script:
 
   bewaesserung_nachfuellen:
     alias: Bewaesserung - Haupttank nachfuellen
-    description: Schaltet die zweite Pumpe fuer die vom Planner berechnete Nachfuelldauer.
+    description: Reserviert einen Lauf, schaltet die zweite Pumpe sicher und schliesst genau diese Reservierung ab.
     mode: single
+    max_exceeded: silent
     sequence:
       - variables:
           refill_run_id: "{{ run_id | default(context.id, true) }}"
+          refill_run_type: "{{ run_type | default('automatic', true) }}"
 
       - alias: Nachfuellpumpe vor dem Start ausschalten
         action: switch.turn_off
         target:
-          entity_id: switch.pumpe
+          entity_id: switch.smart_plug_mini_refill
 
       - alias: Neustart der Nachfuellpumpe abwarten
         delay:
           seconds: 2
 
+      - alias: Lauf vor dem Einschalten beim Planner reservieren
+        action: rest_command.bewaesserung_refill_start
+        data:
+          run_id: "{{ refill_run_id }}"
+          run_type: "{{ refill_run_type }}"
+        response_variable: refill_start_response
+
+      - variables:
+          reserved_run: "{{ refill_start_response.content.refill_run | default({}, true) }}"
+          reserved_run_id: "{{ (refill_start_response.content.refill_run | default({}, true)).get('run_id', '') }}"
+          reserved_seconds: "{{ (refill_start_response.content.refill_run | default({}, true)).get('duration_seconds', 0) | int(0) }}"
+
+      - condition: template
+        value_template: >
+          {{ reserved_run_id | length > 0 and reserved_seconds > 0 }}
+
+      - alias: Aktiven Lauf fuer einen HA-Neustart merken
+        action: input_text.set_value
+        target:
+          entity_id: input_text.watering_refill_active_run_id
+        data:
+          value: "{{ reserved_run_id }}"
+
+      - alias: Unabhaengige Sicherheitsabschaltung starten
+        action: timer.start
+        target:
+          entity_id: timer.watering_refill_pump_guard
+        data:
+          duration: "{{ reserved_seconds | int(0) + 15 }}"
+
       - alias: Nachfuellpumpe einschalten
         action: switch.turn_on
         target:
-          entity_id: switch.pumpe
+          entity_id: switch.smart_plug_mini_refill
+        continue_on_error: true
 
-      - alias: Berechnete Nachfuelldauer abwarten
+      - alias: Einschalten bestaetigen
         delay:
-          seconds: "{{ duration_seconds | default((state_attr('sensor.bewaesserung_planner', 'refill') or {}).get('duration_seconds', 0), true) | int(0) }}"
+          seconds: 1
+
+      - choose:
+          - conditions: >
+              {{ not is_state('switch.smart_plug_mini_refill', 'on') }}
+            sequence:
+              - action: timer.cancel
+                target:
+                  entity_id: timer.watering_refill_pump_guard
+              - action: rest_command.bewaesserung_refill_fail
+                data:
+                  run_id: "{{ reserved_run_id }}"
+                  error: "Nachfuellpumpe konnte nicht eingeschaltet werden."
+                  may_have_transferred: false
+                continue_on_error: true
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.watering_refill_active_run_id
+                data:
+                  value: ""
+              - stop: Nachfuellpumpe wurde nicht eingeschaltet
+                error: true
+
+      - alias: Lauf als physisch gestartet markieren
+        action: rest_command.bewaesserung_refill_running
+        data:
+          run_id: "{{ reserved_run_id }}"
+        continue_on_error: true
+
+      - alias: Persistierte Nachfuelldauer abwarten
+        delay:
+          seconds: "{{ reserved_seconds }}"
 
       - alias: Nachfuellpumpe ausschalten
         action: switch.turn_off
         target:
-          entity_id: switch.pumpe
+          entity_id: switch.smart_plug_mini_refill
+        continue_on_error: true
+
+      - alias: Ausschalten pruefen
+        wait_template: >
+          {{ is_state('switch.smart_plug_mini_refill', 'off') }}
+        timeout:
+          seconds: 10
+        continue_on_timeout: true
+
+      - choose:
+          - conditions: >
+              {{ not is_state('switch.smart_plug_mini_refill', 'off') }}
+            sequence:
+              - action: rest_command.bewaesserung_refill_fail
+                data:
+                  run_id: "{{ reserved_run_id }}"
+                  error: "Zustand der Nachfuellpumpe nach dem Ausschalten unklar."
+                  may_have_transferred: true
+                continue_on_error: true
+              - stop: Nachfuellpumpe konnte nicht sicher ausgeschaltet werden
+                error: true
+
+      - alias: Sicherheitsabschaltung beenden
+        action: timer.cancel
+        target:
+          entity_id: timer.watering_refill_pump_guard
 
       - alias: Nachfuelllauf im Planner verbuchen
-        action: rest_command.bewaesserung_mark_refill
+        action: rest_command.bewaesserung_refill_complete
         data:
-          run_id: "{{ refill_run_id }}"
+          run_id: "{{ reserved_run_id }}"
+
+      - alias: Aktiven Lauf loeschen
+        action: input_text.set_value
+        target:
+          entity_id: input_text.watering_refill_active_run_id
+        data:
+          value: ""
 
       - alias: Planner-Aktualisierung abwarten
         delay:

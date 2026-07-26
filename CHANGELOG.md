@@ -18,7 +18,7 @@ Alle stabilen Änderungen am Watering Planner werden in dieser Datei dokumentier
 - Oberfläche modularisiert und für Dashboard, Prognose, Pflanzen, Schläuche,
   Einstellungen, Diagnose und iPhone-PWA neu strukturiert.
 - Bestehende SQLite-Datenbanken werden beim ersten Start automatisch auf
-  Schema-Version 4 migriert.
+  Schema-Version 5 migriert.
 - Die bestehende Pflanzengröße `tree` (`Baum/Strauch`) bleibt beim Laden,
   Bearbeiten, Migrieren und Speichern von Schlauchzuordnungen unverändert.
 - Diagramm und Tagesliste zeigen exakt die ersten 16 lokalen Kalendertage,
@@ -32,6 +32,14 @@ Alle stabilen Änderungen am Watering Planner werden in dieser Datei dokumentier
   Rollback- und Fehlerfallprüfungen abgesichert.
 - Releaseprüfung um Paketinhalt, SHA-256-Prüfsumme, Versionskonsistenz und das
   vollständige modulare Backend erweitert.
+- Automatische und manuelle Nachfüllungen reservieren Menge, Dauer und
+  Zeitfenster nun vor dem Pumpenstart persistent. Abschluss, Tankbilanz,
+  Ereignis und Fenstererfüllung erfolgen danach atomar mit derselben `run_id`.
+- Schlauchzuordnungen und die vollständige Einstellungsseite werden jeweils
+  erst nach Gesamtvalidierung in genau einer SQLite-Transaktion gespeichert.
+- Offene, abgelaufene und inkonsistent abgeschlossene Nachfüllläufe werden in
+  API und Systemdiagnose sichtbar; die Home-Assistant-Vorlage enthält eine
+  unabhängige Sicherheitsabschaltung.
 
 ## [1.4.3] - 2026-07-25
 

@@ -44,31 +44,12 @@ jobs:
       - name: Prepare v1.4.3 runtime fixture
         run: |
           PYTHONPATH=tests python - <<'PY'
-          import json
-          import sqlite3
-          from datetime import datetime, timezone
           from pathlib import Path
           from v143_fixture import create_v143_database
 
           database = Path("data/watering.sqlite3")
           database.unlink(missing_ok=True)
           create_v143_database(database)
-          pending = {
-              "created_at": datetime.now(timezone.utc).isoformat(),
-              "run_id": "ci-prepared-refill",
-              "source": "release_runtime_check",
-              "target_date": datetime.now(timezone.utc).date().isoformat(),
-              "requested_ml": 2000,
-              "transferred_ml": 2000,
-              "duration_seconds": 90,
-              "window_label": "ci-runtime",
-          }
-          with sqlite3.connect(database) as connection:
-              connection.execute(
-                  "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)",
-                  ("pending_refill_request", json.dumps(pending)),
-              )
-              connection.commit()
           PY
           cat > .env.synology <<'EOF'
           NOTIFICATION_WORKER_DISABLED=true

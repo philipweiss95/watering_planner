@@ -36,41 +36,70 @@ class SettingsRepository:
         self.database = database
         self.defaults = defaults or SettingsDefaults()
 
-    def get(self, key: str, default: str = "") -> str:
-        with self.database.connection() as conn:
-            try:
-                row = conn.execute(
-                    "SELECT value FROM app_settings WHERE key = ?",
-                    (key,),
-                ).fetchone()
-            except sqlite3.OperationalError:
-                return default
-            return str(row["value"]) if row else default
+    def get(
+        self,
+        key: str,
+        default: str = "",
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> str:
+        if conn is None:
+            with self.database.connection() as active:
+                return self.get(key, default, conn=active)
+        try:
+            row = conn.execute(
+                "SELECT value FROM app_settings WHERE key = ?",
+                (key,),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            return default
+        return str(row["value"]) if row else default
 
-    def set(self, key: str, value: str) -> None:
-        with self.database.connection() as conn:
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS app_settings "
-                "(key TEXT PRIMARY KEY, value TEXT NOT NULL)"
-            )
-            conn.execute(
-                """
-                INSERT INTO app_settings (key, value)
-                VALUES (?, ?)
-                ON CONFLICT(key) DO UPDATE SET value = excluded.value
-                """,
-                (key, value),
-            )
+    def set(
+        self,
+        key: str,
+        value: str,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> None:
+        if conn is None:
+            with self.database.connection() as active:
+                self.set(key, value, conn=active)
+            return
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS app_settings "
+            "(key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        )
+        conn.execute(
+            """
+            INSERT INTO app_settings (key, value)
+            VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """,
+            (key, value),
+        )
 
-    def delete(self, key: str) -> None:
-        with self.database.connection() as conn:
-            try:
-                conn.execute("DELETE FROM app_settings WHERE key = ?", (key,))
-            except sqlite3.OperationalError:
-                pass
+    def delete(
+        self,
+        key: str,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> None:
+        if conn is None:
+            with self.database.connection() as active:
+                self.delete(key, conn=active)
+            return
+        try:
+            conn.execute("DELETE FROM app_settings WHERE key = ?", (key,))
+        except sqlite3.OperationalError:
+            pass
 
-    def planner_config(self) -> dict:
-        raw = self.get("planner_config", "")
+    def planner_config(
+        self,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> dict:
+        raw = self.get("planner_config", "", conn=conn)
         saved: dict = {}
         normalized_legacy_interval = False
         if raw:
@@ -113,6 +142,7 @@ class SettingsRepository:
             legacy_raw = self.get(
                 "refill_schedule_times",
                 json.dumps(list(self.defaults.refill_run_times)),
+                conn=conn,
             )
             try:
                 legacy_value = json.loads(legacy_raw)
@@ -145,45 +175,89 @@ class SettingsRepository:
                     separators=(",", ":"),
                     sort_keys=True,
                 ),
+                conn=conn,
             )
         return config
 
-    def save_planner_config(self, value: object) -> dict:
+    def save_planner_config(
+        self,
+        value: object,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> dict:
         config = validate_planner_config(value)
         self.set(
             "planner_config",
             json.dumps(config, separators=(",", ":"), sort_keys=True),
+            conn=conn,
         )
         self.set(
             "refill_schedule_times",
             json.dumps([item["start"] for item in config["refill_windows"]]),
+            conn=conn,
         )
         return config
 
-    def refill_automation_enabled(self) -> bool:
-        return self.get("refill_automation_enabled", "true").lower() not in {
+    def refill_automation_enabled(
+        self,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> bool:
+        return self.get(
+            "refill_automation_enabled",
+            "true",
+            conn=conn,
+        ).lower() not in {
             "0",
             "false",
             "off",
             "no",
         }
 
-    def save_refill_automation_enabled(self, value: object) -> None:
+    def save_refill_automation_enabled(
+        self,
+        value: object,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> None:
         enabled = str(value).lower() in {"1", "true", "on", "yes"}
-        self.set("refill_automation_enabled", "true" if enabled else "false")
+        self.set(
+            "refill_automation_enabled",
+            "true" if enabled else "false",
+            conn=conn,
+        )
 
-    def main_pump_calibration_factor(self) -> float:
+    def main_pump_calibration_factor(
+        self,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> float:
         try:
-            factor = float(self.get("main_pump_calibration_factor", "1"))
+            factor = float(
+                self.get(
+                    "main_pump_calibration_factor",
+                    "1",
+                    conn=conn,
+                )
+            )
         except ValueError:
             return 1.0
         return factor if 0.1 <= factor <= 10 else 1.0
 
-    def save_main_pump_calibration_factor(self, value: object) -> None:
+    def save_main_pump_calibration_factor(
+        self,
+        value: object,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> None:
         factor = float(value)
         if not math.isfinite(factor) or not 0.1 <= factor <= 10:
             raise ValueError("Der Verbrauchsfaktor muss zwischen 0,1 und 10 liegen")
-        self.set("main_pump_calibration_factor", f"{factor:.6g}")
+        self.set(
+            "main_pump_calibration_factor",
+            f"{factor:.6g}",
+            conn=conn,
+        )
 
     def calibrated_consumption_ml(self, nominal_ml: int | float) -> int:
         return max(
@@ -214,8 +288,12 @@ class SettingsRepository:
             raise ValueError("Mindestens eine Nachfüllzeit muss angegeben werden")
         return sorted(times, key=parse_hhmm)
 
-    def refill_schedule_times(self) -> list[str]:
-        raw = self.get("planner_config", "")
+    def refill_schedule_times(
+        self,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> list[str]:
+        raw = self.get("planner_config", "", conn=conn)
         if raw:
             try:
                 value = json.loads(raw)
@@ -226,9 +304,14 @@ class SettingsRepository:
                 pass
         return list(self.defaults.refill_run_times)
 
-    def save_refill_schedule_times(self, value: object) -> None:
+    def save_refill_schedule_times(
+        self,
+        value: object,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> None:
         times = self.normalize_refill_schedule_times(value)
-        config = self.planner_config()
+        config = self.planner_config(conn=conn)
         config["refill_windows"] = []
         for item in times:
             start = datetime.combine(date.today(), parse_hhmm(item))
@@ -242,13 +325,21 @@ class SettingsRepository:
             config["refill_windows"].append(
                 {"start": item, "end": end.strftime("%H:%M")}
             )
-        self.save_planner_config(config)
+        self.save_planner_config(config, conn=conn)
 
-    def refill_cooldown_minutes_per_liter(self) -> float:
+    def refill_cooldown_minutes_per_liter(
+        self,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> float:
         fallback = self.defaults.refill_cooldown_minutes_per_liter
         try:
             value = float(
-                self.get("refill_cooldown_minutes_per_liter", str(fallback))
+                self.get(
+                    "refill_cooldown_minutes_per_liter",
+                    str(fallback),
+                    conn=conn,
+                )
             )
         except ValueError:
             return float(fallback)
@@ -256,7 +347,12 @@ class SettingsRepository:
             return float(fallback)
         return value
 
-    def save_refill_cooldown_minutes_per_liter(self, value: object) -> None:
+    def save_refill_cooldown_minutes_per_liter(
+        self,
+        value: object,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> None:
         minutes = float(value)
         if (
             not math.isfinite(minutes)
@@ -267,11 +363,21 @@ class SettingsRepository:
                 "Nachfüllsperre pro Liter muss zwischen 1 und "
                 f"{self.defaults.refill_max_cooldown_minutes} Minuten liegen"
             )
-        self.set("refill_cooldown_minutes_per_liter", f"{minutes:g}")
+        self.set(
+            "refill_cooldown_minutes_per_liter",
+            f"{minutes:g}",
+            conn=conn,
+        )
 
-    def saved_watering_amount_percent(self) -> float | None:
+    def saved_watering_amount_percent(
+        self,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> float | None:
         try:
-            amount = float(self.get("watering_amount_percent"))
+            amount = float(
+                self.get("watering_amount_percent", conn=conn)
+            )
         except ValueError:
             return None
         if not (
@@ -283,8 +389,12 @@ class SettingsRepository:
             return None
         return amount
 
-    def water_model_calibration(self) -> float:
-        amount = self.saved_watering_amount_percent()
+    def water_model_calibration(
+        self,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> float:
+        amount = self.saved_watering_amount_percent(conn=conn)
         if amount is not None:
             return self.defaults.water_model_calibration * amount / 100
         try:
@@ -292,6 +402,7 @@ class SettingsRepository:
                 self.get(
                     "water_model_calibration",
                     str(self.defaults.water_model_calibration),
+                    conn=conn,
                 )
             )
         except ValueError:
@@ -310,7 +421,12 @@ class SettingsRepository:
             return self.defaults.water_model_calibration
         return calibration
 
-    def save_water_model_calibration_percent(self, value: object) -> None:
+    def save_water_model_calibration_percent(
+        self,
+        value: object,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> None:
         percent = float(value)
         if not (
             math.isfinite(percent)
@@ -323,20 +439,33 @@ class SettingsRepository:
                 f"{self.defaults.minimum_water_model_percent:g} und "
                 f"{self.defaults.maximum_water_model_percent:g} Prozent liegen"
             )
-        self.delete("watering_amount_percent")
-        self.set("water_model_calibration", str(percent / 100))
+        self.delete("watering_amount_percent", conn=conn)
+        self.set(
+            "water_model_calibration",
+            str(percent / 100),
+            conn=conn,
+        )
 
-    def watering_amount_percent(self) -> float:
-        amount = self.saved_watering_amount_percent()
+    def watering_amount_percent(
+        self,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> float:
+        amount = self.saved_watering_amount_percent(conn=conn)
         if amount is not None:
             return amount
         return (
-            self.water_model_calibration()
+            self.water_model_calibration(conn=conn)
             / self.defaults.water_model_calibration
             * 100
         )
 
-    def save_watering_amount_percent(self, value: object) -> None:
+    def save_watering_amount_percent(
+        self,
+        value: object,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> None:
         amount = float(value)
         if not (
             math.isfinite(amount)
@@ -349,5 +478,9 @@ class SettingsRepository:
                 f"{self.defaults.minimum_watering_amount_percent:g} und "
                 f"{self.defaults.maximum_watering_amount_percent:g} Prozent liegen"
             )
-        self.delete("water_model_calibration")
-        self.set("watering_amount_percent", str(amount))
+        self.delete("water_model_calibration", conn=conn)
+        self.set(
+            "watering_amount_percent",
+            str(amount),
+            conn=conn,
+        )

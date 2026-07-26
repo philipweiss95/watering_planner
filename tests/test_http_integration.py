@@ -155,6 +155,71 @@ class HttpIntegrationTests(unittest.TestCase):
             fetched_at,
         )
 
+    def test_refill_run_http_lifecycle_is_persistent_and_idempotent(
+        self,
+    ) -> None:
+        before = self.request("/api/state")["balcony"]
+        started = self.request(
+            "/api/refill/start",
+            {
+                "run_type": "manual",
+                "run_id": "http-refill-lifecycle",
+                "source": "integration_test",
+            },
+        )["refill_run"]
+        running = self.request(
+            "/api/refill/running",
+            {"run_id": "http-refill-lifecycle"},
+        )["refill_run"]
+        completed = self.request(
+            "/api/refill/complete",
+            {"run_id": "http-refill-lifecycle"},
+        )
+        repeated = self.request(
+            "/api/refill/complete",
+            {"run_id": "http-refill-lifecycle"},
+        )
+        fetched = self.request(
+            "/api/refill/runs/http-refill-lifecycle"
+        )["refill_run"]
+
+        self.assertEqual(started["status"], "reserved")
+        self.assertEqual(running["status"], "running")
+        self.assertEqual(
+            completed["refill_run"]["status"],
+            "completed",
+        )
+        self.assertFalse(
+            completed["refill_run"]["idempotent_replay"]
+        )
+        self.assertTrue(
+            repeated["refill_run"]["idempotent_replay"]
+        )
+        self.assertEqual(fetched["status"], "completed")
+        self.assertEqual(
+            fetched["planned_transfer_ml"],
+            started["planned_transfer_ml"],
+        )
+        self.assertEqual(
+            before["tank_current_ml"]
+            + started["planned_transfer_ml"],
+            completed["balcony"]["tank_current_ml"],
+        )
+        self.assertEqual(
+            completed["balcony"]["tank_current_ml"],
+            repeated["balcony"]["tank_current_ml"],
+        )
+        with self.application.database.connection() as conn:
+            event_count = conn.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM refill_events
+                WHERE run_id = ?
+                """,
+                ("http-refill-lifecycle",),
+            ).fetchone()["count"]
+        self.assertEqual(event_count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

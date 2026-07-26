@@ -19,7 +19,17 @@ RefillAutomationStatus = Literal[
     "window_pending",
     "window_missed",
     "running",
+    "run_unconfirmed",
     "completed",
+]
+RefillRunType = Literal["automatic", "manual"]
+RefillRunStatus = Literal[
+    "reserved",
+    "running",
+    "completed",
+    "failed",
+    "expired",
+    "cancelled",
 ]
 
 
@@ -135,6 +145,44 @@ class RefillEvent(TypedDict, total=False):
     source: str
     idempotent_replay: bool
     legacy_generated_run_id: bool
+
+
+class RefillRun(TypedDict, total=False):
+    run_id: str
+    run_type: RefillRunType
+    status: RefillRunStatus
+    created_at: str
+    authorized_at: str
+    started_at: str
+    completed_at: str
+    target_date: str
+    window_key: str
+    window_label: str
+    window_start: str
+    window_end: str
+    requested_ml: int
+    planned_transfer_ml: int
+    planned_duration_seconds: int
+    main_tank_start_ml: int
+    refill_tank_start_ml: int
+    pump_ml_per_min: int
+    expected_complete_at: str
+    expires_at: str
+    limit_reason: str
+    source: str
+    accounted_transfer_ml: int
+    physical_transfer_ml: int
+    main_accounted_ml: int
+    main_before_complete_ml: int
+    main_after_complete_ml: int
+    refill_before_complete_ml: int
+    refill_after_complete_ml: int
+    consistency_delta_ml: int
+    consistency_note: str
+    needs_manual_review: bool
+    error_text: str
+    completion_reason: str
+    idempotent_replay: bool
 
 
 class PlantCalculation(TypedDict, total=False):

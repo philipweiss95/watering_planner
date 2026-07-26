@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import math
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 from watering_backend.config import local_timezone
 from watering_backend.repositories.events import EventsRepository
@@ -81,6 +81,8 @@ class RefillService:
         minimum_cooldown_minutes: int = 15,
         maximum_cooldown_minutes: int = 12 * 60,
         pending_request_max_age: timedelta = timedelta(hours=2),
+        window_safety_seconds: int = 10,
+        run_diagnostics: Callable[[], dict[str, Any]] | None = None,
     ):
         self.events = events
         self.settings = settings
@@ -91,6 +93,11 @@ class RefillService:
         self.minimum_cooldown_minutes = int(minimum_cooldown_minutes)
         self.maximum_cooldown_minutes = int(maximum_cooldown_minutes)
         self.pending_request_max_age = pending_request_max_age
+        self.window_safety_seconds = max(
+            0,
+            min(int(window_safety_seconds), 60),
+        )
+        self.run_diagnostics = run_diagnostics or (lambda: {})
 
     def _utc_now(self) -> datetime:
         return aware_utc(self._now())
@@ -202,6 +209,14 @@ class RefillService:
         active_window_label = (
             active_window.strftime("%H:%M") if active_window else ""
         )
+        active_window_end = next(
+            (
+                end
+                for start, end, _label in refill_window_pairs
+                if active_window and start == active_window
+            ),
+            None,
+        )
         next_window = next(
             (item for item in refill_windows if aware_utc(item) > now_utc),
             None,
@@ -234,8 +249,40 @@ class RefillService:
             cooldown_until_utc and now_utc < cooldown_until_utc
         )
         schedule_due = bool(active_window)
+        remaining_window_seconds = (
+            max(
+                0,
+                math.floor(
+                    (
+                        aware_utc(active_window_end) - now_utc
+                    ).total_seconds()
+                )
+                - self.window_safety_seconds,
+            )
+            if active_window_end
+            else 0
+        )
+        window_transfer_limit_ml = (
+            math.floor(
+                remaining_window_seconds * pump_ml_per_min / 60
+            )
+            if schedule_due and pump_ml_per_min > 0
+            else 0
+        )
+        authorized_transfer_ml = (
+            min(transferable_ml, window_transfer_limit_ml)
+            if schedule_due
+            else transferable_ml
+        )
+        authorized_duration_seconds = (
+            math.ceil(
+                authorized_transfer_ml / pump_ml_per_min * 60
+            )
+            if pump_ml_per_min and authorized_transfer_ml
+            else 0
+        )
         need_exists = bool(
-            transferable_ml > 0 and pump_ml_per_min > 0
+            authorized_transfer_ml > 0 and pump_ml_per_min > 0
         )
         run_now = bool(
             enabled
@@ -400,7 +447,36 @@ class RefillService:
                 in completed_plan_keys
             ]
 
-        if missed_window_details:
+        run_state = self.run_diagnostics()
+        active_run = run_state.get("active_run")
+        uncertain_runs = run_state.get("uncertain_runs", [])
+        if active_run:
+            status = (
+                "running"
+                if active_run.get("status") == "running"
+                else "running"
+            )
+            severity, blocked, blocked_reason = (
+                "warning",
+                True,
+                "refill_run_active",
+            )
+            run_now = False
+            summary = (
+                "Nachfülllauf ist aktiv; Abschlussmeldung wird erwartet."
+            )
+        elif uncertain_runs:
+            status, severity, blocked, blocked_reason = (
+                "run_unconfirmed",
+                "critical",
+                True,
+                "refill_run_unconfirmed",
+            )
+            run_now = False
+            summary = (
+                "Nachfülllauf ist unbestätigt. Tankstände manuell prüfen."
+            )
+        elif missed_window_details:
             status, severity, blocked, blocked_reason = (
                 "window_missed",
                 "critical",
@@ -537,8 +613,23 @@ class RefillService:
             "transfer_fraction": float(config["refill_fraction"]),
             "refill_strategy": config["refill_strategy"],
             "refill_target_ml": int(config["refill_target_ml"]),
-            "planned_transfer_ml": transferable_ml,
-            "duration_seconds": duration_seconds,
+            "planned_transfer_ml": (
+                authorized_transfer_ml
+                if schedule_due
+                else transferable_ml
+            ),
+            "duration_seconds": (
+                authorized_duration_seconds
+                if schedule_due
+                else duration_seconds
+            ),
+            "window_remaining_seconds": remaining_window_seconds,
+            "window_transfer_limit_ml": window_transfer_limit_ml,
+            "window_safety_seconds": self.window_safety_seconds,
+            "limited_by_window": bool(
+                schedule_due
+                and authorized_transfer_ml < transferable_ml
+            ),
             "pump_ml_per_min": pump_ml_per_min,
             "main_missing_ml": main_missing_ml,
             "blocked_by_empty_refill_tank": bool(refill_current <= 0),
@@ -563,6 +654,7 @@ class RefillService:
             "schedule_due": schedule_due,
             "catch_up": catch_up,
             "last_event": last_event or {},
+            **run_state,
             "refill_tank": {
                 "current_ml": refill_current,
                 "capacity_ml": refill_capacity,

@@ -195,23 +195,52 @@ def verify_runtime(
 
     refill_run_id = f"{run_prefix}-refill"
     before_refill_run = client.request("/api/state")
+    refill_start = client.request(
+        "/api/refill/start",
+        {
+            "run_id": refill_run_id,
+            "run_type": "manual",
+            "source": "release_runtime_check",
+        },
+    )
+    refill_running = client.request(
+        "/api/refill/running",
+        {"run_id": refill_run_id},
+    )
     first_refill_booking = client.request(
-        "/api/refill/mark-run",
-        {"run_id": refill_run_id, "source": "release_runtime_check"},
+        "/api/refill/complete",
+        {"run_id": refill_run_id},
     )
     second_refill_booking = client.request(
-        "/api/refill/mark-run",
-        {"run_id": refill_run_id, "source": "release_runtime_check"},
+        "/api/refill/complete",
+        {"run_id": refill_run_id},
+    )
+    persisted_refill = client.request(
+        f"/api/refill/runs/{refill_run_id}"
     )
     after_refill_run = client.request("/api/state")
-    first_refill_event = first_refill_booking.get("refill")
-    second_refill_event = second_refill_booking.get("refill")
+    reserved_refill = refill_start.get("refill_run")
+    running_refill = refill_running.get("refill_run")
+    first_refill_event = first_refill_booking.get("refill_run")
+    second_refill_event = second_refill_booking.get("refill_run")
+    persisted_refill_run = persisted_refill.get("refill_run")
+    require(isinstance(reserved_refill, dict), "Nachfuellreservierung fehlt")
+    require(isinstance(running_refill, dict), "Laufbestaetigung fehlt")
     require(isinstance(first_refill_event, dict), "Erste Nachfuellbuchung fehlt")
     require(isinstance(second_refill_event, dict), "Wiederholte Nachfuellbuchung fehlt")
+    require(isinstance(persisted_refill_run, dict), "Persistenter Nachfuelllauf fehlt")
+    require(reserved_refill.get("status") == "reserved", "Nachfuelllauf wurde nicht reserviert")
+    require(running_refill.get("status") == "running", "Nachfuelllauf wurde nicht als laufend bestaetigt")
     require(first_refill_event.get("idempotent_replay") is False, "Erste Nachfuellung wurde als Wiederholung behandelt")
     require(second_refill_event.get("idempotent_replay") is True, "Doppelte Nachfuellung wurde erneut verbucht")
     require(first_refill_event.get("run_id") == refill_run_id, "Nachfuell-run_id wurde veraendert")
     require(second_refill_event.get("run_id") == refill_run_id, "Wiederholte Nachfuellung lieferte eine andere run_id")
+    require(persisted_refill_run.get("status") == "completed", "Nachfuelllauf wurde nicht persistent abgeschlossen")
+    require(
+        int(reserved_refill.get("planned_transfer_ml", 0))
+        == int(first_refill_event.get("physical_transfer_ml", 0)),
+        "Abschluss verwendet nicht die reservierte Nachfuellmenge",
+    )
     transferred = int(first_refill_event.get("transferred_ml", 0))
     require(transferred > 0, "Nachfuellbuchung hat kein Wasser uebertragen")
     main_before_refill, reserve_before_refill = _tank_levels(before_refill_run)
@@ -239,6 +268,7 @@ def verify_runtime(
             second_watering,
             first_refill_booking,
             second_refill_booking,
+            persisted_refill,
             notification_diagnostics,
             home_assistant_diagnostics,
         ],

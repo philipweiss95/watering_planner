@@ -97,7 +97,9 @@ Vor dem Update muss die Oberfläche **Version 1.4.3** anzeigen. Anschließend
 `data/watering.sqlite3` und `.env.synology` sichern und 1.5.0 über den
 bestehenden Updater installieren. Nach dem Update Schema, Tankstände, Pflanzen
 und Schläuche prüfen, die Home-Assistant-Aufrufe auf stabile `run_id`-Werte
-umstellen, SMTP zunächst deaktiviert lassen und mit einer Test-E-Mail prüfen.
+umstellen und die neue Nachfüllfolge Start, Pumpenlauf, Abschluss samt
+Sicherheitstimer übernehmen. SMTP zunächst deaktiviert lassen und mit einer
+Test-E-Mail prüfen.
 Die iPhone-PWA danach vollständig schließen und neu laden. Der genaue Ablauf
 einschließlich Datei- und Datenbank-Rollback steht in
 [docs/migration.md](docs/migration.md).
@@ -167,14 +169,23 @@ Die letzten Läufe erscheinen in der Übersicht als Protokoll unter `Bewässerun
 Die `run_id` wird für einen realen Lauf einmal erzeugt und bei jedem Retry
 unverändert wiederverwendet. Home Assistant muss denselben Wert vom
 Start-Webhook bis zur abschließenden Buchung durchreichen. Entsprechendes gilt
-für `POST /api/refill/mark-run`.
+für den zweiphasigen Nachfülllauf:
 
 ```text
-POST /api/refill/mark-run
+POST /api/refill/start
 Content-Type: application/json
 
+{"run_id":"refill-20260725T010000Z","run_type":"automatic"}
+
+POST /api/refill/running
+{"run_id":"refill-20260725T010000Z"}
+
+POST /api/refill/complete
 {"run_id":"refill-20260725T010000Z"}
 ```
+
+Menge und Dauer aus der Startantwort sind verbindlich. Der schmale Endpunkt
+`POST /api/refill/mark-run` bleibt nur für ältere 1.4-Aufrufer erhalten.
 
 ## API
 
@@ -197,11 +208,12 @@ Content-Type: application/json
 - `POST /api/manual-run`: vollständigen Pumpzyklus sofort über Home Assistant anfordern
 - `POST /api/manual-refill`: Nachfülllauf sofort über Home Assistant anfordern
 - `POST /api/homekit/mark-run`: Pumpenlauf mit stabiler `run_id` idempotent verbuchen und Tank reduzieren
-
-Die modulare Backend-Architektur, Migrationen, neuen Prognosefelder,
-Konfigurationswerte, SMTP-Variablen und verbleibenden Risiken sind in
-[docs/backend-architecture.md](docs/backend-architecture.md) dokumentiert.
-- `POST /api/refill/mark-run`: Nachfülllauf mit stabiler `run_id` idempotent verbuchen und Wasser vom Vorratstank in den Haupttank rechnen
+- `POST /api/refill/start`: Nachfüllmenge und Laufzeit vor dem Einschalten persistent reservieren
+- `POST /api/refill/running`: physisch gestarteten Nachfülllauf bestätigen
+- `POST /api/refill/complete`: reservierten Lauf nach dem Ausschalten atomar und idempotent abschließen
+- `POST /api/refill/fail`: nicht gestarteten oder unklar abgebrochenen Lauf melden
+- `GET /api/refill/runs/{run_id}`: persistenten Laufstatus ohne Geheimnisse lesen
+- `POST /api/refill/mark-run`: befristete Legacy-Kompatibilität für alte Aufrufer
 - `POST /api/tanks/main/fill`: Haupttank als voll markieren
 - `POST /api/tanks/refill/fill`: konfigurierbaren Vorratstank als voll markieren
 - `POST /api/calibration/main`: Hauptpumpenfaktor aus `measured_level_percent` kalibrieren
@@ -210,6 +222,10 @@ Konfigurationswerte, SMTP-Variablen und verbleibenden Risiken sind in
 - `POST /api/update/setup`, `/api/update/check`, `/api/update/install`: stabilen GitHub-Updater verwalten
 - `POST /api/automation/pause`: Automatik bis morgen pausieren
 - `POST /api/automation/resume`: Automatik wieder aktivieren
+
+Die modulare Backend-Architektur, Migrationen, neuen Prognosefelder,
+Konfigurationswerte, SMTP-Variablen und verbleibenden Risiken sind in
+[docs/backend-architecture.md](docs/backend-architecture.md) dokumentiert.
 
 Frontend-Module, Bedienänderungen und geprüfte Desktop-/Mobilzustände stehen in
 [docs/frontend-architecture.md](docs/frontend-architecture.md). Die konkreten

@@ -496,7 +496,7 @@ test("hose validation reports duplicates, invalid outlets, limits and uncovered 
   assert.ok(codes.has("plant-unserved"));
 });
 
-test("hose persistence keeps tree in the plant API payload", async () => {
+test("hose persistence sends one atomic snapshot and no plant updates", async () => {
   const calls = [];
   const client = {
     post(path, payload) {
@@ -523,10 +523,12 @@ test("hose persistence keeps tree in the plant API payload", async () => {
     },
     client,
   );
+  assert.equal(calls.length, 1);
   assert.equal(calls[0].path, "/api/hoses");
-  assert.equal(calls[1].path, "/api/plants/15");
-  assert.equal(calls[1].payload.size, "tree");
-  assert.equal(calls[1].payload.hose_numbers, "90");
+  assert.deepEqual(calls[0].payload, {
+    hoses: [{ number: "90", outlet_id: 2, plant_id: 15 }],
+  });
+  assert.equal(calls.some((call) => call.method === "PUT"), false);
 });
 
 test("diagnostics provide all required system rows without secrets", () => {
@@ -544,6 +546,32 @@ test("diagnostics provide all required system rows without secrets", () => {
     "weather", "weather-age", "home-assistant", "watering", "refill", "smtp", "database", "updater",
   ]);
   assert.doesNotMatch(JSON.stringify(rows), /password|webhook/i);
+  const activeRows = buildDiagnosticRows(
+    { weather_status: {}, home_assistant: {}, notifications: {} },
+    {
+      automation: {},
+      refill: {
+        enabled: true,
+        active_run: {
+          status: "running",
+          authorized_transfer_ml: 833,
+          authorized_at: "2026-07-25T08:00:00Z",
+          started_at: "2026-07-25T08:00:02Z",
+          expected_complete_at: "2026-07-25T08:00:52Z",
+          elapsed_seconds: 25,
+          limit_reasons: ["window_remaining"],
+        },
+      },
+    },
+    {},
+    {},
+  );
+  const activeRefill = activeRows.find((row) => row.id === "refill");
+  assert.equal(activeRefill.status, "warning");
+  assert.equal(activeRefill.action, "");
+  assert.match(activeRefill.message, /0,83 l/);
+  assert.match(activeRefill.message, /25 s verstrichen/);
+  assert.match(activeRefill.message, /Fensterrestzeit/);
   const emptyRefill = buildDiagnosticRows(
     { weather_status: {}, home_assistant: {}, notifications: {} },
     {

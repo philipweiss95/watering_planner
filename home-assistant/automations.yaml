@@ -56,23 +56,10 @@
       local_only: false
 
   action:
-    - action: homeassistant.update_entity
-      target:
-        entity_id: sensor.bewaesserung_planner
-
-    - delay:
-        seconds: 2
-
-    - condition: template
-      value_template: >
-        {% set manual_refill = state_attr('sensor.bewaesserung_planner', 'manual_refill') or {} %}
-        {{ manual_refill.get('duration_seconds', 0) | int(0) > 0 }}
-
     - action: script.bewaesserung_nachfuellen
       data:
         run_id: "{{ trigger.json.run_id }}"
-        duration_seconds: >
-          {{ (state_attr('sensor.bewaesserung_planner', 'manual_refill') or {}).get('duration_seconds', 0) | int(0) }}
+        run_type: manual
 
 - id: bewaesserung_haupttank_nachfuellen
   alias: Bewaesserung - Haupttank nachfuellen
@@ -97,6 +84,83 @@
         {{ refill.get('enabled') and refill.get('run_now') and refill.get('duration_seconds', 0) | int(0) > 0 }}
 
     - action: script.bewaesserung_nachfuellen
+      data:
+        run_type: automatic
+
+- id: bewaesserung_nachfuellpumpe_neustart_sicherung
+  alias: Bewaesserung - Nachfuellpumpe nach Neustart sichern
+  description: Schaltet die Nachfuellpumpe bei Home-Assistant-Start aus und markiert einen gemerkten Lauf als unklar.
+  mode: single
+
+  trigger:
+    - platform: homeassistant
+      event: start
+
+  action:
+    - action: switch.turn_off
+      target:
+        entity_id: switch.smart_plug_mini_refill
+      continue_on_error: true
+
+    - action: timer.cancel
+      target:
+        entity_id: timer.watering_refill_pump_guard
+      continue_on_error: true
+
+    - variables:
+        interrupted_run_id: "{{ states('input_text.watering_refill_active_run_id') }}"
+
+    - choose:
+        - conditions: >
+            {{ interrupted_run_id not in ['', 'unknown', 'unavailable'] }}
+          sequence:
+            - action: rest_command.bewaesserung_refill_fail
+              data:
+                run_id: "{{ interrupted_run_id }}"
+                error: "Home Assistant wurde waehrend des Nachfuelllaufs neu gestartet."
+                may_have_transferred: true
+              continue_on_error: true
+            - action: input_text.set_value
+              target:
+                entity_id: input_text.watering_refill_active_run_id
+              data:
+                value: ""
+
+- id: bewaesserung_nachfuellpumpe_sicherheitsabschaltung
+  alias: Bewaesserung - Nachfuellpumpe Sicherheitsabschaltung
+  description: Schaltet die Nachfuellpumpe auch dann aus, wenn das laufende Script abgebrochen wurde.
+  mode: single
+
+  trigger:
+    - platform: event
+      event_type: timer.finished
+      event_data:
+        entity_id: timer.watering_refill_pump_guard
+
+  action:
+    - variables:
+        interrupted_run_id: "{{ states('input_text.watering_refill_active_run_id') }}"
+
+    - action: switch.turn_off
+      target:
+        entity_id: switch.smart_plug_mini_refill
+      continue_on_error: true
+
+    - choose:
+        - conditions: >
+            {{ interrupted_run_id not in ['', 'unknown', 'unavailable'] }}
+          sequence:
+            - action: rest_command.bewaesserung_refill_fail
+              data:
+                run_id: "{{ interrupted_run_id }}"
+                error: "Sicherheitsabschaltung nach ausbleibendem Scriptabschluss."
+                may_have_transferred: true
+              continue_on_error: true
+            - action: input_text.set_value
+              target:
+                entity_id: input_text.watering_refill_active_run_id
+              data:
+                value: ""
 
 - id: bewaesserung_tank_warnung
   alias: Bewaesserung - Tankwarnung

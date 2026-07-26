@@ -8,6 +8,11 @@ muss weder neu erstellt noch erneut veröffentlicht werden.
 Der Git-Tag `v1.4.3` zeigt über das Tag-Objekt `f08acb6c` auf Commit
 `e02ceb198`. Der Branch `main` enthält weiterhin Version 1.4.2 und ist deshalb
 nicht die technische Ausgangsbasis dieser Migration.
+Der Entwicklungsbranch `codex/backend-modularization` enthält den
+Bridge-Commit als echten Git-Vorfahren. Ein späterer normaler Merge nach
+`main` erhält damit die veröffentlichte 1.4.3-Historie. Das
+Release-Verifikationsskript prüft Tag-Objekt, Ziel-Commit und Abstammung vor
+jedem 1.5.0-Paket erneut; weder `main` noch `v1.4.3` werden dabei verändert.
 
 Das veröffentlichte Paket `watering-planner-1.4.3.zip` enthält 26 Dateien,
 deren Inhalt mit diesem Commit übereinstimmt. Seine verifizierte SHA-256-Summe
@@ -101,16 +106,17 @@ docker compose start watering-planner
    `server.py`.
 2. Das bestehende `data`-Volume und `.env.synology` bleiben unverändert.
 3. `NOTIFICATIONS_ENABLED` für den ersten Start von 1.5.0 auf `false` lassen.
-4. Beim Start ergänzt `init_db()` automatisch bis Schema-Version 4:
+4. Beim Start ergänzt `init_db()` automatisch bis Schema-Version 5:
    `run_id`-Spalten, Unique-Indizes sowie `notification_state` und
    `notification_log`. Schema 3 ergänzt additive SMTP-Versuchsfelder und
    `refill_window_observations`. Schema 4 ergänzt die persistenten,
    zeitzonensicheren `refill_window_plans` und übernimmt vorhandene
-   Beobachtungen idempotent. Vorhandene Pflanzen einschließlich `size=tree`,
+   Beobachtungen idempotent. Schema 5 ergänzt `refill_runs` für persistente
+   Start-/Abschlussvorgänge. Vorhandene Pflanzen einschließlich `size=tree`,
    Ereignisse und Tankstände bleiben erhalten; alle SQLite-Verbindungen
    erzwingen danach Fremdschlüssel.
 5. Nach dem Start `GET /api/health` und `GET /api/state` prüfen. Optional per
-   SQLite `PRAGMA user_version;` kontrollieren; erwartet wird `4`.
+   SQLite `PRAGMA user_version;` kontrollieren; erwartet wird `5`.
 
 Alte Aufrufer ohne `run_id` funktionieren übergangsweise weiter. Sie sind bei
 einem HTTP-Retry aber nicht idempotent. Deshalb müssen alle produktiven
@@ -122,12 +128,17 @@ Home-Assistant-Buchungen auf eine stabile `run_id` umgestellt werden.
    `home-assistant/automations.yaml` in die aktiven HA-Dateien übertragen.
 2. Eigene Entity-IDs und die privaten Webhook-IDs beibehalten; niemals die
    Platzhalter aus dem Repository produktiv verwenden.
-3. Sicherstellen, dass die vom manuellen Webhook empfangene `run_id` bis zu
-   `/api/homekit/mark-run` beziehungsweise `/api/refill/mark-run` weitergegeben
-   wird.
-4. In Home Assistant YAML prüfen und die betroffenen Skripte/Automationen neu
+3. Für Nachfüllungen die neuen REST-Aufrufe `/api/refill/start`,
+   `/api/refill/running`, `/api/refill/complete` und `/api/refill/fail`
+   übernehmen. Home Assistant muss vor dem Einschalten reservieren und danach
+   exakt die zurückgegebene `run_id`, Dauer und Menge verwenden.
+4. `input_text.watering_refill_active_run_id` und
+   `timer.watering_refill_pump_guard` aus der Vorlage übernehmen. Die
+   Sicherheitsautomation schaltet die Nachfüllpumpe auch nach Scriptabbruch
+   oder Home-Assistant-Neustart aus.
+5. In Home Assistant YAML prüfen und die betroffenen Skripte/Automationen neu
    laden; bei Änderungen an `configuration.yaml` vollständig neu starten.
-5. Im Planner unter **System** zuerst den sicheren Home-Assistant-Test
+6. Im Planner unter **System** zuerst den sicheren Home-Assistant-Test
    ausführen. Dieser testet nur `/api/` und löst keinen Pumpen-Webhook aus.
 6. Einen echten Lauf erst danach beaufsichtigt testen und im Verlauf prüfen,
    dass genau ein Ereignis mit `run_id` entstanden ist.

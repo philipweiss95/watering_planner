@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from watering_backend.validation import normalize_hose_numbers
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 BASE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS plant_catalog (
@@ -285,7 +285,72 @@ def migrate(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS ix_refill_window_plans_due
         ON refill_window_plans(target_date, window_end, cancelled_at);
+
+        CREATE TABLE IF NOT EXISTS refill_runs (
+            run_id TEXT PRIMARY KEY,
+            run_type TEXT NOT NULL
+                CHECK (run_type IN ('automatic', 'manual')),
+            status TEXT NOT NULL
+                CHECK (
+                    status IN (
+                        'reserved', 'running', 'completed', 'failed',
+                        'expired', 'cancelled'
+                    )
+                ),
+            created_at TEXT NOT NULL,
+            authorized_at TEXT NOT NULL,
+            started_at TEXT,
+            completed_at TEXT,
+            target_date TEXT NOT NULL,
+            window_key TEXT NOT NULL DEFAULT '',
+            window_label TEXT NOT NULL DEFAULT '',
+            window_start TEXT NOT NULL DEFAULT '',
+            window_end TEXT NOT NULL DEFAULT '',
+            requested_ml INTEGER NOT NULL,
+            planned_transfer_ml INTEGER NOT NULL,
+            planned_duration_seconds INTEGER NOT NULL,
+            main_tank_start_ml INTEGER NOT NULL,
+            refill_tank_start_ml INTEGER NOT NULL,
+            pump_ml_per_min INTEGER NOT NULL,
+            expected_complete_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            limit_reason TEXT NOT NULL DEFAULT '',
+            source TEXT NOT NULL,
+            accounted_transfer_ml INTEGER,
+            physical_transfer_ml INTEGER,
+            main_accounted_ml INTEGER,
+            main_before_complete_ml INTEGER,
+            main_after_complete_ml INTEGER,
+            refill_before_complete_ml INTEGER,
+            refill_after_complete_ml INTEGER,
+            consistency_delta_ml INTEGER NOT NULL DEFAULT 0,
+            consistency_note TEXT NOT NULL DEFAULT '',
+            needs_manual_review INTEGER NOT NULL DEFAULT 0,
+            error_text TEXT NOT NULL DEFAULT '',
+            completion_reason TEXT NOT NULL DEFAULT '',
+            active_slot INTEGER,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_refill_runs_active_slot
+        ON refill_runs(active_slot)
+        WHERE active_slot IS NOT NULL;
+
+        CREATE INDEX IF NOT EXISTS ix_refill_runs_status_updated
+        ON refill_runs(status, updated_at DESC);
         """
+    )
+    _add_column(
+        conn,
+        "refill_runs",
+        "physical_transfer_ml",
+        "INTEGER",
+    )
+    _add_column(
+        conn,
+        "refill_runs",
+        "main_accounted_ml",
+        "INTEGER",
     )
     _migrate_refill_window_observations(conn)
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")

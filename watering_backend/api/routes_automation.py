@@ -97,6 +97,7 @@ def manual_refill(
         {
             "accepted": True,
             "run_id": run_id,
+            "refill_run": context.get_refill_run(run_id),
             "message": "Manueller Nachf\u00fclllauf wurde an Home Assistant \u00fcbergeben.",
             "evaluation": result,
         },

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -12,6 +13,7 @@ from watering_backend.catalog import (
     MIN_WATER_MODEL_CALIBRATION_PERCENT,
 )
 from watering_backend.database import Database
+from watering_backend.config import validate_planner_config
 from watering_backend.repositories.hoses import HosesRepository
 from watering_backend.repositories.settings import SettingsRepository
 from watering_backend.repositories.tanks import TanksRepository
@@ -42,6 +44,34 @@ def orientation_name_from_degrees(degrees: float) -> str:
     return nearest[1]
 
 
+@dataclass(frozen=True)
+class NormalizedConfiguration:
+    balcony: dict[str, Any]
+    outlets: list[dict[str, Any]]
+    walls: list[dict[str, Any]]
+    watering_amount_percent: float | None
+    water_model_calibration_percent: float | None
+    refill_automation_enabled: bool | None
+    refill_schedule_times: list[str] | None
+    refill_cooldown_minutes_per_liter: float | None
+    main_pump_calibration_factor: float | None
+    planner_config: dict[str, Any] | None
+
+
+def _optional_bool(value: object, field: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in {0, 1}:
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "on", "yes"}:
+            return True
+        if normalized in {"0", "false", "off", "no"}:
+            return False
+    raise ValueError(f"{field} muss boolesch sein")
+
+
 class ConfigurationService:
     """Validate and persist balcony, pump and planner configuration."""
 
@@ -60,7 +90,13 @@ class ConfigurationService:
         self.settings = settings
         self.now_iso = now_iso
 
-    def save_balcony(self, payload: dict[str, Any]) -> None:
+    def _normalize(
+        self,
+        payload: dict[str, Any],
+        *,
+        current: dict[str, Any],
+        existing_outlet_ids: list[int],
+    ) -> NormalizedConfiguration:
         required = [
             "orientation_deg",
             "width_m",
@@ -133,17 +169,50 @@ class ConfigurationService:
         except ZoneInfoNotFoundError as exc:
             raise ValueError("Unbekannte Zeitzone") from exc
 
-        amount_percent = payload.get("watering_amount_percent")
-        calibration_percent = payload.get(
-            "water_model_calibration_percent"
+        amount_percent = (
+            payload.get("watering_amount_percent")
+            if "watering_amount_percent" in payload
+            else None
         )
-        refill_enabled = payload.get("refill_automation_enabled")
-        refill_times = payload.get("refill_schedule_times")
-        refill_cooldown = payload.get(
-            "refill_cooldown_minutes_per_liter"
+        calibration_percent = (
+            payload.get("water_model_calibration_percent")
+            if "water_model_calibration_percent" in payload
+            else None
         )
-        main_consumption_factor = payload.get(
-            "main_pump_calibration_factor"
+        refill_enabled = (
+            _optional_bool(
+                payload["refill_automation_enabled"],
+                "refill_automation_enabled",
+            )
+            if "refill_automation_enabled" in payload
+            else None
+        )
+        refill_times = (
+            self.settings.normalize_refill_schedule_times(
+                payload["refill_schedule_times"]
+            )
+            if "refill_schedule_times" in payload
+            else None
+        )
+        refill_cooldown = (
+            finite_number(
+                payload["refill_cooldown_minutes_per_liter"],
+                "refill_cooldown_minutes_per_liter",
+                minimum=1,
+                maximum=self.settings.defaults.refill_max_cooldown_minutes,
+            )
+            if "refill_cooldown_minutes_per_liter" in payload
+            else None
+        )
+        main_consumption_factor = (
+            finite_number(
+                payload["main_pump_calibration_factor"],
+                "main_pump_calibration_factor",
+                minimum=0.1,
+                maximum=10,
+            )
+            if "main_pump_calibration_factor" in payload
+            else None
         )
         if amount_percent is not None:
             amount_percent = finite_number(
@@ -176,65 +245,108 @@ class ConfigurationService:
                     f"{MAX_WATER_MODEL_CALIBRATION_PERCENT:g} Prozent liegen"
                 )
 
+        outlets = validate_outlets(
+            payload["outlets"],
+            existing_outlet_ids,
+        )
+        walls = validate_walls(payload["walls"])
+        planner_config = (
+            validate_planner_config(payload["planner_config"])
+            if "planner_config" in payload
+            else None
+        )
+        return NormalizedConfiguration(
+            balcony={
+                "orientation": orientation_name_from_degrees(
+                    orientation_deg
+                ),
+                "orientation_deg": orientation_deg,
+                "width_m": width_m,
+                "depth_m": depth_m,
+                "location": "",
+                "latitude": latitude,
+                "longitude": longitude,
+                "timezone_name": timezone_name,
+                "wall_height_m": max(
+                    wall["height_m"] for wall in walls
+                ),
+                "tank_capacity_ml": main_capacity,
+                "tank_current_ml": min(
+                    int(current["tank_current_ml"]),
+                    main_capacity,
+                ),
+                "refill_tank_capacity_ml": refill_capacity,
+                "refill_tank_current_ml": min(
+                    int(current["refill_tank_current_ml"]),
+                    refill_capacity,
+                ),
+                "refill_pump_ml_per_min": refill_flow,
+            },
+            outlets=outlets,
+            walls=walls,
+            watering_amount_percent=amount_percent,
+            water_model_calibration_percent=calibration_percent,
+            refill_automation_enabled=refill_enabled,
+            refill_schedule_times=refill_times,
+            refill_cooldown_minutes_per_liter=refill_cooldown,
+            main_pump_calibration_factor=main_consumption_factor,
+            planner_config=planner_config,
+        )
+
+    def save_balcony(self, payload: dict[str, Any]) -> None:
+        if not isinstance(payload, dict):
+            raise ValueError("Einstellungen müssen ein Objekt sein")
         with self.database.connection(immediate=True) as conn:
             current = self.tanks.balcony(conn=conn)
-            outlets = validate_outlets(
-                payload["outlets"],
-                [outlet["id"] for outlet in self.tanks.outlets(conn=conn)],
+            normalized = self._normalize(
+                payload,
+                current=current,
+                existing_outlet_ids=[
+                    int(outlet["id"])
+                    for outlet in self.tanks.outlets(conn=conn)
+                ],
             )
-            walls = validate_walls(payload["walls"])
             self.tanks.update_balcony(
                 conn,
-                {
-                    "orientation": orientation_name_from_degrees(
-                        orientation_deg
-                    ),
-                    "orientation_deg": orientation_deg,
-                    "width_m": width_m,
-                    "depth_m": depth_m,
-                    "location": "",
-                    "latitude": latitude,
-                    "longitude": longitude,
-                    "timezone_name": timezone_name,
-                    "wall_height_m": max(
-                        wall["height_m"] for wall in walls
-                    ),
-                    "tank_capacity_ml": main_capacity,
-                    "tank_current_ml": min(
-                        int(current["tank_current_ml"]),
-                        main_capacity,
-                    ),
-                    "refill_tank_capacity_ml": refill_capacity,
-                    "refill_tank_current_ml": min(
-                        int(current["refill_tank_current_ml"]),
-                        refill_capacity,
-                    ),
-                    "refill_pump_ml_per_min": refill_flow,
-                },
+                normalized.balcony,
                 updated_at=self.now_iso(),
             )
-            self.tanks.replace_outlets(conn, outlets)
+            self.tanks.replace_outlets(conn, normalized.outlets)
             self.hoses.sync_all_legacy_connections(conn)
-            self.tanks.save_walls(conn, walls)
+            self.tanks.replace_walls(conn, normalized.walls)
 
-        if amount_percent is not None:
-            self.settings.save_watering_amount_percent(amount_percent)
-        elif calibration_percent is not None:
-            self.settings.save_water_model_calibration_percent(
-                calibration_percent
-            )
-        if refill_enabled is not None:
-            self.settings.save_refill_automation_enabled(refill_enabled)
-        if refill_times is not None:
-            self.settings.save_refill_schedule_times(refill_times)
-        if refill_cooldown is not None:
-            self.settings.save_refill_cooldown_minutes_per_liter(
-                refill_cooldown
-            )
-        if main_consumption_factor is not None:
-            self.settings.save_main_pump_calibration_factor(
-                main_consumption_factor
-            )
-        if "planner_config" in payload:
-            self.settings.save_planner_config(payload["planner_config"])
-
+            if normalized.watering_amount_percent is not None:
+                self.settings.save_watering_amount_percent(
+                    normalized.watering_amount_percent,
+                    conn=conn,
+                )
+            elif normalized.water_model_calibration_percent is not None:
+                self.settings.save_water_model_calibration_percent(
+                    normalized.water_model_calibration_percent,
+                    conn=conn,
+                )
+            if normalized.refill_automation_enabled is not None:
+                self.settings.save_refill_automation_enabled(
+                    normalized.refill_automation_enabled,
+                    conn=conn,
+                )
+            if normalized.refill_schedule_times is not None:
+                self.settings.save_refill_schedule_times(
+                    normalized.refill_schedule_times,
+                    conn=conn,
+                )
+            if normalized.refill_cooldown_minutes_per_liter is not None:
+                self.settings.save_refill_cooldown_minutes_per_liter(
+                    normalized.refill_cooldown_minutes_per_liter,
+                    conn=conn,
+                )
+            if normalized.main_pump_calibration_factor is not None:
+                self.settings.save_main_pump_calibration_factor(
+                    normalized.main_pump_calibration_factor,
+                    conn=conn,
+                )
+            if normalized.planner_config is not None:
+                self.settings.save_planner_config(
+                    normalized.planner_config,
+                    conn=conn,
+                )
