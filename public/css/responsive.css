@@ -414,6 +414,10 @@
     justify-self: start;
   }
 
+  .update-progress-steps {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .update-actions {
     align-items: stretch;
   }

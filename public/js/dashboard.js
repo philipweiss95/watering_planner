@@ -51,6 +51,7 @@ export function buildManualActionsModel(state, evaluation) {
   const watering = evaluation?.manual_run || {};
   const refill = evaluation?.manual_refill || {};
   const refillState = evaluation?.refill || {};
+  const balcony = state?.balcony || {};
   const homeAssistantConfigured = Boolean(
     state?.home_assistant?.configured,
   );
@@ -88,6 +89,42 @@ export function buildManualActionsModel(state, evaluation) {
           ? `${liters(plannedRefill)} sind vorgesehen.`
           : "Der Haupttank benötigt aktuell keine Nachfüllung."
       ),
+    },
+    {
+      id: "fill-main-tank",
+      action: "fill-main",
+      icon: "droplets",
+      label: "Haupttank nachgefüllt",
+      available: Number(balcony.tank_capacity_ml || 0) > 0
+        && Number(balcony.tank_current_ml || 0)
+          < Number(balcony.tank_capacity_ml || 0),
+      reason: Number(balcony.tank_capacity_ml || 0) <= 0
+        ? "Für den Haupttank ist keine Größe konfiguriert."
+        : Number(balcony.tank_current_ml || 0)
+            >= Number(balcony.tank_capacity_ml || 0)
+          ? "Der Haupttank ist bereits als voll markiert."
+          : `Aktuell ${percent(
+            Number(balcony.tank_current_ml || 0)
+              / Number(balcony.tank_capacity_ml) * 100,
+          )} · auf 100 % setzen.`,
+    },
+    {
+      id: "fill-refill-tank",
+      action: "fill-refill",
+      icon: "container",
+      label: "Vorratstank nachgefüllt",
+      available: Number(balcony.refill_tank_capacity_ml || 0) > 0
+        && Number(balcony.refill_tank_current_ml || 0)
+          < Number(balcony.refill_tank_capacity_ml || 0),
+      reason: Number(balcony.refill_tank_capacity_ml || 0) <= 0
+        ? "Für den Vorratstank ist keine Größe konfiguriert."
+        : Number(balcony.refill_tank_current_ml || 0)
+            >= Number(balcony.refill_tank_capacity_ml || 0)
+          ? "Der Vorratstank ist bereits als voll markiert."
+          : `Aktuell ${percent(
+            Number(balcony.refill_tank_current_ml || 0)
+              / Number(balcony.refill_tank_capacity_ml) * 100,
+          )} · auf 100 % setzen.`,
     },
   ];
 }

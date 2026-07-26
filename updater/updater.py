@@ -688,7 +688,10 @@ def install_update(reported_version: str = "") -> None:
                 "step": 1,
                 "totalSteps": 8,
                 "currentVersion": current_version,
+                "targetVersion": "",
                 "message": "Suche nach dem neuesten stabilen Release.",
+                "startedAt": now_iso(),
+                "finishedAt": None,
             }
             normalized_reported = normalize_version(reported_version)
             if normalized_reported and normalized_reported != current_version:

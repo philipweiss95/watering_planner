@@ -43,7 +43,10 @@ import {
   smtpConfigurationPayload,
   validateRefillWindows,
 } from "../public/js/settings.js";
-import { parseReleaseNotes } from "../public/js/updater.js";
+import {
+  buildUpdateProgressModel,
+  parseReleaseNotes,
+} from "../public/js/updater.js";
 import { confirmDialog, escapeHTML } from "../public/js/ui.js";
 
 class FakeNode {
@@ -234,7 +237,15 @@ test("dashboard prioritizes concrete action states", () => {
 });
 
 test("manual watering and refill actions remain visible with API status", () => {
-  const state = { home_assistant: { configured: true } };
+  const state = {
+    home_assistant: { configured: true },
+    balcony: {
+      tank_capacity_ml: 10000,
+      tank_current_ml: 6000,
+      refill_tank_capacity_ml: 20000,
+      refill_tank_current_ml: 14000,
+    },
+  };
   const allowed = buildManualActionsModel(state, {
     manual_run: {
       available: true,
@@ -249,8 +260,15 @@ test("manual watering and refill actions remain visible with API status", () => 
   });
   assert.deepEqual(
     allowed.map((item) => [item.action, item.available]),
-    [["manual-run", true], ["manual-refill", true]],
+    [
+      ["manual-run", true],
+      ["manual-refill", true],
+      ["fill-main", true],
+      ["fill-refill", true],
+    ],
   );
+  assert.equal(allowed[2].label, "Haupttank nachgefüllt");
+  assert.equal(allowed[3].label, "Vorratstank nachgefüllt");
 
   const legacyRefillPayload = buildManualActionsModel(state, {
     manual_run: { available: false, reason: "Tank leer." },
@@ -269,6 +287,41 @@ test("manual watering and refill actions remain visible with API status", () => 
     refill: { manual_review_required: true },
   });
   assert.equal(blocked[1].available, false);
+
+  const fullTanks = buildManualActionsModel({
+    ...state,
+    balcony: {
+      ...state.balcony,
+      tank_current_ml: 10000,
+      refill_tank_current_ml: 20000,
+    },
+  }, {});
+  assert.equal(fullTanks[2].available, false);
+  assert.equal(fullTanks[3].available, false);
+  assert.match(fullTanks[2].reason, /bereits als voll/);
+});
+
+test("updater progress exposes the current phase and completed work", () => {
+  const running = buildUpdateProgressModel({
+    status: "running",
+    phase: "build",
+    step: 6,
+    totalSteps: 8,
+  });
+  assert.equal(running.step, 6);
+  assert.equal(running.percent, 62.5);
+  assert.equal(running.phases[4].state, "complete");
+  assert.equal(running.phases[5].state, "current");
+  assert.equal(running.phases[6].state, "pending");
+
+  const completed = buildUpdateProgressModel({
+    status: "ok",
+    phase: "complete",
+    step: 8,
+    totalSteps: 8,
+  });
+  assert.equal(completed.percent, 100);
+  assert.ok(completed.phases.every((phase) => phase.state === "complete"));
 });
 
 test("SMTP write-only payload omits every blank field", () => {
