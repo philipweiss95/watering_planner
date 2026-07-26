@@ -4,6 +4,15 @@ Alle stabilen Änderungen am Watering Planner werden in dieser Datei dokumentier
 
 ## [Unreleased]
 
+## [1.5.4] - 2026-07-26
+
+- Der Updater zeigt während der Installation einen automatisch aktualisierten
+  Acht-Schritte-Fortschritt und überbrückt Planner- sowie Updater-Neustarts
+  mit einem sichtbaren Wiederverbindungsstatus.
+- Die Startseite bietet neben manuellem Gießen und Nachfüllen dauerhaft
+  Aktionen, um Haupt- und Vorratstank nach einem realen Auffüllen als voll zu
+  markieren.
+
 ## [1.5.3] - 2026-07-26
 
 - Der Seitenstart wertet ausschließlich die zuletzt gespeicherten Wetterdaten

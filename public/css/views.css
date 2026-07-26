@@ -695,6 +695,77 @@ fieldset.settings-section > legend {
   gap: var(--space-3);
 }
 
+.update-progress-shell {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.update-progress-steps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.update-progress-step {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-2);
+  color: var(--text-muted);
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 0.76rem;
+}
+
+.update-progress-step.current {
+  color: var(--text);
+  background: var(--warning-soft);
+  border-color: #dfc77f;
+  font-weight: 700;
+}
+
+.update-progress-step.complete {
+  color: var(--success);
+  background: var(--success-soft);
+  border-color: #bad9c6;
+}
+
+.update-progress-index {
+  display: grid;
+  flex: 0 0 24px;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  color: var(--text-muted);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  font-size: 0.7rem;
+  font-weight: 800;
+}
+
+.update-progress-step.current .update-progress-index {
+  color: #6b4900;
+  border-color: var(--warning);
+}
+
+.update-progress-step.complete .update-progress-index {
+  color: #fff;
+  background: var(--success);
+  border-color: var(--success);
+}
+
+.update-progress-live {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.76rem;
+}
+
 .update-summary {
   display: grid;
   grid-template-columns: 12px minmax(0, 1fr) auto;

@@ -112,6 +112,10 @@ class UpdaterTests(unittest.TestCase):
 
         self.assertEqual(states[0]["currentVersion"], "1.4.3")
         self.assertEqual(states[0]["reportedVersion"], "1.4.2")
+        self.assertEqual(states[0]["status"], "running")
+        self.assertEqual(states[0]["targetVersion"], "")
+        self.assertTrue(states[0]["startedAt"])
+        self.assertIsNone(states[0]["finishedAt"])
         self.assertEqual(states[-1]["status"], "ok")
         self.assertFalse(updater.INSTALL_RUNNING.is_set())
 
@@ -363,11 +367,17 @@ class UpdaterTests(unittest.TestCase):
         self.assertNotIn("Vorherige Änderung", notes)
 
     def test_updater_panel_is_rendered_on_info_page(self):
-        html = (Path(__file__).resolve().parents[1] / "public" / "index.html").read_text(encoding="utf-8")
+        root = Path(__file__).resolve().parents[1]
+        html = (root / "public" / "index.html").read_text(encoding="utf-8")
+        javascript = (root / "public" / "js" / "updater.js").read_text(encoding="utf-8")
+        views = (root / "public" / "css" / "views.css").read_text(encoding="utf-8")
 
         self.assertGreater(html.index("<h2>Updater</h2>"), html.index('class="view info-view"'))
         self.assertIn('id="updateReleaseNotes"', html)
         self.assertIn('class="update-actions"', html)
+        self.assertIn('api.get("/api/update/status")', javascript)
+        self.assertIn("UPDATE_POLL_INTERVAL_MS", javascript)
+        self.assertIn(".update-progress-steps", views)
 
     def test_configuration_views_have_guided_headers(self):
         html = (Path(__file__).resolve().parents[1] / "public" / "index.html").read_text(encoding="utf-8")
