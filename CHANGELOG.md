@@ -4,6 +4,14 @@ Alle stabilen Änderungen am Watering Planner werden in dieser Datei dokumentier
 
 ## [Unreleased]
 
+## [1.5.5] - 2026-07-26
+
+- Die Startseite zeigt für Haupt- und Vorratstank jeweils einen eigenen
+  Füllstand mit Prozentwert, Fortschrittsanzeige und Litermenge.
+- Der Home-Assistant-Status unterscheidet verständlich zwischen nicht
+  eingerichtet, eingerichtet aber noch nicht getestet, bestätigtem Kontakt
+  und einem fehlgeschlagenen Verbindungstest.
+
 ## [1.5.4] - 2026-07-26
 
 - Der Updater zeigt während der Installation einen automatisch aktualisierten

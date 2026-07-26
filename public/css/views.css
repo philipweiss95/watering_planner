@@ -148,6 +148,39 @@
   font-size: 0.78rem;
 }
 
+.tank-status-card {
+  display: grid;
+  align-content: start;
+}
+
+.tank-levels {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.tank-level {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.tank-level-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: 0.78rem;
+}
+
+.tank-level-heading span,
+.tank-level p {
+  color: var(--text-muted);
+}
+
+.tank-level p {
+  margin: 0;
+  font-size: 0.72rem;
+}
+
 .forecast-shell {
   margin-bottom: var(--space-4);
   padding: var(--space-4);

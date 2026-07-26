@@ -1,4 +1,11 @@
-import { dateTime, liters, percent, relativeAge, time } from "./format.js";
+import {
+  clamp,
+  dateTime,
+  liters,
+  percent,
+  relativeAge,
+  time,
+} from "./format.js";
 import { badge, element, icon, progress } from "./ui.js";
 
 function nextUnfinishedWindow(evaluation) {
@@ -257,6 +264,139 @@ function statusCard(title, value, meta, stateName, progressValue = null) {
   return card;
 }
 
+export function buildTankStatusModel(state, evaluation) {
+  const balcony = state?.balcony || {};
+  const mainCapacity = Math.max(
+    1,
+    Number(
+      balcony.tank_capacity_ml
+      || evaluation?.tank?.capacity_ml
+      || 1,
+    ),
+  );
+  const mainCurrent = clamp(
+    Number(balcony.tank_current_ml || 0),
+    0,
+    mainCapacity,
+  );
+  const refillCapacity = Math.max(
+    1,
+    Number(balcony.refill_tank_capacity_ml || 1),
+  );
+  const refillCurrent = clamp(
+    Number(balcony.refill_tank_current_ml || 0),
+    0,
+    refillCapacity,
+  );
+  const mainPercent = mainCurrent / mainCapacity * 100;
+  const refillPercent = refillCurrent / refillCapacity * 100;
+  const mainTone = evaluation?.tank?.empty_soon
+    ? "danger"
+    : evaluation?.tank?.low
+      ? "warning"
+      : "success";
+  const refillTone = refillPercent <= 10
+    ? "danger"
+    : refillPercent <= 25
+      ? "warning"
+      : "success";
+  return {
+    tone: mainTone === "danger" || refillTone === "danger"
+      ? "danger"
+      : mainTone === "warning" || refillTone === "warning"
+        ? "warning"
+        : "success",
+    levels: [
+      {
+        label: "Haupttank",
+        current: mainCurrent,
+        capacity: mainCapacity,
+        percent: mainPercent,
+        tone: mainTone,
+      },
+      {
+        label: "Vorratstank",
+        current: refillCurrent,
+        capacity: refillCapacity,
+        percent: refillPercent,
+        tone: refillTone,
+      },
+    ],
+  };
+}
+
+function tankStatusCard(state, evaluation) {
+  const model = buildTankStatusModel(state, evaluation);
+  const card = element("article", {
+    className: "status-card tank-status-card",
+  });
+  card.append(
+    element("div", { className: "status-card-head" }, [
+      element("h2", { text: "Tankfüllstände" }),
+      badge(
+        model.tone === "success"
+          ? "OK"
+          : model.tone === "warning"
+            ? "Prüfen"
+            : "Problem",
+        model.tone,
+      ),
+    ]),
+    element(
+      "div",
+      { className: "tank-levels" },
+      model.levels.map((level) => element(
+        "div",
+        { className: "tank-level" },
+        [
+          element("div", { className: "tank-level-heading" }, [
+            element("strong", { text: level.label }),
+            element("span", { text: percent(level.percent) }),
+          ]),
+          progress(level.percent, level.tone),
+          element("p", {
+            text: `${liters(level.current)} von ${liters(level.capacity)}`,
+          }),
+        ],
+      )),
+    ),
+  );
+  return card;
+}
+
+export function buildHomeAssistantStatusModel(homeAssistant, now = new Date()) {
+  const status = homeAssistant || {};
+  if (!status.configured) {
+    return {
+      tone: "warning",
+      value: "Nicht eingerichtet",
+      meta: "Keine Home-Assistant-Webhooks konfiguriert.",
+    };
+  }
+  if (status.last_error) {
+    return {
+      tone: "danger",
+      value: "Verbindung fehlgeschlagen",
+      meta: status.last_error,
+    };
+  }
+  if (!status.last_successful_contact_at) {
+    return {
+      tone: "warning",
+      value: "Eingerichtet",
+      meta: "Noch kein erfolgreicher Verbindungstest · unter System testen",
+    };
+  }
+  return {
+    tone: "success",
+    value: "Kontakt bestätigt",
+    meta: `Zuletzt erfolgreich ${relativeAge(
+      status.last_successful_contact_at,
+      now,
+    )}`,
+  };
+}
+
 export function renderDashboard(state, evaluation, actions = {}) {
   const model = buildDashboardModel(state, evaluation);
   const card = document.getElementById("nextActionCard");
@@ -326,22 +466,13 @@ export function renderDashboard(state, evaluation, actions = {}) {
     }),
   );
 
-  const mainCurrent = Number(state?.balcony?.tank_current_ml || 0);
-  const mainCapacity = Math.max(1, Number(state?.balcony?.tank_capacity_ml || evaluation?.tank?.capacity_ml || 1));
-  const refillCurrent = Number(state?.balcony?.refill_tank_current_ml || 0);
-  const refillCapacity = Math.max(1, Number(state?.balcony?.refill_tank_capacity_ml || 1));
   const weather = evaluation?.weather || {};
   const weatherCurrent = weather.current || {};
   const weatherStatus = state?.weather_status || {};
   const homeAssistant = state?.home_assistant || {};
+  const homeAssistantStatus = buildHomeAssistantStatusModel(homeAssistant);
   const cards = [
-    statusCard(
-      "Tanks",
-      `${liters(mainCurrent)} / ${liters(refillCurrent)}`,
-      `Haupttank ${percent(mainCurrent / mainCapacity * 100)} · Vorrat ${percent(refillCurrent / refillCapacity * 100)}`,
-      evaluation?.tank?.empty_soon ? "danger" : evaluation?.tank?.low ? "warning" : "success",
-      mainCurrent / mainCapacity * 100,
-    ),
+    tankStatusCard(state, evaluation),
     statusCard(
       weather.simulation ? "Wetter · Simulation" : "Wetter",
       evaluation ? `${Number(weatherCurrent.temperature_c ?? evaluation?.inputs?.temperature_c ?? 0).toFixed(1)} °C` : "Nicht verfügbar",
@@ -362,12 +493,10 @@ export function renderDashboard(state, evaluation, actions = {}) {
       evaluation?.depletion?.first_unserved_watering_at ? "warning" : "success",
     ),
     statusCard(
-      "Anlage",
-      evaluation?.automation?.paused ? "Pausiert" : "Automatik aktiv",
-      homeAssistant.configured
-        ? (homeAssistant.last_error || `Home Assistant ${relativeAge(homeAssistant.last_successful_contact_at)}`)
-        : "Home Assistant nicht konfiguriert",
-      homeAssistant.last_error ? "danger" : homeAssistant.configured ? "success" : "warning",
+      "Home Assistant",
+      homeAssistantStatus.value,
+      homeAssistantStatus.meta,
+      homeAssistantStatus.tone,
     ),
   ];
   document.getElementById("dashboardStatusGrid").replaceChildren(...cards);

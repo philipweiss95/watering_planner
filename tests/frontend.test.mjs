@@ -5,7 +5,9 @@ import test from "node:test";
 import { api, ApiError } from "../public/js/api.js";
 import {
   buildDashboardModel,
+  buildHomeAssistantStatusModel,
   buildManualActionsModel,
+  buildTankStatusModel,
   buildTimeline,
 } from "../public/js/dashboard.js";
 import {
@@ -233,6 +235,59 @@ test("dashboard prioritizes concrete action states", () => {
       baseEvaluation,
     ).action,
     "test-ha",
+  );
+});
+
+test("dashboard shows both tank levels and an honest Home Assistant state", () => {
+  const tanks = buildTankStatusModel({
+    balcony: {
+      tank_capacity_ml: 10000,
+      tank_current_ml: 6500,
+      refill_tank_capacity_ml: 20000,
+      refill_tank_current_ml: 4000,
+    },
+  }, { tank: { low: false, empty_soon: false } });
+  assert.deepEqual(
+    tanks.levels.map((level) => [
+      level.label,
+      level.current,
+      level.capacity,
+      Math.round(level.percent),
+    ]),
+    [
+      ["Haupttank", 6500, 10000, 65],
+      ["Vorratstank", 4000, 20000, 20],
+    ],
+  );
+  assert.equal(tanks.levels[0].tone, "success");
+  assert.equal(tanks.levels[1].tone, "warning");
+  assert.equal(tanks.tone, "warning");
+
+  assert.deepEqual(
+    buildHomeAssistantStatusModel({ configured: true, last_error: "" }),
+    {
+      tone: "warning",
+      value: "Eingerichtet",
+      meta: "Noch kein erfolgreicher Verbindungstest · unter System testen",
+    },
+  );
+  const contacted = buildHomeAssistantStatusModel(
+    {
+      configured: true,
+      last_error: "",
+      last_successful_contact_at: "2026-07-26T08:00:00Z",
+    },
+    new Date("2026-07-26T08:10:00Z"),
+  );
+  assert.equal(contacted.tone, "success");
+  assert.equal(contacted.value, "Kontakt bestätigt");
+  assert.match(contacted.meta, /Vor 10 min/);
+  assert.equal(
+    buildHomeAssistantStatusModel({
+      configured: true,
+      last_error: "Zeitüberschreitung",
+    }).value,
+    "Verbindung fehlgeschlagen",
   );
 });
 
