@@ -58,6 +58,37 @@ function named(form, name) {
   return form.elements.namedItem(name);
 }
 
+export function smtpConfigurationPayload(values) {
+  const read = (name) => {
+    if (typeof values?.get === "function") return values.get(name);
+    return values?.[name];
+  };
+  const payload = {
+    enabled: Boolean(read("enabled")),
+  };
+  const fields = {
+    host: "host",
+    username: "username",
+    password: "password",
+    sender: "sender",
+    recipients: "recipients",
+    security: "security",
+  };
+  for (const [target, source] of Object.entries(fields)) {
+    const raw = read(source);
+    const value = typeof raw === "string" ? raw.trim() : "";
+    if (value) payload[target] = value;
+  }
+  const port = read("port");
+  if (port !== "" && port !== null && port !== undefined) {
+    payload.port = Number(port);
+  }
+  if (read("clear_credentials")) {
+    payload.clear_credentials = true;
+  }
+  return payload;
+}
+
 function setValue(form, name, value) {
   const field = named(form, name);
   if (!field) return;
@@ -260,6 +291,25 @@ export function renderSettings(state, evaluation, onChanged = async () => {}) {
   renderBalconyPlan(state, onChanged);
   renderSchedulePreview(form, evaluation);
   document.getElementById("settingsSaveStatus").textContent = "Gespeichert";
+  const smtp = state.notifications || {};
+  const smtpStatus = document.getElementById("smtpConfigStatus");
+  const smtpBadge = document.getElementById("smtpConfigBadge");
+  if (smtpStatus && smtpBadge) {
+    smtpStatus.textContent = smtp.configured
+      ? "Gespeichert · Werte werden nicht angezeigt"
+      : "Noch nicht vollständig eingerichtet";
+    smtpBadge.textContent = smtp.enabled
+      ? (smtp.configured ? "Bereit" : "Unvollständig")
+      : "Aus";
+    smtpBadge.className = `status-badge ${
+      smtp.enabled && smtp.configured
+        ? "success"
+        : smtp.enabled
+          ? "warning"
+          : ""
+    }`.trim();
+    setValue(form, "smtp_enabled", smtp.enabled);
+  }
   toggleRefillStrategy(form);
 }
 
@@ -277,11 +327,71 @@ export function initSettings(getData, onChanged, onSimulation) {
     const { evaluation } = getData();
     renderSchedulePreview(form, evaluation);
   };
-  form.addEventListener("input", markChanged);
+  form.addEventListener("input", (event) => {
+    if (event.target.closest?.("[data-smtp-config]")) {
+      document.getElementById("smtpConfigStatus").textContent =
+        "Noch nicht gespeichert";
+      return;
+    }
+    markChanged();
+  });
   form.addEventListener("change", (event) => {
+    if (event.target.closest?.("[data-smtp-config]")) {
+      document.getElementById("smtpConfigStatus").textContent =
+        "Noch nicht gespeichert";
+      return;
+    }
     if (event.target.name === "refill_strategy") toggleRefillStrategy(form);
     markChanged();
   });
+  let smtpSaving = false;
+  document.getElementById("saveSmtpButton").addEventListener(
+    "click",
+    async () => {
+      if (smtpSaving) return;
+      const value = (name) => named(form, `smtp_${name}`);
+      const payload = smtpConfigurationPayload({
+        enabled: value("enabled").checked,
+        host: value("host").value,
+        port: value("port").value,
+        username: value("username").value,
+        password: value("password").value,
+        sender: value("sender").value,
+        recipients: value("recipients").value,
+        security: value("security").value,
+        clear_credentials: value("clear_credentials").checked,
+      });
+      const button = document.getElementById("saveSmtpButton");
+      smtpSaving = true;
+      button.disabled = true;
+      document.getElementById("smtpConfigStatus").textContent =
+        "Wird gespeichert";
+      try {
+        await api.post("/api/notifications/config", payload);
+        for (const name of [
+          "host",
+          "port",
+          "username",
+          "password",
+          "sender",
+          "recipients",
+          "security",
+        ]) {
+          value(name).value = "";
+        }
+        value("clear_credentials").checked = false;
+        showToast("E-Mail-Einstellungen gespeichert");
+        await onChanged({ weather: false, afterMutation: true });
+      } catch (error) {
+        document.getElementById("smtpConfigStatus").textContent =
+          error.message;
+        showToast(error.message, { error: true });
+      } finally {
+        smtpSaving = false;
+        button.disabled = false;
+      }
+    },
+  );
   document.getElementById("addRefillWindowButton").addEventListener("click", () => {
     document.getElementById("refillWindowEditor").append(refillWindowRow());
     markChanged();

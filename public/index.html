@@ -54,6 +54,13 @@
           <ol class="day-timeline" id="dayTimeline" aria-label="Bewässerungszeitpunkte"></ol>
         </section>
 
+        <section class="content-section manual-section" aria-labelledby="manualActionsTitle">
+          <div class="section-heading">
+            <div><h2 id="manualActionsTitle">Manuell</h2><p>Direkte Anlagensteuerung</p></div>
+          </div>
+          <div class="manual-actions" id="manualActions"></div>
+        </section>
+
         <section class="status-grid" id="dashboardStatusGrid" aria-label="Anlagenstatus"></section>
       </section>
 
@@ -197,6 +204,36 @@
               <label class="toggle-label"><span>Entwarnung senden</span><input name="notification_resolved_enabled" type="checkbox"><span class="switch" aria-hidden="true"></span></label>
               <label>Wetterwarnung ab <span class="input-unit"><input name="weather_stale_after_minutes" type="number" min="1"><span>min</span></span></label>
             </div>
+            <section class="smtp-config" data-smtp-config aria-labelledby="smtpConfigTitle">
+              <div class="subsection-heading">
+                <div>
+                  <h2 id="smtpConfigTitle">E-Mail-Versand</h2>
+                  <p id="smtpConfigStatus" class="field-note" aria-live="polite">Nicht eingerichtet</p>
+                </div>
+                <span class="status-badge" id="smtpConfigBadge">Aus</span>
+              </div>
+              <div class="field-grid">
+                <label class="toggle-label"><span>E-Mail-Benachrichtigungen</span><input name="smtp_enabled" type="checkbox"><span class="switch" aria-hidden="true"></span></label>
+                <label>Verbindung
+                  <select name="smtp_security" autocomplete="off">
+                    <option value="">Nicht ändern</option>
+                    <option value="starttls">STARTTLS</option>
+                    <option value="ssl">SSL/TLS</option>
+                    <option value="none">Keine Verschlüsselung</option>
+                  </select>
+                </label>
+                <label>SMTP-Server <input name="smtp_host" type="text" maxlength="255" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Neu eintragen"></label>
+                <label>Port <input name="smtp_port" type="number" min="1" max="65535" inputmode="numeric" autocomplete="off" placeholder="Neu eintragen"></label>
+                <label>Benutzername <input name="smtp_username" type="text" maxlength="255" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Neu eintragen"></label>
+                <label>Passwort <input name="smtp_password" type="password" maxlength="1024" autocomplete="new-password" placeholder="Neu eintragen"></label>
+                <label>Absender <input name="smtp_sender" type="email" maxlength="320" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Neu eintragen"></label>
+                <label>Empfänger <input name="smtp_recipients" type="text" maxlength="2000" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Mehrere mit Komma trennen"></label>
+                <label class="toggle-label"><span>Anmeldedaten löschen</span><input name="smtp_clear_credentials" type="checkbox"><span class="switch" aria-hidden="true"></span></label>
+              </div>
+              <div class="form-actions">
+                <button class="secondary" id="saveSmtpButton" type="button"><span data-icon="mail-check" aria-hidden="true"></span>E-Mail-Einstellungen speichern</button>
+              </div>
+            </section>
           </details>
 
           <details class="settings-section">
