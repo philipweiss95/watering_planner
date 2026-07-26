@@ -964,9 +964,12 @@ test("successful forced refresh and cache fallback reach state", async () => {
             },
           };
         }
-        if (path === "/api/homekit/check?auto=true&slot=morning") {
+        if (
+          path
+          === "/api/weather?cached=true&evaluate=true&slot=morning"
+        ) {
           evaluationFetches += 1;
-          return { weather };
+          return { evaluation: { weather } };
         }
         if (path === "/api/watering-events?limit=50") {
           return { events: [] };
@@ -1045,7 +1048,10 @@ test("evaluation failure removes the old plan and reports a clear issue", async 
           },
         };
       }
-      if (path === "/api/homekit/check?auto=true&slot=morning") {
+      if (
+        path
+        === "/api/weather?cached=true&evaluate=true&slot=morning"
+      ) {
         throw new Error("Auswertung fehlgeschlagen.");
       }
       if (path === "/api/watering-events?limit=50") {
@@ -1120,8 +1126,11 @@ test("failed diagnostics cannot overwrite fresher state weather", async () => {
           },
         };
       }
-      if (path === "/api/homekit/check?auto=true&slot=morning") {
-        return { automation: {}, refill: {} };
+      if (
+        path
+        === "/api/weather?cached=true&evaluate=true&slot=morning"
+      ) {
+        return { evaluation: { automation: {}, refill: {} } };
       }
       if (path === "/api/watering-events?limit=50") {
         return { events: [] };

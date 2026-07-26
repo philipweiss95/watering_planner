@@ -483,6 +483,12 @@ def fetch_weather(
     return _application().weather.fetch_weather(balcony, force=force)
 
 
+def cached_weather(
+    balcony: dict[str, Any],
+) -> dict[str, Any]:
+    return _application().weather.cached_weather(balcony)
+
+
 def current_weather_or_params(
     params: dict[str, list[str]] | dict[str, Any],
     balcony: dict[str, Any],
@@ -923,6 +929,7 @@ __all__ = [
     "depletion_forecast",
     "evaluate_weather",
     "fetch_weather",
+    "cached_weather",
     "normalized_forecast_days",
     "projected_consumption_days",
     "weather_diagnostics",

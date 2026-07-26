@@ -40,7 +40,12 @@ def weather(
     try:
         balcony = context.get_state()["balcony"]
         force = _truthy(request.first("force", "false"))
-        weather_payload = context.fetch_weather(balcony, force=force)
+        cache_only = _truthy(request.first("cached", "false"))
+        weather_payload = (
+            context.cached_weather(balcony)
+            if cache_only and not force
+            else context.fetch_weather(balcony, force=force)
+        )
         if _truthy(request.first("evaluate", "false")):
             evaluation = context.evaluate_weather(
                 weather_payload,

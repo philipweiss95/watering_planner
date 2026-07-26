@@ -151,8 +151,8 @@
 
   .plant-card {
     grid-template-columns: minmax(0, 1fr) auto;
-    gap: var(--space-3);
-    padding: var(--space-3);
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
   }
 
   .plant-supply,
@@ -161,8 +161,57 @@
     grid-column: 1 / -1;
   }
 
+  .plant-card > .plant-actions {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
   .plant-detail-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .plant-title p,
+  .plant-supply p {
+    margin-top: 2px;
+    font-size: 0.74rem;
+  }
+
+  .plant-supply .supply-values {
+    margin-bottom: var(--space-1);
+  }
+
+  .plant-supply .progress {
+    height: 6px;
+  }
+
+  .connection-action {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 2px var(--space-2);
+    padding: var(--space-2);
+  }
+
+  .connection-action p {
+    grid-column: 1;
+    overflow: hidden;
+    margin: 0;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .connection-action > button {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
+
+  .plant-details {
+    padding-top: var(--space-1);
+  }
+
+  .plant-details summary {
+    min-height: 32px;
+    font-size: 0.78rem;
   }
 
   .hose-table {
@@ -247,20 +296,39 @@
   }
 
   .history-item {
-    grid-template-columns: 36px minmax(0, 1fr) auto;
+    grid-template-columns: 28px minmax(0, 1fr) auto;
+    gap: 2px var(--space-2);
+    padding: var(--space-2) var(--space-3);
   }
 
   .history-item time {
-    grid-column: 2 / -1;
-    grid-row: 1;
+    grid-column: 3;
+    grid-row: 2;
+    justify-self: end;
+    font-size: 0.68rem;
+    white-space: nowrap;
   }
 
   .history-icon {
+    grid-column: 1;
     grid-row: 1 / 3;
   }
 
   .history-copy {
     grid-column: 2;
+    grid-row: 1 / 3;
+  }
+
+  .history-copy p {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .history-item > .status-badge {
+    grid-column: 3;
+    grid-row: 1;
+    justify-self: end;
   }
 
   .diagnostic-row {

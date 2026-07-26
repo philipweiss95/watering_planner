@@ -4,6 +4,13 @@ Alle stabilen Änderungen am Watering Planner werden in dieser Datei dokumentier
 
 ## [Unreleased]
 
+## [1.5.3] - 2026-07-26
+
+- Der Seitenstart wertet ausschließlich die zuletzt gespeicherten Wetterdaten
+  aus; nur die explizite Wetteraktion löst noch einen Open-Meteo-Abruf aus.
+- Verlaufseinträge und Pflanzenkarten nutzen insbesondere auf Smartphones
+  weniger Höhe, damit mehr Inhalte gleichzeitig sichtbar bleiben.
+
 ## [1.5.2] - 2026-07-26
 
 - Die Info-Seite zeigt die vom Updater gelieferten Release Notes wieder als

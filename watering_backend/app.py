@@ -488,6 +488,12 @@ class Application:
     ) -> dict[str, Any]:
         return self.weather.fetch_weather(balcony, force=force)
 
+    def cached_weather(
+        self,
+        balcony: dict[str, Any],
+    ) -> dict[str, Any]:
+        return self.weather.cached_weather(balcony)
+
     def weather_from_query(
         self,
         params: dict[str, list[str]],
