@@ -6,9 +6,13 @@ import sys
 import time
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class RuntimeVerificationError(RuntimeError):

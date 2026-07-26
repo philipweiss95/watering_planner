@@ -2,8 +2,13 @@ from __future__ import annotations
 
 import copy
 import unittest
+from pathlib import Path
 
-from scripts.verify_release_runtime import RuntimeVerificationError, verify_runtime
+from scripts.verify_release_runtime import (
+    RuntimeVerificationError,
+    parse_args,
+    verify_runtime,
+)
 
 
 class FakeRuntimeClient:
@@ -134,6 +139,12 @@ class FakeRuntimeClient:
 
 
 class ReleaseRuntimeScriptTests(unittest.TestCase):
+    def test_default_version_follows_repository_version(self):
+        expected = (
+            Path(__file__).resolve().parents[1] / "VERSION"
+        ).read_text(encoding="utf-8").strip()
+        self.assertEqual(parse_args([]).expected_version, expected)
+
     def test_runtime_verifier_checks_complete_api_and_idempotency(self):
         result = verify_runtime(
             FakeRuntimeClient(),
