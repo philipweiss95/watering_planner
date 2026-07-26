@@ -207,6 +207,10 @@ def verify_runtime(
         "/api/refill/running",
         {"run_id": refill_run_id},
     )
+    refill_running_replay = client.request(
+        "/api/refill/running",
+        {"run_id": refill_run_id},
+    )
     first_refill_booking = client.request(
         "/api/refill/complete",
         {"run_id": refill_run_id},
@@ -215,27 +219,59 @@ def verify_runtime(
         "/api/refill/complete",
         {"run_id": refill_run_id},
     )
+    late_refill_start = client.request(
+        "/api/refill/start",
+        {
+            "run_id": refill_run_id,
+            "run_type": "manual",
+            "source": "release_runtime_check",
+        },
+    )
     persisted_refill = client.request(
         f"/api/refill/runs/{refill_run_id}"
     )
     after_refill_run = client.request("/api/state")
     reserved_refill = refill_start.get("refill_run")
     running_refill = refill_running.get("refill_run")
+    repeated_running_refill = refill_running_replay.get("refill_run")
     first_refill_event = first_refill_booking.get("refill_run")
     second_refill_event = second_refill_booking.get("refill_run")
+    late_refill = late_refill_start.get("refill_run")
     persisted_refill_run = persisted_refill.get("refill_run")
     require(isinstance(reserved_refill, dict), "Nachfuellreservierung fehlt")
     require(isinstance(running_refill, dict), "Laufbestaetigung fehlt")
+    require(
+        isinstance(repeated_running_refill, dict),
+        "Wiederholte Laufbestaetigung fehlt",
+    )
     require(isinstance(first_refill_event, dict), "Erste Nachfuellbuchung fehlt")
     require(isinstance(second_refill_event, dict), "Wiederholte Nachfuellbuchung fehlt")
+    require(isinstance(late_refill, dict), "Verspaeteter Nachfuellstart fehlt")
     require(isinstance(persisted_refill_run, dict), "Persistenter Nachfuelllauf fehlt")
     require(reserved_refill.get("status") == "reserved", "Nachfuelllauf wurde nicht reserviert")
     require(running_refill.get("status") == "running", "Nachfuelllauf wurde nicht als laufend bestaetigt")
+    require(
+        running_refill.get("pump_start_authorized") is True,
+        "Erster Claim hat den Pumpenstart nicht freigegeben",
+    )
+    require(
+        repeated_running_refill.get("pump_start_authorized") is False,
+        "Wiederholter Claim hat den Pumpenstart erneut freigegeben",
+    )
+    require(
+        int(repeated_running_refill.get("duration_seconds", 0)) == 0,
+        "Wiederholter Claim lieferte eine nutzbare Laufdauer",
+    )
     require(first_refill_event.get("idempotent_replay") is False, "Erste Nachfuellung wurde als Wiederholung behandelt")
     require(second_refill_event.get("idempotent_replay") is True, "Doppelte Nachfuellung wurde erneut verbucht")
     require(first_refill_event.get("run_id") == refill_run_id, "Nachfuell-run_id wurde veraendert")
     require(second_refill_event.get("run_id") == refill_run_id, "Wiederholte Nachfuellung lieferte eine andere run_id")
     require(persisted_refill_run.get("status") == "completed", "Nachfuelllauf wurde nicht persistent abgeschlossen")
+    require(
+        late_refill.get("pump_start_authorized") is False
+        and int(late_refill.get("duration_seconds", 0)) == 0,
+        "Abgeschlossener Lauf konnte erneut gestartet werden",
+    )
     require(
         int(reserved_refill.get("planned_transfer_ml", 0))
         == int(first_refill_event.get("physical_transfer_ml", 0)),

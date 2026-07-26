@@ -42,7 +42,7 @@ Pläne. Historische Beobachtungen werden nicht nachträglich umgedeutet. UTC-
 Grenzen halten die Schlüssel bei Sommer- und Winterzeit eindeutig.
 
 Frühe 1.5-Daten aus `refill_window_observations` werden additiv und
-wiederholbar übernommen. Schema-Version 5 verändert keine vorhandenen
+wiederholbar übernommen. Schema-Version 6 verändert keine vorhandenen
 Bewässerungs-, Nachfüll-, Pflanzen- oder Tankdaten.
 
 ## Persistente Nachfüllläufe
@@ -54,12 +54,15 @@ Ein physischer Nachfülllauf besteht aus zwei persistenten Phasen:
    Pumpendurchsatz und schreibt eine Reservierung in `refill_runs`.
 2. Bei automatischen Läufen begrenzen Fensterende minus zehn Sekunden
    Sicherheitsreserve und der Pumpendurchsatz die freigegebene Menge.
-3. Home Assistant bestätigt nach dem Einschalten optional `running` und
-   meldet nach dem sicheren Ausschalten dieselbe `run_id` an
+3. Home Assistant claimt vor dem Einschalten atomar den Übergang
+   `reserved -> running`. Nur diese erste Antwort enthält
+   `pump_start_authorized=true` und eine nutzbare Dauer. Wiederholte oder
+   verspätete Claims sowie alle terminalen Läufe autorisieren keine Pumpe.
+4. Nach dem sicheren Ausschalten meldet Home Assistant dieselbe `run_id` an
    `/api/refill/complete`.
-4. Der Abschluss verwendet ausschließlich die reservierte Menge und Dauer.
+5. Der Abschluss verwendet ausschließlich die reservierte Menge und Dauer.
    Fensterende und später geänderte Konfiguration werden nicht neu geprüft.
-5. Tankbilanz, `refill_event`, Abschlussstatus und Erfüllung des exakten
+6. Tankbilanz, `refill_event`, Abschlussstatus und Erfüllung des exakten
    Fensterplans werden gemeinsam unter `BEGIN IMMEDIATE` gespeichert.
 
 Die freigegebene Pumpmenge, die anhand des aktuellen Vorrats physisch mögliche
@@ -72,10 +75,19 @@ Reservierungen laufen 15 Minuten nach dem erwarteten Abschluss aus und geben
 den exklusiven Startplatz frei. Sie werden nicht als sicher „nicht gelaufen“
 behandelt: `expired`, ein fehlgeschlagener bereits laufender Vorgang und eine
 unvollständige Buchung bleiben in der Diagnose sichtbar. Ein verspäteter
-Abschluss einer abgelaufenen Reservierung ist weiterhin möglich und
-idempotent. Zwei parallele Starts werden über `BEGIN IMMEDIATE` und den
+Abschluss einer abgelaufenen, nachweislich gestarteten Reservierung ist
+weiterhin möglich und idempotent, solange kein neuerer Lauf existiert. Zwei
+parallele Starts und Claims werden über `BEGIN IMMEDIATE` und den
 partiellen Unique-Index auf `active_slot` serialisiert; die `run_id` und der
 Unique-Index von `refill_events` verhindern doppelte Abschlussbuchungen.
+
+Unklare Läufe sperren Reservierung und Claim weiterer Läufe. Der Endpunkt
+`POST /api/refill/runs/{run_id}/reconcile` löst sie mit `no_transfer`,
+`full_transfer`, `measured_transfer`, `tank_levels_corrected` oder
+`cancelled_after_review` atomar auf. Abgleichart, Zeitpunkt und Notiz werden
+in `refill_runs` gespeichert. Existiert bereits ein physisches
+`refill_event`, bleibt es unverändert; dann sind nur Tankstandkorrektur oder
+die dokumentierte Prüfbestätigung zulässig.
 
 Die Home-Assistant-Vorlage merkt die aktive Kennung in `input_text`, startet
 einen restaurierbaren Sicherheitstimer und schaltet die Pumpe sowohl beim

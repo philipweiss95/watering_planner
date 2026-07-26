@@ -320,7 +320,7 @@ class ConfigurationService:
                     normalized.watering_amount_percent,
                     conn=conn,
                 )
-            elif normalized.water_model_calibration_percent is not None:
+            if normalized.water_model_calibration_percent is not None:
                 self.settings.save_water_model_calibration_percent(
                     normalized.water_model_calibration_percent,
                     conn=conn,

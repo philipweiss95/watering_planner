@@ -31,6 +31,13 @@ RefillRunStatus = Literal[
     "expired",
     "cancelled",
 ]
+RefillReconciliationMode = Literal[
+    "no_transfer",
+    "full_transfer",
+    "measured_transfer",
+    "tank_levels_corrected",
+    "cancelled_after_review",
+]
 
 
 class RefillWindow(TypedDict):
@@ -182,6 +189,11 @@ class RefillRun(TypedDict, total=False):
     needs_manual_review: bool
     error_text: str
     completion_reason: str
+    reconciled_at: str
+    reconciliation_mode: RefillReconciliationMode
+    reconciliation_note: str
+    pump_start_authorized: bool
+    duration_seconds: int
     idempotent_replay: bool
 
 

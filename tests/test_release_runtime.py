@@ -75,18 +75,30 @@ class FakeRuntimeClient:
                     "planned_transfer_ml": 2_000,
                     "physical_transfer_ml": None,
                 }
+            run = copy.deepcopy(self.refill_runs[run_id])
+            run["pump_start_authorized"] = False
+            run["duration_seconds"] = (
+                0
+                if run["status"]
+                in {"completed", "failed", "expired", "cancelled"}
+                else 120
+            )
             return {
-                "refill_run": copy.deepcopy(
-                    self.refill_runs[run_id]
-                )
+                "refill_run": run
             }
         if path == "/api/refill/running":
             run_id = payload["run_id"]
-            self.refill_runs[run_id]["status"] = "running"
+            authorized = (
+                self.refill_runs[run_id]["status"] == "reserved"
+            )
+            if authorized:
+                self.refill_runs[run_id]["status"] = "running"
             return {
-                "refill_run": copy.deepcopy(
-                    self.refill_runs[run_id]
-                )
+                "refill_run": {
+                    **copy.deepcopy(self.refill_runs[run_id]),
+                    "pump_start_authorized": authorized,
+                    "duration_seconds": 120 if authorized else 0,
+                }
             }
         if path == "/api/refill/complete":
             run_id = payload["run_id"]

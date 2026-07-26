@@ -96,6 +96,12 @@ class ApiContext(Protocol):
 
     def get_refill_run(self, run_id: object) -> dict[str, Any]: ...
 
+    def reconcile_refill_run(
+        self,
+        run_id: object,
+        **payload: object,
+    ) -> dict[str, Any]: ...
+
     def trigger_home_assistant_manual_run(
         self,
         result: dict[str, Any],

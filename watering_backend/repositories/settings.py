@@ -439,7 +439,6 @@ class SettingsRepository:
                 f"{self.defaults.minimum_water_model_percent:g} und "
                 f"{self.defaults.maximum_water_model_percent:g} Prozent liegen"
             )
-        self.delete("watering_amount_percent", conn=conn)
         self.set(
             "water_model_calibration",
             str(percent / 100),
@@ -478,7 +477,6 @@ class SettingsRepository:
                 f"{self.defaults.minimum_watering_amount_percent:g} und "
                 f"{self.defaults.maximum_watering_amount_percent:g} Prozent liegen"
             )
-        self.delete("water_model_calibration", conn=conn)
         self.set(
             "watering_amount_percent",
             str(amount),

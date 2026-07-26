@@ -172,7 +172,7 @@ Vorratswasser versorgt niemals direkt einen Bewässerungslauf.
 
 `Application.initialize()` führt `schema.initialize()` bei jedem Start aus.
 Die Schritte sind additiv und wiederholbar; `PRAGMA user_version` ist aktuell
-`5`.
+`6`.
 
 Wichtige Ergänzungen gegenüber 1.4.2:
 
@@ -186,7 +186,7 @@ Wichtige Ergänzungen gegenüber 1.4.2:
   Ausführbarkeit, Transfermenge, Erfüllung und Stornierung
 - `refill_runs` mit Zwei-Phasen-Status, reservierter Menge und Dauer,
   Start-/Ablaufzeiten, physischer und bilanzierter Menge sowie
-  Konsistenzhinweisen
+  Konsistenzhinweisen und persistenten Abgleichsmetadaten
 
 Legacy-Pflanzen und Schlauchzuordnungen werden ohne Duplikate übernommen.
 Ein realitätsnahes 1.4.2-Fixture wird zweimal migriert und auf Datenerhalt,

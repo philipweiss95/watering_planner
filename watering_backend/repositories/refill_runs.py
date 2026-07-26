@@ -105,8 +105,8 @@ class RefillRunsRepository:
         run_id: str,
         *,
         started_at: str,
-    ) -> None:
-        conn.execute(
+    ) -> bool:
+        cursor = conn.execute(
             """
             UPDATE refill_runs
             SET status = 'running',
@@ -115,6 +115,29 @@ class RefillRunsRepository:
             WHERE run_id = ? AND status = 'reserved'
             """,
             (started_at, started_at, run_id),
+        )
+        return cursor.rowcount == 1
+
+    def newer_than(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        run_id: str,
+    ) -> dict[str, Any] | None:
+        return _row(
+            conn.execute(
+                """
+                SELECT *
+                FROM refill_runs
+                WHERE run_id <> ?
+                  AND rowid > (
+                      SELECT rowid FROM refill_runs WHERE run_id = ?
+                  )
+                ORDER BY rowid DESC
+                LIMIT 1
+                """,
+                (run_id, run_id),
+            ).fetchone()
         )
 
     def mark_completed(
@@ -202,6 +225,87 @@ class RefillRunsRepository:
                 run_id,
             ),
         )
+
+    def mark_reconciled(
+        self,
+        conn: sqlite3.Connection,
+        run_id: str,
+        *,
+        status: str,
+        reconciled_at: str,
+        reconciliation_mode: str,
+        reconciliation_note: str,
+        completion_reason: str,
+        accounted_transfer_ml: int | None = None,
+        physical_transfer_ml: int | None = None,
+        main_accounted_ml: int | None = None,
+        tank_values: dict[str, int] | None = None,
+        consistency_delta_ml: int = 0,
+        consistency_note: str = "",
+    ) -> bool:
+        if status not in {"completed", "cancelled"}:
+            raise ValueError("Ungültiger Abgleichstatus")
+        values = tank_values or {}
+        cursor = conn.execute(
+            """
+            UPDATE refill_runs
+            SET status = ?,
+                completed_at = COALESCE(completed_at, ?),
+                accounted_transfer_ml = COALESCE(
+                    ?, accounted_transfer_ml
+                ),
+                physical_transfer_ml = COALESCE(
+                    ?, physical_transfer_ml
+                ),
+                main_accounted_ml = COALESCE(
+                    ?, main_accounted_ml
+                ),
+                main_before_complete_ml = COALESCE(
+                    ?, main_before_complete_ml
+                ),
+                main_after_complete_ml = COALESCE(
+                    ?, main_after_complete_ml
+                ),
+                refill_before_complete_ml = COALESCE(
+                    ?, refill_before_complete_ml
+                ),
+                refill_after_complete_ml = COALESCE(
+                    ?, refill_after_complete_ml
+                ),
+                consistency_delta_ml = ?,
+                consistency_note = ?,
+                needs_manual_review = 0,
+                error_text = '',
+                completion_reason = ?,
+                reconciled_at = ?,
+                reconciliation_mode = ?,
+                reconciliation_note = ?,
+                active_slot = NULL,
+                updated_at = ?
+            WHERE run_id = ?
+              AND needs_manual_review = 1
+            """,
+            (
+                status,
+                reconciled_at,
+                accounted_transfer_ml,
+                physical_transfer_ml,
+                main_accounted_ml,
+                values.get("main_before_ml"),
+                values.get("main_after_ml"),
+                values.get("refill_before_ml"),
+                values.get("refill_after_ml"),
+                int(consistency_delta_ml),
+                consistency_note,
+                completion_reason,
+                reconciled_at,
+                reconciliation_mode,
+                reconciliation_note,
+                reconciled_at,
+                run_id,
+            ),
+        )
+        return cursor.rowcount == 1
 
     def expire_stale(
         self,

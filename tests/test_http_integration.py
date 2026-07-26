@@ -220,6 +220,51 @@ class HttpIntegrationTests(unittest.TestCase):
             ).fetchone()["count"]
         self.assertEqual(event_count, 1)
 
+    def test_uncertain_refill_can_be_reconciled_through_api(
+        self,
+    ) -> None:
+        run_id = "http-refill-reconcile"
+        self.request(
+            "/api/refill/start",
+            {
+                "run_type": "manual",
+                "run_id": run_id,
+                "source": "integration_test",
+            },
+        )
+        claimed = self.request(
+            "/api/refill/running",
+            {"run_id": run_id},
+        )["refill_run"]
+        self.assertTrue(claimed["pump_start_authorized"])
+        self.request(
+            "/api/refill/fail",
+            {
+                "run_id": run_id,
+                "error": "Rückmeldung fehlt",
+                "may_have_transferred": True,
+            },
+        )
+        reconciled = self.request(
+            f"/api/refill/runs/{run_id}/reconcile",
+            {
+                "mode": "no_transfer",
+                "note": "Pumpe vor Ort als aus geprüft",
+            },
+        )["refill_run"]
+        repeated = self.request(
+            f"/api/refill/runs/{run_id}/reconcile",
+            {"mode": "no_transfer"},
+        )["refill_run"]
+
+        self.assertEqual(reconciled["status"], "cancelled")
+        self.assertEqual(
+            reconciled["reconciliation_mode"],
+            "no_transfer",
+        )
+        self.assertFalse(reconciled["needs_manual_review"])
+        self.assertTrue(repeated["idempotent_replay"])
+
 
 if __name__ == "__main__":
     unittest.main()

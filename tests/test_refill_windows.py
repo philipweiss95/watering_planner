@@ -412,7 +412,7 @@ class RefillWindowPersistenceTests(unittest.TestCase):
             self.application.get_refill_run(
                 "refill-before-crash"
             )["status"],
-            "reserved",
+            "running",
         )
 
         self.application.complete_refill_run("refill-before-crash")

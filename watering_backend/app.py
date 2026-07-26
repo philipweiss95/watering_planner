@@ -573,6 +573,13 @@ class Application:
     def get_refill_run(self, run_id: object) -> dict[str, Any]:
         return self.refill_runs.get(run_id)
 
+    def reconcile_refill_run(
+        self,
+        run_id: object,
+        **payload: object,
+    ) -> dict[str, Any]:
+        return self.refill_runs.reconcile(run_id, **payload)
+
     def fill_tank(self, tank_name: str) -> None:
         self.watering.fill_tank(tank_name)
 

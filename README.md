@@ -184,7 +184,11 @@ POST /api/refill/complete
 {"run_id":"refill-20260725T010000Z"}
 ```
 
-Menge und Dauer aus der Startantwort sind verbindlich. Der schmale Endpunkt
+Home Assistant darf die Pumpe ausschließlich nach einer Antwort von
+`/api/refill/running` mit `status=running`,
+`pump_start_authorized=true` und einer Dauer größer null einschalten. Nur der
+erste atomare Claim erhält diese Freigabe. Menge und Dauer aus diesem Claim
+sind verbindlich. Der schmale Endpunkt
 `POST /api/refill/mark-run` bleibt nur für ältere 1.4-Aufrufer erhalten.
 
 ## API
@@ -209,10 +213,11 @@ Menge und Dauer aus der Startantwort sind verbindlich. Der schmale Endpunkt
 - `POST /api/manual-refill`: Nachfülllauf sofort über Home Assistant anfordern
 - `POST /api/homekit/mark-run`: Pumpenlauf mit stabiler `run_id` idempotent verbuchen und Tank reduzieren
 - `POST /api/refill/start`: Nachfüllmenge und Laufzeit vor dem Einschalten persistent reservieren
-- `POST /api/refill/running`: physisch gestarteten Nachfülllauf bestätigen
+- `POST /api/refill/running`: reservierten Lauf einmalig vor dem Pumpenstart claimen
 - `POST /api/refill/complete`: reservierten Lauf nach dem Ausschalten atomar und idempotent abschließen
 - `POST /api/refill/fail`: nicht gestarteten oder unklar abgebrochenen Lauf melden
 - `GET /api/refill/runs/{run_id}`: persistenten Laufstatus ohne Geheimnisse lesen
+- `POST /api/refill/runs/{run_id}/reconcile`: ungeklärten Lauf nach manueller Prüfung atomar auflösen
 - `POST /api/refill/mark-run`: befristete Legacy-Kompatibilität für alte Aufrufer
 - `POST /api/tanks/main/fill`: Haupttank als voll markieren
 - `POST /api/tanks/refill/fill`: konfigurierbaren Vorratstank als voll markieren

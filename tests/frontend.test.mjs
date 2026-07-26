@@ -591,6 +591,50 @@ test("diagnostics provide all required system rows without secrets", () => {
   assert.equal(emptyRefill.status, "danger");
 });
 
+test("diagnostics expose a safe manual refill reconciliation action", () => {
+  const uncertainRun = {
+    run_id: "review-refill-1",
+    status: "expired",
+    needs_manual_review: true,
+    error_text: "Abschlussmeldung fehlt.",
+  };
+  const evaluation = {
+    automation: {},
+    refill: {
+      manual_review_required: true,
+      uncertain_runs: [uncertainRun],
+    },
+  };
+  const row = buildDiagnosticRows(
+    { weather_status: {}, home_assistant: {}, notifications: {} },
+    evaluation,
+    {},
+    {},
+  ).find((item) => item.id === "refill");
+  assert.equal(row.action, "reconcile-refill");
+  assert.equal(row.actionLabel, "Auflösen");
+  assert.equal(row.actionPayload, uncertainRun);
+
+  const nodes = installFakeDOM();
+  const diagnosticList = new FakeNode("section");
+  nodes.set("diagnosticList", diagnosticList);
+  nodes.set("notificationLog", new FakeNode("section"));
+  let selected = null;
+  renderDiagnostics(
+    { weather_status: {}, home_assistant: {}, notifications: {} },
+    evaluation,
+    { notification_log: [] },
+    {},
+    {
+      "reconcile-refill": (run) => {
+        selected = run;
+      },
+    },
+  );
+  diagnosticList.children[4].children[3].click();
+  assert.equal(selected.run_id, "review-refill-1");
+});
+
 test("weather status merges successful refresh and cache fallback metadata", () => {
   const successful = mergeWeatherStatus(
     {

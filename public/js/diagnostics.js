@@ -102,8 +102,13 @@ export function buildDiagnosticRows(state, evaluation, diagnostics, updater) {
         || refill.last_failed_run?.completed_at
         || refill.last_event?.ran_at,
       message: refillRunMessage(refill),
-      action: refill.active_run || refill.manual_review_required ? "" : "manual-refill",
-      actionLabel: "Nachfüllen",
+      action: refill.manual_review_required
+        ? "reconcile-refill"
+        : refill.active_run
+          ? ""
+          : "manual-refill",
+      actionPayload: refill.uncertain_runs?.[0] || null,
+      actionLabel: refill.manual_review_required ? "Auflösen" : "Nachfüllen",
     },
     {
       id: "smtp",
@@ -145,7 +150,12 @@ export function renderDiagnostics(state, evaluation, diagnostics, updater, actio
     const action = row.action && actions[row.action]
       ? element("button", { className: "secondary compact-command", type: "button", text: row.actionLabel })
       : badge(statusText(row.status), row.status);
-    if (row.action && actions[row.action]) action.addEventListener("click", actions[row.action]);
+    if (row.action && actions[row.action]) {
+      action.addEventListener(
+        "click",
+        () => actions[row.action](row.actionPayload),
+      );
+    }
     return element("article", { className: "diagnostic-row" }, [
       element("span", { className: `status-dot ${row.status}`, attrs: { "aria-label": statusText(row.status), role: "img" } }),
       element("div", {}, [element("h2", { text: row.label }), badge(statusText(row.status), row.status)]),

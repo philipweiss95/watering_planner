@@ -229,6 +229,9 @@ class Migration143Tests(unittest.TestCase):
                 "expires_at",
                 "consistency_delta_ml",
                 "needs_manual_review",
+                "reconciled_at",
+                "reconciliation_mode",
+                "reconciliation_note",
             }
             <= refill_run_columns
         )

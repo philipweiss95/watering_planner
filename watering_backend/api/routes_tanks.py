@@ -149,6 +149,32 @@ def get_refill_run(
     )
 
 
+def reconcile_refill_run(
+    context: ApiContext,
+    request: ApiRequest,
+    params: dict[str, str],
+) -> ApiResponse:
+    payload: dict[str, Any] = request.json()
+    refill = context.reconcile_refill_run(
+        params["run_id"],
+        mode=payload.get("mode"),
+        measured_transfer_ml=payload.get("measured_transfer_ml"),
+        main_tank_current_ml=payload.get("main_tank_current_ml"),
+        refill_tank_current_ml=payload.get(
+            "refill_tank_current_ml"
+        ),
+        note=payload.get("note", ""),
+    )
+    return ApiResponse(
+        {
+            "accepted": True,
+            "message": "Nachfülllauf wurde manuell abgeglichen.",
+            "refill_run": refill,
+            **context.get_state(),
+        }
+    )
+
+
 def fill_main(
     context: ApiContext,
     _request: ApiRequest,
@@ -176,6 +202,10 @@ def register(router: Router) -> None:
     router.post("/api/refill/complete", complete_refill_run)
     router.post("/api/refill/fail", fail_refill_run)
     router.get("/api/refill/runs/{run_id}", get_refill_run)
+    router.post(
+        "/api/refill/runs/{run_id}/reconcile",
+        reconcile_refill_run,
+    )
     router.post("/api/refill/mark-run", mark_refill_run)
     router.post("/api/tanks/main/fill", fill_main)
     router.post("/api/tanks/refill/fill", fill_refill)

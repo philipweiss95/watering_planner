@@ -6,6 +6,7 @@ import { renderHistory } from "./js/history.js";
 import { initHoses, renderHoses } from "./js/hoses.js";
 import { initNavigation } from "./js/navigation.js";
 import { initPlants, renderPlants } from "./js/plants.js";
+import { reconcileRefillRun } from "./js/refill-reconciliation.js";
 import {
   createRefreshCoordinator,
   loadRefreshSnapshot,
@@ -69,6 +70,16 @@ function renderAll() {
     "test-email": testEmail,
     "toggle-automation": toggleAutomation,
     "manual-refill": runManualRefill,
+    "reconcile-refill": (run) => reconcileRefillRun(
+      run,
+      getStore().state,
+      {
+        refresh: () => refreshAll({
+          weather: false,
+          afterMutation: true,
+        }),
+      },
+    ),
     "open-updater": () => navigate("info"),
   });
   renderUpdater(data.state, data.updater);

@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from watering_backend.validation import normalize_hose_numbers
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 BASE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS plant_catalog (
@@ -328,6 +328,9 @@ def migrate(conn: sqlite3.Connection) -> None:
             needs_manual_review INTEGER NOT NULL DEFAULT 0,
             error_text TEXT NOT NULL DEFAULT '',
             completion_reason TEXT NOT NULL DEFAULT '',
+            reconciled_at TEXT,
+            reconciliation_mode TEXT NOT NULL DEFAULT '',
+            reconciliation_note TEXT NOT NULL DEFAULT '',
             active_slot INTEGER,
             updated_at TEXT NOT NULL
         );
@@ -351,6 +354,24 @@ def migrate(conn: sqlite3.Connection) -> None:
         "refill_runs",
         "main_accounted_ml",
         "INTEGER",
+    )
+    _add_column(
+        conn,
+        "refill_runs",
+        "reconciled_at",
+        "TEXT",
+    )
+    _add_column(
+        conn,
+        "refill_runs",
+        "reconciliation_mode",
+        "TEXT NOT NULL DEFAULT ''",
+    )
+    _add_column(
+        conn,
+        "refill_runs",
+        "reconciliation_note",
+        "TEXT NOT NULL DEFAULT ''",
     )
     _migrate_refill_window_observations(conn)
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")

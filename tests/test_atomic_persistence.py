@@ -291,6 +291,7 @@ class AtomicPersistenceTests(unittest.TestCase):
                 "refill_tank_capacity_ml": 42_000,
                 "refill_pump_ml_per_min": 1_250,
                 "watering_amount_percent": 118,
+                "water_model_calibration_percent": 13.5,
                 "refill_automation_enabled": False,
                 "main_pump_calibration_factor": 1.2,
             }
@@ -322,6 +323,25 @@ class AtomicPersistenceTests(unittest.TestCase):
         self.assertEqual(
             state["planner_config"]["weather_cache_minutes"],
             20,
+        )
+        with self.application.database.connection() as conn:
+            stored = {
+                row["key"]: row["value"]
+                for row in conn.execute(
+                    """
+                    SELECT key, value
+                    FROM app_settings
+                    WHERE key IN (
+                        'watering_amount_percent',
+                        'water_model_calibration'
+                    )
+                    """
+                )
+            }
+        self.assertEqual(float(stored["watering_amount_percent"]), 118)
+        self.assertAlmostEqual(
+            float(stored["water_model_calibration"]),
+            0.135,
         )
 
     def test_all_settings_validation_failures_roll_back_every_table(

@@ -144,11 +144,28 @@ script:
       - variables:
           reserved_run: "{{ refill_start_response.content.refill_run | default({}, true) }}"
           reserved_run_id: "{{ (refill_start_response.content.refill_run | default({}, true)).get('run_id', '') }}"
-          reserved_seconds: "{{ (refill_start_response.content.refill_run | default({}, true)).get('duration_seconds', 0) | int(0) }}"
 
       - condition: template
         value_template: >
-          {{ reserved_run_id | length > 0 and reserved_seconds > 0 }}
+          {{ reserved_run_id | length > 0 }}
+
+      - alias: Einmalige Pumpenstartfreigabe beim Planner claimen
+        action: rest_command.bewaesserung_refill_running
+        data:
+          run_id: "{{ reserved_run_id }}"
+        response_variable: refill_claim_response
+
+      - variables:
+          claimed_run: "{{ refill_claim_response.content.refill_run | default({}, true) }}"
+          claimed_status: "{{ (refill_claim_response.content.refill_run | default({}, true)).get('status', '') }}"
+          pump_start_authorized: "{{ (refill_claim_response.content.refill_run | default({}, true)).get('pump_start_authorized', false) | bool(false) }}"
+          claimed_seconds: "{{ (refill_claim_response.content.refill_run | default({}, true)).get('duration_seconds', 0) | int(0) }}"
+
+      - condition: template
+        value_template: >
+          {{ claimed_status == 'running'
+             and pump_start_authorized
+             and claimed_seconds > 0 }}
 
       - alias: Aktiven Lauf fuer einen HA-Neustart merken
         action: input_text.set_value
@@ -162,7 +179,7 @@ script:
         target:
           entity_id: timer.watering_refill_pump_guard
         data:
-          duration: "{{ reserved_seconds | int(0) + 15 }}"
+          duration: "{{ claimed_seconds | int(0) + 15 }}"
 
       - alias: Nachfuellpumpe einschalten
         action: switch.turn_on
@@ -195,15 +212,9 @@ script:
               - stop: Nachfuellpumpe wurde nicht eingeschaltet
                 error: true
 
-      - alias: Lauf als physisch gestartet markieren
-        action: rest_command.bewaesserung_refill_running
-        data:
-          run_id: "{{ reserved_run_id }}"
-        continue_on_error: true
-
       - alias: Persistierte Nachfuelldauer abwarten
         delay:
-          seconds: "{{ reserved_seconds }}"
+          seconds: "{{ claimed_seconds }}"
 
       - alias: Nachfuellpumpe ausschalten
         action: switch.turn_off

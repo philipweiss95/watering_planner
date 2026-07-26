@@ -25,7 +25,7 @@ class HomeAssistantExampleTests(unittest.TestCase):
         )
         running = configuration.index(
             "action: rest_command.bewaesserung_refill_running",
-            switch_on,
+            start,
         )
         switch_off = configuration.index(
             "action: switch.turn_off",
@@ -37,13 +37,24 @@ class HomeAssistantExampleTests(unittest.TestCase):
         )
 
         self.assertLess(start, switch_on)
-        self.assertLess(switch_on, running)
+        self.assertLess(start, running)
+        self.assertLess(running, switch_on)
         self.assertLess(running, switch_off)
         self.assertLess(switch_off, complete)
         self.assertIn(
-            'duration: "{{ reserved_seconds | int(0) + 15 }}"',
+            'duration: "{{ claimed_seconds | int(0) + 15 }}"',
             configuration,
         )
+        self.assertIn(
+            "claimed_status == 'running'",
+            configuration,
+        )
+        self.assertIn("pump_start_authorized", configuration)
+        self.assertIn("and claimed_seconds > 0", configuration)
+        authorization_check = configuration.index(
+            "and pump_start_authorized"
+        )
+        self.assertLess(authorization_check, switch_on)
         self.assertIn(
             "timer.watering_refill_pump_guard",
             configuration,

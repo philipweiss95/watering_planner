@@ -98,6 +98,20 @@ class RefillRunLifecycleTests(unittest.TestCase):
                 ),
             )
 
+    def _uncertain_run(self, run_id: str) -> dict:
+        reserved = self.application.start_refill_run(
+            run_type="manual",
+            run_id=run_id,
+        )
+        claimed = self.application.mark_refill_running(run_id)
+        self.assertTrue(claimed["pump_start_authorized"])
+        failed = self.application.fail_refill_run(
+            run_id,
+            error="Pumpenzustand unbekannt",
+        )
+        self.assertTrue(failed["needs_manual_review"])
+        return reserved
+
     def test_window_limited_run_completes_after_window_with_reserved_values(
         self,
     ) -> None:
@@ -115,6 +129,10 @@ class RefillRunLifecycleTests(unittest.TestCase):
             datetime.fromisoformat(reserved["window"]["end"])
             - timedelta(seconds=10),
         )
+        claimed = self.application.mark_refill_running(
+            "window-limited"
+        )
+        self.assertTrue(claimed["pump_start_authorized"])
 
         config = self.application.settings.planner_config()
         config["refill_fraction"] = 0.1
@@ -175,6 +193,7 @@ class RefillRunLifecycleTests(unittest.TestCase):
             run_type="manual",
             run_id="tank-drift",
         )
+        self.application.mark_refill_running("tank-drift")
         self.assertEqual(reserved["planned_transfer_ml"], 1000)
         self._set_tanks(main_ml=9500, refill_ml=700)
 
@@ -201,6 +220,13 @@ class RefillRunLifecycleTests(unittest.TestCase):
                 "WHERE run_id = 'tank-drift'"
             ).fetchone()
         self.assertEqual(int(count["count"]), 1)
+        reviewed = self.application.reconcile_refill_run(
+            "tank-drift",
+            mode="cancelled_after_review",
+        )
+        self.assertEqual(reviewed["status"], "completed")
+        self.assertFalse(reviewed["needs_manual_review"])
+        self.assertEqual(reviewed["transferred_ml"], 700)
 
     def test_parallel_same_start_is_idempotent(self) -> None:
         self.clock.value = datetime(
@@ -280,6 +306,7 @@ class RefillRunLifecycleTests(unittest.TestCase):
             run_type="manual",
             run_id="parallel-complete",
         )
+        self.application.mark_refill_running("parallel-complete")
         before = self.application.tanks.balcony()
         with ThreadPoolExecutor(max_workers=2) as executor:
             results = list(
@@ -360,6 +387,10 @@ class RefillRunLifecycleTests(unittest.TestCase):
         self.assertTrue(failed["needs_manual_review"])
         self.assertEqual(before, self.application.tanks.balcony())
 
+        self.application.reconcile_refill_run(
+            "failed-run",
+            mode="no_transfer",
+        )
         reserved = self.application.start_refill_run(
             run_type="manual",
             run_id="expires-run",
@@ -370,13 +401,23 @@ class RefillRunLifecycleTests(unittest.TestCase):
             + timedelta(seconds=1)
         )
         diagnostics = self.application.refill_runs.diagnostics()
+        with self.assertRaisesRegex(ValueError, "ungeklärt"):
+            self.application.start_refill_run(
+                run_type="manual",
+                run_id="blocked-replacement-run",
+            )
+        self.application.reconcile_refill_run(
+            "expires-run",
+            mode="no_transfer",
+        )
         replacement = self.application.start_refill_run(
             run_type="manual",
             run_id="replacement-run",
         )
 
         expired = self.application.get_refill_run("expires-run")
-        self.assertEqual(expired["status"], "expired")
+        self.assertEqual(expired["status"], "cancelled")
+        self.assertFalse(expired["needs_manual_review"])
         self.assertTrue(diagnostics["manual_review_required"])
         self.assertEqual(replacement["status"], "reserved")
 
@@ -433,6 +474,7 @@ class RefillRunLifecycleTests(unittest.TestCase):
             run_type="manual",
             run_id="cooldown-first",
         )
+        self.application.mark_refill_running("cooldown-first")
         self.application.complete_refill_run("cooldown-first")
         with self.assertRaisesRegex(ValueError, "Cooldown"):
             self.application.start_refill_run(
@@ -475,6 +517,372 @@ class RefillRunLifecycleTests(unittest.TestCase):
             failed["completion_reason"],
             "pump_state_uncertain",
         )
+
+    def test_terminal_runs_never_reauthorize_pump_start(self) -> None:
+        self.clock.value = datetime(
+            2026,
+            6,
+            3,
+            10,
+            0,
+            tzinfo=ZoneInfo("Europe/Berlin"),
+        )
+
+        self.application.start_refill_run(
+            run_type="manual",
+            run_id="terminal-failed",
+        )
+        self.application.fail_refill_run(
+            "terminal-failed",
+            may_have_transferred=False,
+        )
+        failed = self.application.start_refill_run(
+            run_type="manual",
+            run_id="terminal-failed",
+        )
+
+        self._uncertain_run("terminal-cancelled")
+        self.application.reconcile_refill_run(
+            "terminal-cancelled",
+            mode="cancelled_after_review",
+        )
+        cancelled = self.application.start_refill_run(
+            run_type="manual",
+            run_id="terminal-cancelled",
+        )
+
+        expired_reservation = self.application.start_refill_run(
+            run_type="manual",
+            run_id="terminal-expired",
+        )
+        self.clock.value = (
+            datetime.fromisoformat(expired_reservation["expires_at"])
+            .astimezone(ZoneInfo("Europe/Berlin"))
+            + timedelta(seconds=1)
+        )
+        self.application.refill_runs.expire_stale()
+        expired = self.application.start_refill_run(
+            run_type="manual",
+            run_id="terminal-expired",
+        )
+        self.application.reconcile_refill_run(
+            "terminal-expired",
+            mode="no_transfer",
+        )
+
+        self.application.start_refill_run(
+            run_type="manual",
+            run_id="terminal-completed",
+        )
+        self.application.mark_refill_running("terminal-completed")
+        self.application.complete_refill_run("terminal-completed")
+        completed = self.application.start_refill_run(
+            run_type="manual",
+            run_id="terminal-completed",
+        )
+
+        for result, status in (
+            (failed, "failed"),
+            (cancelled, "cancelled"),
+            (expired, "expired"),
+            (completed, "completed"),
+        ):
+            with self.subTest(status=status):
+                self.assertEqual(result["status"], status)
+                self.assertFalse(result["pump_start_authorized"])
+                self.assertEqual(result["duration_seconds"], 0)
+                self.assertTrue(result["idempotent_replay"])
+
+    def test_parallel_claim_authorizes_exactly_one_pump_start(
+        self,
+    ) -> None:
+        self.clock.value = datetime(
+            2026,
+            6,
+            3,
+            10,
+            0,
+            tzinfo=ZoneInfo("Europe/Berlin"),
+        )
+        self.application.start_refill_run(
+            run_type="manual",
+            run_id="parallel-claim",
+        )
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            results = list(
+                executor.map(
+                    lambda _index: self.application.mark_refill_running(
+                        "parallel-claim"
+                    ),
+                    range(4),
+                )
+            )
+        authorized = [
+            item for item in results if item["pump_start_authorized"]
+        ]
+        rejected = [
+            item for item in results if not item["pump_start_authorized"]
+        ]
+        self.assertEqual(len(authorized), 1)
+        self.assertEqual(len(rejected), 3)
+        self.assertGreater(authorized[0]["duration_seconds"], 0)
+        self.assertTrue(
+            all(item["duration_seconds"] == 0 for item in rejected)
+        )
+        self.assertEqual(
+            {item["status"] for item in results},
+            {"running"},
+        )
+
+    def test_duplicate_and_late_webhooks_cannot_restart_pump(self) -> None:
+        self.clock.value = datetime(
+            2026,
+            6,
+            3,
+            10,
+            0,
+            tzinfo=ZoneInfo("Europe/Berlin"),
+        )
+        reserved = self.application.start_refill_run(
+            run_type="manual",
+            run_id="duplicate-webhook",
+        )
+        repeated_reservation = self.application.start_refill_run(
+            run_type="manual",
+            run_id="duplicate-webhook",
+        )
+        first_claim = self.application.mark_refill_running(
+            "duplicate-webhook"
+        )
+        repeated_claim = self.application.mark_refill_running(
+            "duplicate-webhook"
+        )
+        completed = self.application.complete_refill_run(
+            "duplicate-webhook"
+        )
+        late_start = self.application.start_refill_run(
+            run_type="manual",
+            run_id="duplicate-webhook",
+        )
+        late_claim = self.application.mark_refill_running(
+            "duplicate-webhook"
+        )
+        repeated_complete = self.application.complete_refill_run(
+            "duplicate-webhook"
+        )
+
+        self.assertFalse(reserved["pump_start_authorized"])
+        self.assertFalse(repeated_reservation["pump_start_authorized"])
+        self.assertTrue(first_claim["pump_start_authorized"])
+        self.assertFalse(repeated_claim["pump_start_authorized"])
+        self.assertFalse(late_start["pump_start_authorized"])
+        self.assertFalse(late_claim["pump_start_authorized"])
+        self.assertEqual(late_start["duration_seconds"], 0)
+        self.assertEqual(late_claim["duration_seconds"], 0)
+        self.assertEqual(completed["status"], "completed")
+        self.assertTrue(repeated_complete["idempotent_replay"])
+        with self.application.database.connection() as conn:
+            count = conn.execute(
+                "SELECT COUNT(*) AS count FROM refill_events "
+                "WHERE run_id = 'duplicate-webhook'"
+            ).fetchone()
+        self.assertEqual(int(count["count"]), 1)
+
+    def test_uncertain_run_blocks_every_direct_start(self) -> None:
+        self.clock.value = datetime(
+            2026,
+            6,
+            3,
+            10,
+            0,
+            tzinfo=ZoneInfo("Europe/Berlin"),
+        )
+        self._uncertain_run("uncertain-blocker")
+        with self.assertRaisesRegex(ValueError, "ungeklärt"):
+            self.application.start_refill_run(
+                run_type="manual",
+                run_id="must-not-start",
+            )
+        self.application.reconcile_refill_run(
+            "uncertain-blocker",
+            mode="no_transfer",
+        )
+        allowed = self.application.start_refill_run(
+            run_type="manual",
+            run_id="allowed-after-review",
+        )
+        self.assertEqual(allowed["status"], "reserved")
+
+    def test_all_manual_reconciliation_modes_are_atomic(self) -> None:
+        self.clock.value = datetime(
+            2026,
+            6,
+            3,
+            10,
+            0,
+            tzinfo=ZoneInfo("Europe/Berlin"),
+        )
+        before = self.application.tanks.balcony()
+
+        self._uncertain_run("reconcile-none")
+        none_result = self.application.reconcile_refill_run(
+            "reconcile-none",
+            mode="no_transfer",
+            note="Pumpe blieb aus",
+        )
+        none_repeated = self.application.reconcile_refill_run(
+            "reconcile-none",
+            mode="no_transfer",
+        )
+        self.assertEqual(none_result["status"], "cancelled")
+        self.assertEqual(
+            none_result["reconciliation_mode"],
+            "no_transfer",
+        )
+        self.assertFalse(none_result["needs_manual_review"])
+        self.assertTrue(none_repeated["idempotent_replay"])
+        self.assertEqual(before, self.application.tanks.balcony())
+
+        self._uncertain_run("reconcile-cancelled")
+        cancelled = self.application.reconcile_refill_run(
+            "reconcile-cancelled",
+            mode="cancelled_after_review",
+        )
+        self.assertEqual(cancelled["status"], "cancelled")
+
+        self._uncertain_run("reconcile-measured")
+        measured_before = self.application.tanks.balcony()
+        measured = self.application.reconcile_refill_run(
+            "reconcile-measured",
+            mode="measured_transfer",
+            measured_transfer_ml=321,
+        )
+        measured_after = self.application.tanks.balcony()
+        self.assertEqual(measured["status"], "completed")
+        self.assertEqual(measured["transferred_ml"], 321)
+        self.assertEqual(
+            measured_after["tank_current_ml"]
+            - measured_before["tank_current_ml"],
+            321,
+        )
+
+        self.clock.value += timedelta(hours=4)
+        self._uncertain_run("reconcile-full")
+        full = self.application.reconcile_refill_run(
+            "reconcile-full",
+            mode="full_transfer",
+        )
+        self.assertEqual(full["status"], "completed")
+        self.assertEqual(
+            full["transferred_ml"],
+            full["planned_transfer_ml"],
+        )
+
+        self.clock.value += timedelta(hours=4)
+        self._set_tanks(main_ml=8000, refill_ml=12000)
+        self._uncertain_run("reconcile-levels")
+        corrected = self.application.reconcile_refill_run(
+            "reconcile-levels",
+            mode="tank_levels_corrected",
+            main_tank_current_ml=7250,
+            refill_tank_current_ml=11100,
+        )
+        corrected_levels = self.application.tanks.balcony()
+        self.assertEqual(corrected["status"], "cancelled")
+        self.assertEqual(
+            corrected["reconciliation_mode"],
+            "tank_levels_corrected",
+        )
+        self.assertEqual(corrected_levels["tank_current_ml"], 7250)
+        self.assertEqual(
+            corrected_levels["refill_tank_current_ml"],
+            11100,
+        )
+        with self.application.database.connection() as conn:
+            event_count = conn.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM refill_events
+                WHERE source LIKE 'reconcile:%'
+                """
+            ).fetchone()
+        self.assertEqual(int(event_count["count"]), 2)
+
+    def test_expired_old_run_cannot_complete_after_replacement(
+        self,
+    ) -> None:
+        self.clock.value = datetime(
+            2026,
+            6,
+            3,
+            10,
+            0,
+            tzinfo=ZoneInfo("Europe/Berlin"),
+        )
+        old = self.application.start_refill_run(
+            run_type="manual",
+            run_id="expired-old",
+        )
+        self.application.mark_refill_running("expired-old")
+        self.clock.value = (
+            datetime.fromisoformat(old["expires_at"])
+            .astimezone(ZoneInfo("Europe/Berlin"))
+            + timedelta(seconds=1)
+        )
+        self.application.refill_runs.expire_stale()
+        with self.application.database.connection(immediate=True) as conn:
+            conn.execute(
+                """
+                UPDATE refill_runs
+                SET needs_manual_review = 0
+                WHERE run_id = 'expired-old'
+                """
+            )
+        replacement = self.application.start_refill_run(
+            run_type="manual",
+            run_id="newer-replacement",
+        )
+        before = self.application.tanks.balcony()
+        with self.assertRaisesRegex(ValueError, "neueren Lauf"):
+            self.application.complete_refill_run("expired-old")
+        self.assertEqual(before, self.application.tanks.balcony())
+        self.assertEqual(replacement["status"], "reserved")
+
+    def test_reconciliation_failure_rolls_back_tanks_and_event(
+        self,
+    ) -> None:
+        self.clock.value = datetime(
+            2026,
+            6,
+            3,
+            10,
+            0,
+            tzinfo=ZoneInfo("Europe/Berlin"),
+        )
+        self._uncertain_run("reconcile-rollback")
+        before = self.application.tanks.balcony()
+        with patch.object(
+            self.application.refill_run_repository,
+            "mark_reconciled",
+            side_effect=RuntimeError("simulated reconciliation crash"),
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "simulated reconciliation crash",
+            ):
+                self.application.reconcile_refill_run(
+                    "reconcile-rollback",
+                    mode="full_transfer",
+                )
+        self.assertEqual(before, self.application.tanks.balcony())
+        run = self.application.get_refill_run("reconcile-rollback")
+        self.assertTrue(run["needs_manual_review"])
+        with self.application.database.connection() as conn:
+            event = self.application.events.refill_by_run_id(
+                "reconcile-rollback",
+                conn=conn,
+            )
+        self.assertIsNone(event)
 
 
 if __name__ == "__main__":

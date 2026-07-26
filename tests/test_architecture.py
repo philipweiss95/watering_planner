@@ -39,7 +39,7 @@ class ArchitectureTests(unittest.TestCase):
 
     def test_all_http_endpoints_are_registered(self) -> None:
         router = build_router()
-        self.assertEqual(len(router.routes), 38)
+        self.assertEqual(len(router.routes), 39)
         self.assertEqual(
             len({(route.method, route.template) for route in router.routes}),
             len(router.routes),
@@ -55,6 +55,10 @@ class ArchitectureTests(unittest.TestCase):
                 ("POST", "/api/refill/complete"),
                 ("POST", "/api/refill/fail"),
                 ("GET", "/api/refill/runs/{run_id}"),
+                (
+                    "POST",
+                    "/api/refill/runs/{run_id}/reconcile",
+                ),
             }
             <= registered
         )

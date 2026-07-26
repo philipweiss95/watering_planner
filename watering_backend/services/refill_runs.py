@@ -22,6 +22,19 @@ from watering_backend.services.watering import normalize_run_id
 
 REFILL_WINDOW_SAFETY_SECONDS = 10
 REFILL_COMPLETION_GRACE = timedelta(minutes=15)
+TERMINAL_REFILL_STATUSES = {
+    "completed",
+    "failed",
+    "expired",
+    "cancelled",
+}
+RECONCILIATION_MODES = {
+    "no_transfer",
+    "full_transfer",
+    "measured_transfer",
+    "tank_levels_corrected",
+    "cancelled_after_review",
+}
 
 
 class RefillRunService:
@@ -263,6 +276,16 @@ class RefillRunService:
                     legacy_generated_run_id=legacy_generated,
                     now_utc=now_utc,
                 )
+            uncertain = self.runs.recent_uncertain(
+                limit=1,
+                conn=conn,
+            )
+            if uncertain:
+                raise ValueError(
+                    "Ein früherer Nachfülllauf ist ungeklärt "
+                    f"({uncertain[0]['run_id']}). Vor einem neuen Lauf "
+                    "muss er in der Systemdiagnose abgeglichen werden."
+                )
             active = self.runs.active(conn=conn)
             if active:
                 raise ValueError(
@@ -316,12 +339,31 @@ class RefillRunService:
         now_utc = self._utc_now()
         now_at = now_utc.isoformat()
         with self.database.connection(immediate=True) as conn:
+            self.runs.expire_stale(conn, now_at=now_at)
             run = self.runs.get(normalized_run_id, conn=conn)
             if not run:
                 raise ValueError("Unbekannte Nachfüll-run_id")
             replay = run["status"] != "reserved"
+            pump_start_authorized = False
             if run["status"] == "reserved":
-                self.runs.mark_running(
+                uncertain = self.runs.recent_uncertain(
+                    limit=10,
+                    conn=conn,
+                )
+                blocking = next(
+                    (
+                        item
+                        for item in uncertain
+                        if item["run_id"] != normalized_run_id
+                    ),
+                    None,
+                )
+                if blocking:
+                    raise ValueError(
+                        "Ein früherer Nachfülllauf ist ungeklärt "
+                        f"({blocking['run_id']}). Pumpenstart gesperrt."
+                    )
+                pump_start_authorized = self.runs.mark_running(
                     conn,
                     normalized_run_id,
                     started_at=now_at,
@@ -330,8 +372,88 @@ class RefillRunService:
         return self._public(
             run,
             idempotent_replay=replay,
+            pump_start_authorized=pump_start_authorized,
+            suppress_duration=not pump_start_authorized,
             now_utc=now_utc,
         )
+
+    def _account_transfer(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        run: dict[str, Any],
+        physical_transfer_ml: int,
+        now_utc: datetime,
+        now_at: str,
+        source: str,
+    ) -> dict[str, Any]:
+        levels = self.tanks.balcony(conn=conn)
+        main_room = max(
+            0,
+            int(levels["tank_capacity_ml"])
+            - int(levels["tank_current_ml"]),
+        )
+        refill_available = max(
+            0,
+            int(levels["refill_tank_current_ml"]),
+        )
+        main_accounted_ml = min(physical_transfer_ml, main_room)
+        refill_accounted_ml = min(
+            physical_transfer_ml,
+            refill_available,
+        )
+        tank_values = self.tanks.adjust_tanks(
+            conn,
+            main_delta_ml=main_accounted_ml,
+            refill_delta_ml=-physical_transfer_ml,
+            updated_at=now_at,
+        )
+        consistency_delta_ml = max(
+            physical_transfer_ml - main_accounted_ml,
+            physical_transfer_ml - refill_accounted_ml,
+            0,
+        )
+        consistency_note = ""
+        if consistency_delta_ml:
+            consistency_note = (
+                f"Physisch bestätigt wurden {physical_transfer_ml} ml; "
+                f"im Haupttank konnten {main_accounted_ml} ml und im "
+                f"Vorrat {refill_accounted_ml} ml rechnerisch "
+                "nachvollzogen werden. Tankstände manuell prüfen."
+            )
+        self.events.insert_refill(
+            conn,
+            ran_at=now_at,
+            target_date=str(run["target_date"]),
+            requested_ml=int(run["requested_ml"]),
+            transferred_ml=physical_transfer_ml,
+            duration_seconds=int(run["planned_duration_seconds"]),
+            window_label=str(run["window_label"]),
+            source=source,
+            run_id=str(run["run_id"]),
+        )
+        config = self.settings.planner_config(conn=conn)
+        cooldown_until = (
+            now_utc
+            + timedelta(
+                minutes=int(config["refill_min_interval_minutes"])
+            )
+        ).isoformat()
+        self.events.reconcile_refill_plans_after_event(
+            conn,
+            target_date=str(run["target_date"]),
+            window_label=str(run["window_label"]),
+            window_key=str(run["window_key"]),
+            ran_at=now_at,
+            cooldown_until=cooldown_until,
+        )
+        return {
+            "physical_transfer_ml": physical_transfer_ml,
+            "main_accounted_ml": main_accounted_ml,
+            "tank_values": tank_values,
+            "consistency_delta_ml": consistency_delta_ml,
+            "consistency_note": consistency_note,
+        }
 
     def complete(
         self,
@@ -357,6 +479,27 @@ class RefillRunService:
                     idempotent_replay=True,
                     now_utc=now_utc,
                 )
+            if run["status"] == "reserved":
+                raise ValueError(
+                    "Nachfülllauf wurde noch nicht zum Pumpenstart "
+                    "freigegeben"
+                )
+            if run["status"] == "expired":
+                if not run.get("started_at"):
+                    raise ValueError(
+                        "Abgelaufene Reservierung wurde nie zum "
+                        "Pumpenstart freigegeben und muss abgeglichen werden"
+                    )
+                newer = self.runs.newer_than(
+                    conn,
+                    run_id=normalized_run_id,
+                )
+                if newer:
+                    raise ValueError(
+                        "Der abgelaufene Nachfülllauf kann nach einem "
+                        f"neueren Lauf ({newer['run_id']}) nicht automatisch "
+                        "abgeschlossen werden. Manueller Abgleich ist nötig."
+                    )
             if run["status"] in {"failed", "cancelled"}:
                 raise ValueError(
                     f"Nachfülllauf ist bereits {run['status']}"
@@ -515,6 +658,212 @@ class RefillRunService:
             now_utc=now_utc,
         )
 
+    @staticmethod
+    def _integer_ml(value: object, label: str) -> int:
+        if isinstance(value, bool):
+            raise ValueError(f"{label} muss eine ganze Zahl sein")
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{label} muss eine ganze Zahl sein") from exc
+        if not math.isfinite(numeric) or not numeric.is_integer():
+            raise ValueError(f"{label} muss eine ganze Zahl sein")
+        integer = int(numeric)
+        if integer < 0 or integer > 1_000_000:
+            raise ValueError(
+                f"{label} muss zwischen 0 und 1000000 ml liegen"
+            )
+        return integer
+
+    def reconcile(
+        self,
+        run_id: object,
+        *,
+        mode: object,
+        measured_transfer_ml: object = None,
+        main_tank_current_ml: object = None,
+        refill_tank_current_ml: object = None,
+        note: object = "",
+    ) -> dict[str, Any]:
+        normalized_run_id, _legacy = normalize_run_id(
+            run_id,
+            "refill",
+        )
+        normalized_mode = str(mode or "").strip()
+        if normalized_mode not in RECONCILIATION_MODES:
+            raise ValueError("Unbekannte Abgleichart")
+        normalized_note = str(note or "").strip()
+        if len(normalized_note) > 500:
+            raise ValueError("Abgleichnotiz darf höchstens 500 Zeichen haben")
+
+        now_utc = self._utc_now()
+        now_at = now_utc.isoformat()
+        with self.database.connection(immediate=True) as conn:
+            self.runs.expire_stale(conn, now_at=now_at)
+            run = self.runs.get(normalized_run_id, conn=conn)
+            if not run:
+                raise ValueError("Unbekannte Nachfüll-run_id")
+            if (
+                not bool(run.get("needs_manual_review"))
+                and run.get("reconciliation_mode")
+            ):
+                return self._public(
+                    run,
+                    idempotent_replay=True,
+                    now_utc=now_utc,
+                )
+            if not bool(run.get("needs_manual_review")):
+                raise ValueError(
+                    "Dieser Nachfülllauf benötigt keinen manuellen Abgleich"
+                )
+            existing_event = self.events.refill_by_run_id(
+                normalized_run_id,
+                conn=conn,
+            )
+            if existing_event and normalized_mode in {
+                "no_transfer",
+                "full_transfer",
+                "measured_transfer",
+            }:
+                raise ValueError(
+                    "Für diesen Lauf wurde bereits ein Nachfüllereignis "
+                    "verbucht. Er kann nur über korrigierte Tankstände oder "
+                    "als geprüft aufgelöst werden."
+                )
+
+            if normalized_mode in {
+                "no_transfer",
+                "cancelled_after_review",
+            }:
+                changed = self.runs.mark_reconciled(
+                    conn,
+                    normalized_run_id,
+                    status=(
+                        "completed"
+                        if existing_event
+                        else "cancelled"
+                    ),
+                    reconciled_at=now_at,
+                    reconciliation_mode=normalized_mode,
+                    reconciliation_note=normalized_note,
+                    completion_reason=f"reconciled_{normalized_mode}",
+                    accounted_transfer_ml=(
+                        None if existing_event else 0
+                    ),
+                    physical_transfer_ml=(
+                        None if existing_event else 0
+                    ),
+                    main_accounted_ml=(
+                        None if existing_event else 0
+                    ),
+                )
+            elif normalized_mode == "tank_levels_corrected":
+                levels = self.tanks.balcony(conn=conn)
+                main_ml = self._integer_ml(
+                    main_tank_current_ml,
+                    "Haupttankstand",
+                )
+                refill_ml = self._integer_ml(
+                    refill_tank_current_ml,
+                    "Vorratstankstand",
+                )
+                if main_ml > int(levels["tank_capacity_ml"]):
+                    raise ValueError(
+                        "Haupttankstand übersteigt die Kapazität"
+                    )
+                if refill_ml > int(levels["refill_tank_capacity_ml"]):
+                    raise ValueError(
+                        "Vorratstankstand übersteigt die Kapazität"
+                    )
+                tank_values = self.tanks.adjust_tanks(
+                    conn,
+                    main_delta_ml=(
+                        main_ml - int(levels["tank_current_ml"])
+                    ),
+                    refill_delta_ml=(
+                        refill_ml
+                        - int(levels["refill_tank_current_ml"])
+                    ),
+                    updated_at=now_at,
+                )
+                changed = self.runs.mark_reconciled(
+                    conn,
+                    normalized_run_id,
+                    status=(
+                        "completed"
+                        if existing_event
+                        else "cancelled"
+                    ),
+                    reconciled_at=now_at,
+                    reconciliation_mode=normalized_mode,
+                    reconciliation_note=normalized_note,
+                    completion_reason="reconciled_tank_levels",
+                    tank_values=tank_values,
+                )
+            else:
+                physical_transfer_ml = (
+                    int(run["planned_transfer_ml"])
+                    if normalized_mode == "full_transfer"
+                    else self._integer_ml(
+                        measured_transfer_ml,
+                        "Gemessene Nachfüllmenge",
+                    )
+                )
+                if physical_transfer_ml <= 0:
+                    raise ValueError(
+                        "Gemessene Nachfüllmenge muss größer als 0 sein"
+                    )
+                accounting = self._account_transfer(
+                    conn,
+                    run=run,
+                    physical_transfer_ml=physical_transfer_ml,
+                    now_utc=now_utc,
+                    now_at=now_at,
+                    source=f"reconcile:{normalized_mode}",
+                )
+                changed = self.runs.mark_reconciled(
+                    conn,
+                    normalized_run_id,
+                    status="completed",
+                    reconciled_at=now_at,
+                    reconciliation_mode=normalized_mode,
+                    reconciliation_note=normalized_note,
+                    completion_reason=f"reconciled_{normalized_mode}",
+                    accounted_transfer_ml=accounting[
+                        "main_accounted_ml"
+                    ],
+                    physical_transfer_ml=accounting[
+                        "physical_transfer_ml"
+                    ],
+                    main_accounted_ml=accounting[
+                        "main_accounted_ml"
+                    ],
+                    tank_values=accounting["tank_values"],
+                    consistency_delta_ml=accounting[
+                        "consistency_delta_ml"
+                    ],
+                    consistency_note=accounting["consistency_note"],
+                )
+            if not changed:
+                repeated = self.runs.get(normalized_run_id, conn=conn)
+                if repeated and repeated.get("reconciliation_mode"):
+                    return self._public(
+                        repeated,
+                        idempotent_replay=True,
+                        now_utc=now_utc,
+                    )
+                raise ValueError(
+                    "Nachfülllauf konnte nicht atomar abgeglichen werden"
+                )
+            reconciled = (
+                self.runs.get(normalized_run_id, conn=conn) or run
+            )
+        return self._public(
+            reconciled,
+            idempotent_replay=False,
+            now_utc=now_utc,
+        )
+
     def get(self, run_id: object) -> dict[str, Any]:
         normalized_run_id, _legacy = normalize_run_id(
             run_id,
@@ -580,6 +929,7 @@ class RefillRunService:
                 run_id=normalized_run_id,
                 source=("manual" if run_type == "manual" else source),
             )
+            self.mark_running(normalized_run_id)
         result = self.complete(normalized_run_id)
         return {
             **result,
@@ -592,6 +942,8 @@ class RefillRunService:
         *,
         idempotent_replay: bool = False,
         legacy_generated_run_id: bool = False,
+        pump_start_authorized: bool = False,
+        suppress_duration: bool = False,
         now_utc: datetime,
     ) -> dict[str, Any]:
         authorized = parse_event_datetime(run.get("authorized_at"))
@@ -615,10 +967,13 @@ class RefillRunService:
             if key != "active_slot"
         }
         completed = run.get("status") == "completed"
+        terminal = run.get("status") in TERMINAL_REFILL_STATUSES
         return {
             **public_run,
             "duration_seconds": int(
-                run.get("planned_duration_seconds", 0)
+                0
+                if terminal or suppress_duration
+                else run.get("planned_duration_seconds", 0)
             ),
             "authorized_transfer_ml": int(
                 run.get("planned_transfer_ml", 0)
@@ -645,6 +1000,7 @@ class RefillRunService:
             "needs_manual_review": bool(
                 run.get("needs_manual_review")
             ),
+            "pump_start_authorized": bool(pump_start_authorized),
             "idempotent_replay": idempotent_replay,
             "legacy_generated_run_id": legacy_generated_run_id,
             "window": {
