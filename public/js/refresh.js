@@ -169,8 +169,9 @@ export async function loadRefreshSnapshot(
     } else {
       try {
         evaluation = await api.get(
-          "/api/homekit/check?auto=true&slot=morning",
+          "/api/weather?cached=true&evaluate=true&slot=morning",
         );
+        evaluation = evaluation?.evaluation || evaluation;
       } catch (error) {
         evaluationError = error;
         evaluation = null;

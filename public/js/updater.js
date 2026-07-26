@@ -85,7 +85,7 @@ function summary(tone, title, description, trailing = null) {
 }
 
 export function renderUpdater(state, updater) {
-  const installedVersion = state?.version || "1.5.2";
+  const installedVersion = state?.version || "1.5.3";
   document.getElementById("versionBadge").textContent = `v${installedVersion}`;
   const status = document.getElementById("updaterStatus");
   const operation = updater?.lastOperation;

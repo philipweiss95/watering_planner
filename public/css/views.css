@@ -284,9 +284,9 @@
 .plant-card {
   display: grid;
   grid-template-columns: minmax(160px, 1.1fr) minmax(180px, 1fr) minmax(210px, 1.2fr) auto;
-  gap: var(--space-4);
+  gap: var(--space-3);
   align-items: center;
-  padding: var(--space-4);
+  padding: var(--space-3);
 }
 
 .plant-title {
@@ -295,6 +295,7 @@
 
 .plant-title h2 {
   margin: 0;
+  font-size: 1rem;
 }
 
 .plant-title p,
@@ -313,7 +314,7 @@
 }
 
 .connection-action {
-  padding: var(--space-3);
+  padding: var(--space-2) var(--space-3);
   background: var(--surface-subtle);
   border-radius: var(--radius-sm);
 }
@@ -326,7 +327,7 @@
 
 .plant-details {
   grid-column: 1 / -1;
-  padding-top: var(--space-3);
+  padding-top: var(--space-2);
   border-top: 1px solid var(--border);
 }
 
@@ -602,9 +603,9 @@ fieldset.settings-section > legend {
 .history-item {
   display: grid;
   grid-template-columns: 150px 40px minmax(0, 1fr) auto;
-  gap: var(--space-3);
+  gap: var(--space-2);
   align-items: center;
-  padding: var(--space-3) var(--space-4);
+  padding: var(--space-2) var(--space-3);
 }
 
 .history-item time {
@@ -618,10 +619,19 @@ fieldset.settings-section > legend {
   color: var(--brand);
 }
 
+.history-copy {
+  min-width: 0;
+}
+
+.history-copy h2 {
+  margin: 0;
+  font-size: 0.92rem;
+}
+
 .history-item p {
   margin: 0;
   color: var(--text-muted);
-  font-size: 0.8rem;
+  font-size: 0.76rem;
 }
 
 .diagnostic-row {

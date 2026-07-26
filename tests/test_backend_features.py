@@ -113,6 +113,15 @@ class BackendFeatureTests(unittest.TestCase):
             datetime.now(timezone.utc) - timedelta(minutes=30)
         ).isoformat()
         server.set_setting("weather_cache", json.dumps(cache))
+        cache_only_opener = MagicMock(
+            side_effect=AssertionError("cache-only must not use network")
+        )
+        with patch("server.urlopen", cache_only_opener):
+            stored = server.cached_weather(balcony)
+        cache_only_opener.assert_not_called()
+        self.assertTrue(stored["cache_hit"])
+        self.assertEqual(stored["fetched_at"], cache["weather"]["fetched_at"])
+
         offline = MagicMock(side_effect=OSError("offline"))
         with patch("server.urlopen", offline):
             fallback = server.fetch_weather(balcony, force=True)

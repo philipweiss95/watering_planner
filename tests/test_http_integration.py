@@ -219,6 +219,61 @@ class HttpIntegrationTests(unittest.TestCase):
             fetched_at,
         )
 
+    def test_cached_weather_evaluation_never_contacts_provider(
+        self,
+    ) -> None:
+        balcony = self.application.get_state()["balcony"]
+        cache_key = {
+            "latitude": round(float(balcony["latitude"]), 6),
+            "longitude": round(float(balcony["longitude"]), 6),
+            "timezone": balcony["timezone_name"],
+        }
+        fetched_at = (
+            datetime.now(timezone.utc) - timedelta(hours=3)
+        ).isoformat()
+        cached_weather = {
+            "source": "open-meteo",
+            "mode": "forecast",
+            "simulation": False,
+            "temperature_c": 23,
+            "rain_mm": 0,
+            "wind_kmh": 5,
+            "sunshine_hours": 6,
+            "et0_mm": 3,
+            "planning_day": {
+                "date": datetime.now(timezone.utc).date().isoformat(),
+                "temperature_c": 23,
+                "rain_mm": 0,
+                "wind_kmh": 5,
+                "sunshine_hours": 6,
+                "et0_mm": 3,
+            },
+            "forecast": [],
+            "fetched_at": fetched_at,
+        }
+        self.application.settings.set(
+            "weather_cache",
+            json.dumps(
+                {"cache_key": cache_key, "weather": cached_weather}
+            ),
+        )
+        opener = MagicMock(
+            side_effect=AssertionError("cached endpoint used network")
+        )
+        self.application.weather.opener = opener
+
+        result = self.request(
+            "/api/weather?cached=true&evaluate=true&slot=morning"
+        )
+
+        opener.assert_not_called()
+        self.assertTrue(result["weather"]["cache_hit"])
+        self.assertTrue(result["weather"]["stale"])
+        self.assertEqual(
+            result["evaluation"]["weather"]["fetched_at"],
+            fetched_at,
+        )
+
     def test_refill_run_http_lifecycle_is_persistent_and_idempotent(
         self,
     ) -> None:

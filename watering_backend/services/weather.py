@@ -274,6 +274,34 @@ class WeatherService:
         cached["data_age_minutes"] = round(age, 1)
         return cached
 
+    def cached_weather(
+        self,
+        balcony: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Return persisted weather without ever contacting the provider."""
+        latitude = float(balcony.get("latitude", self.default_latitude))
+        longitude = float(balcony.get("longitude", self.default_longitude))
+        timezone_name = str(
+            balcony.get("timezone_name") or DEFAULT_TIMEZONE
+        )
+        cache_key = _weather_cache_key(
+            latitude,
+            longitude,
+            timezone_name,
+        )
+        cached = self._read_weather_cache(cache_key)
+        age = self._weather_age_minutes(cached or {})
+        if cached is None or age is None:
+            raise ValueError("Keine gespeicherten Wetterdaten vorhanden.")
+        config = self.planner_config()
+        cached["cache_hit"] = True
+        cached["cache_fallback"] = False
+        cached["data_age_minutes"] = round(age, 1)
+        cached["stale"] = age > int(
+            config["weather_stale_after_minutes"]
+        )
+        return cached
+
     def _failed_fetch_fallback(
         self,
         cache_key: dict[str, Any],
