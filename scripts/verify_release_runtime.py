@@ -16,12 +16,13 @@ class RuntimeVerificationError(RuntimeError):
 
 
 EXPECTED_PLANTS = {
-    11: ("olive", "Olivia"),
-    12: ("tomato", "Roma links"),
-    13: ("lavender", "Lavendel klein"),
-    14: ("citrus", "Zitrone am Gelander"),
+    11: ("olive", "Olivia", "large"),
+    12: ("tomato", "Roma links", "medium"),
+    13: ("lavender", "Lavendel klein", "small"),
+    14: ("citrus", "Zitrone am Gelander", "large"),
+    15: ("olive", "Olivenbaum Altbestand", "tree"),
 }
-EXPECTED_HOSE_NUMBERS = {"01", "02", "03", "04", "05", "06", "07"}
+EXPECTED_HOSE_NUMBERS = {"01", "02", "03", "04", "05", "06", "07", "08"}
 EXPECTED_WATERING_EVENT_IDS = {101, 102, 103}
 
 
@@ -112,7 +113,11 @@ def verify_runtime(
         "Eine migrierte catalog_id ist keine Zeichenkette",
     )
     migrated_plants = {
-        int(plant["id"]): (plant["catalog_id"], plant["custom_name"])
+        int(plant["id"]): (
+            plant["catalog_id"],
+            plant["custom_name"],
+            plant.get("size"),
+        )
         for plant in plants
         if isinstance(plant, dict)
         and "id" in plant
@@ -127,7 +132,7 @@ def verify_runtime(
         for hose in hoses
         if isinstance(hose, dict)
     }
-    require(hose_numbers == EXPECTED_HOSE_NUMBERS, "Die sieben Schlaeuche der v1.4.3-Fixture fehlen")
+    require(hose_numbers == EXPECTED_HOSE_NUMBERS, "Die acht Schlaeuche der v1.4.3-Fixture fehlen")
     initial_main, initial_refill = _tank_levels(initial_state)
     balcony = initial_state["balcony"]
     require(int(balcony.get("tank_capacity_ml", 0)) == 45_000, "Haupttankkapazitaet wurde nicht erhalten")

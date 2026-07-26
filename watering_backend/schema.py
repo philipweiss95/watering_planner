@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Callable, Iterable, Mapping
+from datetime import datetime, timezone
 
 from watering_backend.validation import normalize_hose_numbers
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 BASE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS plant_catalog (
@@ -133,6 +134,72 @@ def _add_column(conn: sqlite3.Connection, table: str, name: str, definition: str
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
 
 
+def _window_key(target_date: str, window_start: str, window_end: str) -> str:
+    def canonical(value: str) -> str:
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc).isoformat()
+
+    try:
+        start = canonical(window_start)
+        end = canonical(window_end)
+    except ValueError:
+        start, end = window_start, window_end
+    return f"{target_date}|{start}|{end}"
+
+
+def _migrate_refill_window_observations(conn: sqlite3.Connection) -> None:
+    """Preserve observations written by early 1.5 builds in the durable plan table."""
+    rows = conn.execute(
+        """
+        SELECT target_date, window_label, window_start, window_end,
+               need_detected, eligible, blocking_reason, observed_at
+        FROM refill_window_observations
+        """
+    ).fetchall()
+    for row in rows:
+        (
+            target_date,
+            window_label,
+            window_start,
+            window_end,
+            need_detected,
+            eligible,
+            blocking_reason,
+            observed_at,
+        ) = tuple(row)
+        conn.execute(
+            """
+            INSERT INTO refill_window_plans(
+                window_key, target_date, window_label,
+                window_start, window_end, need_detected, executable,
+                expected_transfer_ml, blocking_reason, observed_in_window,
+                created_at, last_checked_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+            ON CONFLICT(window_key) DO NOTHING
+            """,
+            (
+                _window_key(
+                    str(target_date),
+                    str(window_start),
+                    str(window_end),
+                ),
+                target_date,
+                window_label,
+                window_start,
+                window_end,
+                int(need_detected),
+                int(eligible),
+                1 if eligible else 0,
+                blocking_reason,
+                observed_at,
+                observed_at,
+            ),
+        )
+
+
 def migrate(conn: sqlite3.Connection) -> None:
     """Apply additive migrations so databases from every published version remain usable."""
     _add_column(conn, "watering_events", "run_id", "TEXT")
@@ -194,6 +261,33 @@ def migrate(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS refill_window_plans (
+            window_key TEXT PRIMARY KEY,
+            target_date TEXT NOT NULL,
+            window_label TEXT NOT NULL,
+            window_start TEXT NOT NULL,
+            window_end TEXT NOT NULL,
+            need_detected INTEGER NOT NULL DEFAULT 0,
+            executable INTEGER NOT NULL DEFAULT 0,
+            expected_transfer_ml INTEGER NOT NULL DEFAULT 0,
+            blocking_reason TEXT NOT NULL DEFAULT '',
+            observed_in_window INTEGER NOT NULL DEFAULT 0,
+            fulfilled_at TEXT,
+            cancelled_at TEXT,
+            created_at TEXT NOT NULL,
+            last_checked_at TEXT NOT NULL
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_refill_window_plans_bounds
+        ON refill_window_plans(target_date, window_start, window_end);
+
+        CREATE INDEX IF NOT EXISTS ix_refill_window_plans_due
+        ON refill_window_plans(target_date, window_end, cancelled_at);
+        """
+    )
+    _migrate_refill_window_observations(conn)
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 

@@ -3,6 +3,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test:frontend": "node --test tests/frontend.test.mjs"
+    "test:frontend": "node --test --experimental-test-isolation=none tests/frontend.test.mjs"
   }
 }

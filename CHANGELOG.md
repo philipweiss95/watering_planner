@@ -18,7 +18,16 @@ Alle stabilen Änderungen am Watering Planner werden in dieser Datei dokumentier
 - Oberfläche modularisiert und für Dashboard, Prognose, Pflanzen, Schläuche,
   Einstellungen, Diagnose und iPhone-PWA neu strukturiert.
 - Bestehende SQLite-Datenbanken werden beim ersten Start automatisch auf
-  Schema-Version 3 migriert.
+  Schema-Version 4 migriert.
+- Die bestehende Pflanzengröße `tree` (`Baum/Strauch`) bleibt beim Laden,
+  Bearbeiten, Migrieren und Speichern von Schlauchzuordnungen unverändert.
+- Diagramm und Tagesliste zeigen exakt die ersten 16 lokalen Kalendertage,
+  während Reichweitenberechnung und Warnungen intern bis zu 45 Tage nutzen.
+- Persistente, DST-sichere Nachfüllfensterpläne erkennen verpasste Läufe auch
+  nach Worker-Ausfällen oder Neustarts; spezifische Ursachen erzeugen keine
+  zusätzliche generische E-Mail-Warnung.
+- Wetterstatus und Cache-Fallback werden nach einem Abruf ohne erneuten
+  Open-Meteo-Netzaufruf sofort und konsistent im Frontend aktualisiert.
 - Updatepfad vom unveränderten Release 1.4.3 durch Paket-, Migrations-,
   Rollback- und Fehlerfallprüfungen abgesichert.
 - Releaseprüfung um Paketinhalt, SHA-256-Prüfsumme, Versionskonsistenz und das

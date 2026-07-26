@@ -233,7 +233,12 @@ export function renderDashboard(state, evaluation, actions = {}) {
       weather.simulation ? "Wetter · Simulation" : "Wetter",
       evaluation ? `${Number(weatherCurrent.temperature_c ?? evaluation?.inputs?.temperature_c ?? 0).toFixed(1)} °C` : "Nicht verfügbar",
       evaluation ? `${Number(weatherCurrent.rain_mm ?? evaluation?.inputs?.rain_mm ?? 0).toFixed(1)} mm Regen · ${relativeAge(weatherStatus.last_successful_fetch_at)}` : "Wetterdaten neu laden",
-      weather.simulation || weatherStatus.stale ? "warning" : "success",
+      weather.simulation
+        || weatherStatus.stale
+        || weatherStatus.cache_fallback
+        || weatherStatus.last_error
+        ? "warning"
+        : "success",
     ),
     statusCard(
       "Reichweite",

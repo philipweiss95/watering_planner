@@ -33,6 +33,7 @@ STATE_PATH = DATA_DIR / "status.json"
 SHARED_TOKEN_PATH = Path("/data/.updater-token")
 COMPOSE_FILE = PROJECT_DIR / "docker-compose.yml"
 ASSET_PREFIX = "watering-planner"
+MINIMUM_UPDATE_SOURCE_VERSION = "1.4.3"
 MANAGED_PATHS = (
     "server.py", "watering_backend", "public", "updater", "home-assistant", "docs", "scripts", ".github",
     "Dockerfile", "docker-compose.yml", ".dockerignore", ".gitignore", ".env.synology.example",
@@ -127,6 +128,30 @@ def version_key(value: str) -> tuple:
     base, _, prerelease = normalize_version(value).partition("-")
     parts = tuple(int(item) for item in base.split(".")) if base else (0, 0, 0)
     return (*parts, 1 if not prerelease else 0, prerelease)
+
+
+def validate_update_source_version(value: object) -> str:
+    """Require the published updater bridge before installing modular releases."""
+    version = normalize_version(value)
+    if not version or version_key(version) < version_key(MINIMUM_UPDATE_SOURCE_VERSION):
+        raise ValueError(
+            f"update_requires_v{MINIMUM_UPDATE_SOURCE_VERSION.replace('.', '_')}_bridge: "
+            f"Zuerst die Brueckenversion {MINIMUM_UPDATE_SOURCE_VERSION} installieren."
+        )
+    return version
+
+
+def installed_project_version(project_dir: Path | None = None) -> str:
+    """Read the authoritative installed version from the project bind mount."""
+    version_path = (project_dir or PROJECT_DIR) / "VERSION"
+    try:
+        raw_version = version_path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise ValueError("installed_project_version_missing") from exc
+    version = normalize_version(raw_version)
+    if not version:
+        raise ValueError("installed_project_version_invalid")
+    return version
 
 
 def github_request(url: str, token: str, accept: str = "application/vnd.github+json") -> bytes:
@@ -649,13 +674,26 @@ def download_asset(asset: dict, token: str, destination: Path) -> None:
     destination.write_bytes(github_request(asset["url"], token, "application/octet-stream"))
 
 
-def install_update(current_version: str) -> None:
+def install_update(reported_version: str = "") -> None:
     try:
         backup_path = None
         runtime_file = None
         handoff_scheduled = False
         try:
-            update_state(type="install", status="running", phase="release", step=1, totalSteps=8, currentVersion=current_version, message="Suche nach dem neuesten stabilen Release.")
+            current_version = validate_update_source_version(installed_project_version())
+            state_values = {
+                "type": "install",
+                "status": "running",
+                "phase": "release",
+                "step": 1,
+                "totalSteps": 8,
+                "currentVersion": current_version,
+                "message": "Suche nach dem neuesten stabilen Release.",
+            }
+            normalized_reported = normalize_version(reported_version)
+            if normalized_reported and normalized_reported != current_version:
+                state_values["reportedVersion"] = normalized_reported
+            update_state(**state_values)
             release = latest_release()
             update_state(
                 targetVersion=release["version"],
@@ -784,18 +822,20 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(HTTPStatus.UNAUTHORIZED, {"reason": "updater_auth_required"})
                 return
             payload = self.payload()
-            current = normalize_version(payload.get("currentVersion"))
+            reported_current = normalize_version(payload.get("currentVersion"))
             if self.path == "/api/check":
+                current = validate_update_source_version(installed_project_version())
                 release = latest_release()
                 self.send_json(HTTPStatus.OK, {"ok": True, "currentVersion": current, "updateAvailable": version_key(release["version"]) > version_key(current), "release": public_release(release)})
                 return
             if self.path == "/api/install":
+                validate_update_source_version(installed_project_version())
                 if not claim_install():
                     raise ValueError("update_already_running")
                 try:
                     threading.Thread(
                         target=install_update,
-                        args=(current,),
+                        args=(reported_current,),
                         daemon=True,
                     ).start()
                 except Exception:

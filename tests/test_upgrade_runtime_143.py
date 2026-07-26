@@ -122,8 +122,12 @@ class UpgradeRuntime143Tests(unittest.TestCase):
                     key=lambda plant: plant["id"],
                 )
             ],
-            ["olive", "tomato", "lavender", "citrus"],
+            ["olive", "tomato", "lavender", "citrus", "olive"],
         )
+        legacy_tree = next(
+            plant for plant in state["plants"] if plant["id"] == 15
+        )
+        self.assertEqual(legacy_tree["size"], "tree")
         self.assertEqual(state["balcony"]["tank_capacity_ml"], 45_000)
         self.assertEqual(state["balcony"]["refill_tank_capacity_ml"], 55_000)
         self.assertTrue(state["home_assistant"]["configured"])

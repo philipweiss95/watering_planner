@@ -23,6 +23,7 @@ DEFAULT_LATITUDE = 52.52
 DEFAULT_LONGITUDE = 13.405
 DEFAULT_TIMEZONE = "Europe/Berlin"
 DEFAULT_FORECAST_DAYS = 16
+DEFAULT_FAILURE_RETRY_MINUTES = 5
 
 GetSetting = Callable[[str, str], str]
 SetSetting = Callable[[str, str], None]
@@ -226,6 +227,7 @@ class WeatherService:
     opener: Callable[..., Any] = urlopen
     fetch_lock: Lock = field(default_factory=threading.Lock)
     forecast_days: int = DEFAULT_FORECAST_DAYS
+    failure_retry_minutes: int = DEFAULT_FAILURE_RETRY_MINUTES
     request_timeout_seconds: int = 8
     default_latitude: float = DEFAULT_LATITUDE
     default_longitude: float = DEFAULT_LONGITUDE
@@ -272,6 +274,41 @@ class WeatherService:
         cached["data_age_minutes"] = round(age, 1)
         return cached
 
+    def _failed_fetch_fallback(
+        self,
+        cache_key: dict[str, Any],
+        stale_after_minutes: int,
+    ) -> dict[str, Any] | None:
+        error = self.get_setting("last_weather_fetch_error", "")
+        if not error:
+            return None
+        cached = self._cached_weather(
+            cache_key,
+            max(stale_after_minutes, 24 * 60),
+        )
+        if not cached:
+            return None
+        cached["cache_fallback"] = True
+        cached["weather_error"] = error
+        cached["stale"] = bool(
+            float(cached.get("data_age_minutes", 0))
+            > stale_after_minutes
+        )
+        return cached
+
+    def _recent_fetch_failed(self) -> bool:
+        if not self.get_setting("last_weather_fetch_error", ""):
+            return False
+        try:
+            attempted = datetime.fromisoformat(
+                self.get_setting("last_weather_fetch_attempt_at", "")
+            )
+        except (TypeError, ValueError):
+            return False
+        return (
+            self.now_utc() - _as_utc(attempted)
+        ).total_seconds() < max(1, self.failure_retry_minutes) * 60
+
     def fetch_weather(
         self,
         balcony: dict[str, Any],
@@ -287,11 +324,25 @@ class WeatherService:
             cached = self._cached_weather(cache_key, cache_minutes)
             if cached:
                 return cached
+            if self._recent_fetch_failed():
+                fallback = self._failed_fetch_fallback(
+                    cache_key,
+                    int(config["weather_stale_after_minutes"]),
+                )
+                if fallback:
+                    return fallback
         with self.fetch_lock:
             if not force:
                 cached = self._cached_weather(cache_key, cache_minutes)
                 if cached:
                     return cached
+                if self._recent_fetch_failed():
+                    fallback = self._failed_fetch_fallback(
+                        cache_key,
+                        int(config["weather_stale_after_minutes"]),
+                    )
+                    if fallback:
+                        return fallback
             return self._fetch_weather_uncached(
                 latitude,
                 longitude,
@@ -337,14 +388,11 @@ class WeatherService:
                 else "Wetterdienst ist voruebergehend nicht erreichbar."
             )
             self.set_setting("last_weather_fetch_error", error)
-            fallback_limit = max(stale_after_minutes, 24 * 60)
-            cached = self._cached_weather(cache_key, fallback_limit)
+            cached = self._failed_fetch_fallback(
+                cache_key,
+                stale_after_minutes,
+            )
             if cached:
-                cached["cache_fallback"] = True
-                cached["weather_error"] = error
-                cached["stale"] = bool(
-                    float(cached.get("data_age_minutes", 0)) > stale_after_minutes
-                )
                 return cached
             raise ValueError(error) from exc
 

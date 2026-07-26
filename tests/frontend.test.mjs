@@ -4,18 +4,32 @@ import test from "node:test";
 
 import { api, ApiError } from "../public/js/api.js";
 import { buildDashboardModel, buildTimeline } from "../public/js/dashboard.js";
-import { buildDiagnosticRows } from "../public/js/diagnostics.js";
-import { buildForecastModel } from "../public/js/forecast.js";
-import { validateHoses } from "../public/js/hoses.js";
+import {
+  buildDiagnosticRows,
+  renderDiagnostics,
+} from "../public/js/diagnostics.js";
+import {
+  buildForecastModel,
+  renderForecast,
+  VISIBLE_FORECAST_DAYS,
+} from "../public/js/forecast.js";
+import { persistHoses, validateHoses } from "../public/js/hoses.js";
 import { normalizeView } from "../public/js/navigation.js";
 import {
   filterPlants,
+  PLANT_SIZE_OPTIONS,
   plantForm,
   plantPayload,
   plantPayloadFromFormData,
   plantSupplyStatus,
   restorePlant,
 } from "../public/js/plants.js";
+import {
+  createRefreshCoordinator,
+  loadRefreshSnapshot,
+  mergeWeatherStatus,
+  refreshIssueMessage,
+} from "../public/js/refresh.js";
 import { previewSchedule, validateRefillWindows } from "../public/js/settings.js";
 import { confirmDialog, escapeHTML } from "../public/js/ui.js";
 
@@ -82,6 +96,13 @@ function findByName(node, name) {
   return null;
 }
 
+function nodeText(node) {
+  return [
+    node.textContent || "",
+    ...(node.children || []).map(nodeText),
+  ].join(" ");
+}
+
 test("navigation accepts known views and rejects arbitrary hashes", () => {
   assert.equal(normalizeView("#forecast"), "forecast");
   assert.equal(normalizeView("system"), "system");
@@ -121,6 +142,21 @@ test("dashboard prioritizes concrete action states", () => {
   assert.equal(
     buildDashboardModel(baseState, farShortage, new Date("2026-07-25T10:00:00+02:00")).title,
     "Nächster Lauf 15:00",
+  );
+  assert.equal(
+    buildDashboardModel(
+      {
+        ...baseState,
+        planner_config: { supply_warning_days: 30 },
+      },
+      {
+        ...farShortage,
+        remaining_cycles_today: 0,
+        automation: { windows: [], next_window: "" },
+      },
+      new Date("2026-07-25T10:00:00+02:00"),
+    ).action,
+    "forecast",
   );
   assert.equal(
     buildDashboardModel(
@@ -212,6 +248,172 @@ test("forecast model preserves tank paths and first unserved event", () => {
   assert.equal(model.estimatedStartTimestamp, new Date("2026-07-26T15:00:00+02:00").getTime());
 });
 
+test("forecast chart and day list stop after 16 local calendar days", () => {
+  const start = Date.UTC(2026, 2, 20);
+  const dateAt = (index) => new Date(start + index * 86400000).toISOString().slice(0, 10);
+  const projectedDays = Array.from({ length: 45 }, (_value, index) => ({
+    date: dateAt(index),
+    estimated: index >= 16,
+  }));
+  const forecastEvents = projectedDays.map((day, index) => ({
+    at: `${day.date}T07:00:00${day.date < "2026-03-29" ? "+01:00" : "+02:00"}`,
+    date: day.date,
+    event_type: "watering",
+    main_tank_after_ml: Math.max(0, 10_000 - index * 200),
+    refill_tank_after_ml: 20_000,
+    status: index === 39 ? "unserved" : "successful",
+    estimated_weather: index >= 16,
+  }));
+  const depletion = {
+    main_available_ml: 10_000,
+    refill_available_ml: 20_000,
+    first_unserved_watering_at: forecastEvents[39].at,
+    estimated_after_forecast: true,
+    projected_days: projectedDays,
+    forecast_events: forecastEvents,
+  };
+
+  const model = buildForecastModel(depletion, { main: 10_000, refill: 20_000 });
+  assert.equal(model.horizonDays, VISIBLE_FORECAST_DAYS);
+  assert.equal(model.horizonStartDate, "2026-03-20");
+  assert.equal(model.horizonEndDate, "2026-04-04");
+  assert.equal(model.days.length, 16);
+  assert.equal(model.events.length, 16);
+  assert.equal(model.events.at(-1).calendarDate, "2026-04-04");
+  assert.equal(model.firstUnservedAt, "");
+  assert.equal(model.estimated, false);
+
+  const thirtyDayModel = buildForecastModel({
+    ...depletion,
+    first_unserved_watering_at: forecastEvents[29].at,
+    projected_days: projectedDays.slice(0, 30),
+    forecast_events: forecastEvents.slice(0, 30).map((event, index) => ({
+      ...event,
+      status: index === 29 ? "unserved" : event.status,
+    })),
+  }, { main: 10_000, refill: 20_000 });
+  assert.equal(thirtyDayModel.days.length, 16);
+  assert.equal(thirtyDayModel.events.length, 16);
+  assert.equal(thirtyDayModel.firstUnservedAt, "");
+
+  const nodes = installFakeDOM();
+  for (const [id, tag] of [
+    ["forecastLegend", "div"],
+    ["forecastChart", "svg"],
+    ["forecastChartTitle", "title"],
+    ["forecastChartDescription", "desc"],
+    ["forecastChartNote", "p"],
+    ["forecastDayList", "div"],
+  ]) nodes.set(id, new FakeNode(tag));
+  renderForecast(
+    { balcony: { tank_capacity_ml: 10_000, refill_tank_capacity_ml: 20_000 } },
+    { depletion },
+  );
+
+  const markers = nodes.get("forecastChart").children.filter((child) =>
+    ["event-watering", "event-refill", "event-unserved"].includes(child.class));
+  assert.equal(markers.length, 16);
+  assert.equal(nodes.get("forecastDayList").children.length, 16);
+  assert.match(nodes.get("forecastChartNote").textContent, /Alle dargestellten/);
+  assert.doesNotMatch(nodes.get("forecastChartNote").textContent, /nicht versorgbarer Lauf/);
+});
+
+test("forecast chart spans empty remainder days and marks extrapolation", () => {
+  const start = Date.UTC(2026, 9, 24);
+  const projectedDays = Array.from({ length: 16 }, (_value, index) => ({
+    date: new Date(start + index * 86400000)
+      .toISOString()
+      .slice(0, 10),
+    estimated: index >= 8,
+  }));
+  const depletion = {
+    main_available_ml: 10_000,
+    refill_available_ml: 20_000,
+    projected_days: projectedDays,
+    forecast_events: [
+      {
+        at: `${projectedDays[0].date}T07:00:00+02:00`,
+        date: projectedDays[0].date,
+        event_type: "watering",
+        main_tank_after_ml: 9_000,
+        refill_tank_after_ml: 20_000,
+        status: "successful",
+      },
+      {
+        at: `${projectedDays[3].date}T07:00:00+01:00`,
+        date: projectedDays[3].date,
+        event_type: "watering",
+        main_tank_after_ml: 7_000,
+        refill_tank_after_ml: 20_000,
+        status: "successful",
+      },
+    ],
+  };
+  const model = buildForecastModel(
+    depletion,
+    {
+      main: 10_000,
+      refill: 20_000,
+      timezone: "Europe/Berlin",
+    },
+  );
+  assert.equal(
+    model.horizonEndPosition - model.horizonStartPosition,
+    16,
+  );
+  assert.equal(model.events.length, 2);
+  assert.equal(model.days.at(-1).events.length, 0);
+  assert.equal(model.days[7].estimated, false);
+  assert.equal(model.days[8].estimated, true);
+  assert.equal(model.days.at(-1).estimated, true);
+
+  const nodes = installFakeDOM();
+  for (const [id, tag] of [
+    ["forecastLegend", "div"],
+    ["forecastChart", "svg"],
+    ["forecastChartTitle", "title"],
+    ["forecastChartDescription", "desc"],
+    ["forecastChartNote", "p"],
+    ["forecastDayList", "div"],
+  ]) nodes.set(id, new FakeNode(tag));
+  renderForecast(
+    {
+      balcony: {
+        tank_capacity_ml: 10_000,
+        refill_tank_capacity_ml: 20_000,
+        timezone_name: "Europe/Berlin",
+      },
+    },
+    { depletion },
+  );
+
+  const chart = nodes.get("forecastChart");
+  const mainLine = chart.children.find(
+    (child) => child.class === "main-line",
+  );
+  assert.equal(mainLine.points.trim().split(" ").at(-1).split(",")[0], "876.0");
+  const estimatedArea = chart.children.find(
+    (child) => child.class === "estimated-area",
+  );
+  assert.ok(Number(estimatedArea.width) > 400);
+  assert.equal(
+    Number(estimatedArea.x) + Number(estimatedArea.width),
+    876,
+  );
+  assert.match(
+    nodes.get("forecastDayList").children[8].className,
+    /estimated/,
+  );
+  assert.match(
+    nodeText(nodes.get("forecastDayList").children[8]),
+    /Geschätzt/,
+  );
+  assert.match(
+    nodeText(nodes.get("forecastDayList").children.at(-1)),
+    /Geschätzt/,
+  );
+});
+
 test("schedule preview distributes cycles and detects impossible windows", () => {
   assert.deepEqual(previewSchedule("07:00", "19:00", 4, 30).times, ["07:00", "11:00", "15:00", "19:00"]);
   assert.match(previewSchedule("19:00", "07:00", 2, 30).error, /selben Tag/);
@@ -238,18 +440,21 @@ test("plant form and create, edit, restore payload keep olive as a string", asyn
     id: 4,
     catalog_id: "olive",
     custom_name: "Olive",
-    size: "medium",
+    size: "tree",
     pot_liters: 30,
     pot_type: "overflow",
   };
   const form = plantForm(state, existing);
   const catalog = findByName(form, "catalog_id");
   assert.equal(catalog.children.find((option) => option.selected).value, "olive");
+  const size = findByName(form, "size");
+  assert.equal(size.children.find((option) => option.selected).value, "tree");
+  assert.deepEqual(PLANT_SIZE_OPTIONS.at(-1), ["tree", "Baum/Strauch"]);
 
   const values = new Map([
     ["catalog_id", "olive"],
     ["custom_name", "Olive neu"],
-    ["size", "large"],
+    ["size", "tree"],
     ["pot_liters", "35"],
     ["pot_type", "reservoir"],
   ]);
@@ -258,6 +463,9 @@ test("plant form and create, edit, restore payload keep olive as a string", asyn
   assert.equal(created.catalog_id, "olive");
   assert.equal(edited.catalog_id, "olive");
   assert.equal(plantPayload(existing).catalog_id, "olive");
+  assert.equal(created.size, "tree");
+  assert.equal(edited.size, "tree");
+  assert.equal(plantPayload(existing).size, "tree");
 
   let restored;
   await restorePlant(existing, {
@@ -268,6 +476,7 @@ test("plant form and create, edit, restore payload keep olive as a string", asyn
   });
   assert.equal(restored.path, "/api/plants");
   assert.equal(restored.payload.catalog_id, "olive");
+  assert.equal(restored.payload.size, "tree");
 });
 
 test("hose validation reports duplicates, invalid outlets, limits and uncovered plants", () => {
@@ -285,6 +494,39 @@ test("hose validation reports duplicates, invalid outlets, limits and uncovered 
   assert.ok(codes.has("invalid-outlet"));
   assert.ok(codes.has("unassigned"));
   assert.ok(codes.has("plant-unserved"));
+});
+
+test("hose persistence keeps tree in the plant API payload", async () => {
+  const calls = [];
+  const client = {
+    post(path, payload) {
+      calls.push({ method: "POST", path, payload });
+      return Promise.resolve({});
+    },
+    put(path, payload) {
+      calls.push({ method: "PUT", path, payload });
+      return Promise.resolve({});
+    },
+  };
+  await persistHoses(
+    [{ number: "90", outlet_id: 2, plant_id: 15 }],
+    {
+      outlets: [{ id: 2, name: "Mittel", max_connections: 12 }],
+      plants: [{
+        id: 15,
+        catalog_id: "olive",
+        custom_name: "Olivenbaum Altbestand",
+        size: "tree",
+        pot_liters: 82,
+        pot_type: "reservoir_overflow",
+      }],
+    },
+    client,
+  );
+  assert.equal(calls[0].path, "/api/hoses");
+  assert.equal(calls[1].path, "/api/plants/15");
+  assert.equal(calls[1].payload.size, "tree");
+  assert.equal(calls[1].payload.hose_numbers, "90");
 });
 
 test("diagnostics provide all required system rows without secrets", () => {
@@ -319,6 +561,447 @@ test("diagnostics provide all required system rows without secrets", () => {
     {},
   ).find((row) => row.id === "refill");
   assert.equal(emptyRefill.status, "danger");
+});
+
+test("weather status merges successful refresh and cache fallback metadata", () => {
+  const successful = mergeWeatherStatus(
+    {
+      last_successful_fetch_at: "2026-07-25T08:00:00Z",
+      last_error: "old failure",
+      stale: true,
+    },
+    {
+      fetched_at: "2026-07-25T09:00:00Z",
+      cache_fallback: false,
+      stale: false,
+    },
+    {
+      last_successful_fetch_at: "2026-07-25T09:00:00Z",
+      last_error: "",
+      stale: false,
+    },
+  );
+  assert.equal(
+    successful.last_successful_fetch_at,
+    "2026-07-25T09:00:00Z",
+  );
+  assert.equal(successful.last_error, "");
+  assert.equal(successful.stale, false);
+
+  const fallback = mergeWeatherStatus(successful, {
+    cache_fallback: true,
+    weather_error: "Wetterdienst nicht erreichbar.",
+    data_age_minutes: 17,
+  });
+  assert.equal(fallback.cache_fallback, true);
+  assert.equal(
+    fallback.last_error,
+    "Wetterdienst nicht erreichbar.",
+  );
+  assert.equal(fallback.data_age_minutes, 17);
+});
+
+test("failed forced weather refresh keeps data and exposes diagnostics", async () => {
+  const previous = {
+    evaluation: {
+      weather: { fetched_at: "2026-07-25T08:00:00Z" },
+    },
+    events: [{ id: 1 }],
+    notificationDiagnostics: {},
+    updater: {},
+  };
+  const calls = [];
+  const apiClient = {
+    async get(path) {
+      calls.push(path);
+      if (path === "/api/weather?force=true&evaluate=true&slot=morning") {
+        throw new Error("Wetterdienst nicht erreichbar.");
+      }
+      if (path === "/api/state") {
+        return {
+          weather_status: {
+            last_successful_fetch_at: "2026-07-25T08:00:00Z",
+            last_error: "",
+          },
+        };
+      }
+      if (path === "/api/watering-events?limit=50") {
+        return { events: [{ id: 2 }] };
+      }
+      if (path === "/api/update/status") return { configured: true };
+      if (path === "/api/diagnostics/notifications") {
+        return {
+          weather: {
+            last_successful_fetch_at: "2026-07-25T08:00:00Z",
+            last_attempt_at: "2026-07-25T09:00:00Z",
+            last_error: "Wetterdienst nicht erreichbar.",
+            cache_fallback: true,
+            stale: false,
+          },
+        };
+      }
+      throw new Error(`Unexpected path: ${path}`);
+    },
+  };
+
+  const result = await loadRefreshSnapshot(
+    apiClient,
+    previous,
+    { forceWeather: true },
+  );
+  assert.equal(
+    result.forceError.message,
+    "Wetterdienst nicht erreichbar.",
+  );
+  assert.equal(result.patch.evaluation, previous.evaluation);
+  assert.equal(
+    result.patch.state.weather_status.cache_fallback,
+    true,
+  );
+  assert.equal(
+    result.patch.state.weather_status.last_error,
+    "Wetterdienst nicht erreichbar.",
+  );
+  assert.equal(
+    calls.includes("/api/homekit/check?auto=true&slot=morning"),
+    false,
+  );
+  assert.ok(
+    calls.indexOf("/api/diagnostics/notifications")
+      > calls.indexOf("/api/state"),
+  );
+});
+
+test("successful forced refresh and cache fallback reach state", async () => {
+  async function runScenario({ fallback }) {
+    let evaluationFetches = 0;
+    const weather = {
+      fetched_at: "2026-07-25T09:00:00Z",
+      cache_hit: fallback,
+      cache_fallback: fallback,
+      stale: false,
+      ...(fallback
+        ? {
+          weather_error:
+            "Wetterdienst vorübergehend nicht erreichbar.",
+        }
+        : {}),
+    };
+    const apiClient = {
+      async get(path) {
+        if (
+          path
+          === "/api/weather?force=true&evaluate=true&slot=morning"
+        ) {
+          return {
+            weather,
+            evaluation: { weather, automation: {}, refill: {} },
+          };
+        }
+        if (path === "/api/state") {
+          return {
+            version: "1.5.0",
+            weather_status: {
+              last_successful_fetch_at: "2026-07-25T08:00:00Z",
+            },
+          };
+        }
+        if (path === "/api/homekit/check?auto=true&slot=morning") {
+          evaluationFetches += 1;
+          return { weather };
+        }
+        if (path === "/api/watering-events?limit=50") {
+          return { events: [] };
+        }
+        if (path === "/api/update/status") return {};
+        if (path === "/api/diagnostics/notifications") {
+          return {
+            weather: {
+              last_successful_fetch_at:
+                "2026-07-25T09:00:00Z",
+              last_error: fallback
+                ? "Wetterdienst vorübergehend nicht erreichbar."
+                : "",
+              stale: false,
+            },
+          };
+        }
+        throw new Error(`Unexpected path: ${path}`);
+      },
+    };
+    const result = await loadRefreshSnapshot(
+      apiClient,
+      { events: [] },
+      { forceWeather: true },
+    );
+    assert.equal(evaluationFetches, 0);
+    return result;
+  }
+
+  const successful = await runScenario({ fallback: false });
+  assert.equal(successful.forceError, null);
+  assert.equal(
+    successful.patch.state.weather_status
+      .last_successful_fetch_at,
+    "2026-07-25T09:00:00Z",
+  );
+  assert.equal(
+    successful.patch.state.weather_status.last_error,
+    "",
+  );
+  assert.equal(
+    successful.patch.state.weather_status.cache_fallback,
+    false,
+  );
+
+  const fallback = await runScenario({ fallback: true });
+  assert.equal(fallback.forceError, null);
+  assert.equal(
+    fallback.patch.state.weather_status.cache_fallback,
+    true,
+  );
+  assert.match(
+    fallback.patch.state.weather_status.last_error,
+    /vorübergehend/,
+  );
+});
+
+test("evaluation failure removes the old plan and reports a clear issue", async () => {
+  const previous = {
+    evaluation: {
+      calculated_at: "2026-07-25T08:00:00Z",
+      automation: { windows: ["09:00"] },
+    },
+    events: [],
+    notificationDiagnostics: {},
+    updater: {},
+  };
+  const apiClient = {
+    async get(path) {
+      if (path === "/api/state") {
+        return {
+          weather_status: {
+            last_successful_fetch_at: "2026-07-25T10:00:00Z",
+            last_error: "",
+            stale: false,
+          },
+        };
+      }
+      if (path === "/api/homekit/check?auto=true&slot=morning") {
+        throw new Error("Auswertung fehlgeschlagen.");
+      }
+      if (path === "/api/watering-events?limit=50") {
+        return { events: [] };
+      }
+      if (path === "/api/update/status") return {};
+      if (path === "/api/diagnostics/notifications") {
+        return {
+          weather: {
+            last_successful_fetch_at: "2026-07-25T10:00:00Z",
+            last_error: "",
+            stale: false,
+          },
+        };
+      }
+      throw new Error(`Unexpected path: ${path}`);
+    },
+  };
+
+  let intermediate;
+  const result = await loadRefreshSnapshot(
+    apiClient,
+    previous,
+    {
+      onState(state, refreshState) {
+        intermediate = { state, ...refreshState };
+      },
+    },
+  );
+  assert.equal(intermediate.evaluationPending, true);
+  assert.equal(result.patch.evaluation, null);
+  assert.equal(result.patch.error, "Auswertung fehlgeschlagen.");
+  assert.equal(
+    result.patch.state.weather_status.last_successful_fetch_at,
+    "2026-07-25T10:00:00Z",
+  );
+  assert.equal(
+    refreshIssueMessage(result),
+    "Der Tagesplan konnte nicht aktualisiert werden.",
+  );
+  const dashboard = buildDashboardModel(
+    result.patch.state,
+    result.patch.evaluation,
+  );
+  assert.equal(dashboard.kicker, "Plan nicht verfügbar");
+  assert.equal(dashboard.title, "Wetterdienst prüfen");
+});
+
+test("failed diagnostics cannot overwrite fresher state weather", async () => {
+  const previous = {
+    evaluation: null,
+    events: [],
+    notificationDiagnostics: {
+      weather: {
+        last_successful_fetch_at: "2026-07-24T08:00:00Z",
+        last_error: "Alter Diagnosefehler",
+        cache_fallback: true,
+      },
+      notification_log: [],
+    },
+    updater: {},
+  };
+  const apiClient = {
+    async get(path) {
+      if (path === "/api/state") {
+        return {
+          weather_status: {
+            last_successful_fetch_at: "2026-07-25T10:00:00Z",
+            last_error: "",
+            cache_fallback: false,
+            stale: false,
+          },
+        };
+      }
+      if (path === "/api/homekit/check?auto=true&slot=morning") {
+        return { automation: {}, refill: {} };
+      }
+      if (path === "/api/watering-events?limit=50") {
+        return { events: [] };
+      }
+      if (path === "/api/update/status") return {};
+      if (path === "/api/diagnostics/notifications") {
+        throw new Error("Diagnose nicht erreichbar.");
+      }
+      throw new Error(`Unexpected path: ${path}`);
+    },
+  };
+
+  const result = await loadRefreshSnapshot(apiClient, previous);
+  assert.equal(result.patch.notificationDiagnostics.weather, null);
+  assert.equal(
+    result.patch.state.weather_status.last_successful_fetch_at,
+    "2026-07-25T10:00:00Z",
+  );
+  assert.equal(result.patch.state.weather_status.last_error, "");
+  const weatherRow = buildDiagnosticRows(
+    result.patch.state,
+    result.patch.evaluation,
+    result.patch.notificationDiagnostics,
+    result.patch.updater,
+  ).find((row) => row.id === "weather");
+  assert.equal(weatherRow.status, "success");
+  assert.equal(weatherRow.message, "Open-Meteo erreichbar");
+});
+
+test("refresh coordinator serializes normal and forced requests", async () => {
+  const calls = [];
+  const releases = [];
+  let active = 0;
+  let maximumActive = 0;
+  const refresh = createRefreshCoordinator((options) => {
+    calls.push(options);
+    active += 1;
+    maximumActive = Math.max(maximumActive, active);
+    return new Promise((resolve) => {
+      releases.push(() => {
+        active -= 1;
+        resolve(options);
+      });
+    });
+  });
+
+  const normal = refresh();
+  await Promise.resolve();
+  const normalDuplicate = refresh();
+  const forced = refresh({ forceWeather: true });
+  const forcedDuplicate = refresh({ forceWeather: true });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].forceWeather, false);
+
+  releases[0]();
+  await Promise.all([normal, normalDuplicate]);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].forceWeather, true);
+  assert.equal(maximumActive, 1);
+
+  const forcedWhileActive = refresh({ forceWeather: true });
+  releases[1]();
+  await Promise.all([forced, forcedDuplicate, forcedWhileActive]);
+  assert.equal(calls.length, 2);
+  assert.equal(maximumActive, 1);
+});
+
+test("refresh after mutation is queued behind an active read", async () => {
+  const calls = [];
+  const releases = [];
+  const refresh = createRefreshCoordinator((options) => {
+    calls.push(options);
+    return new Promise((resolve) => {
+      releases.push(() => resolve(options));
+    });
+  });
+
+  const activeRead = refresh();
+  await Promise.resolve();
+  const requiredRead = refresh({
+    weather: false,
+    afterMutation: true,
+  });
+  const duplicateRead = refresh();
+  assert.equal(calls.length, 1);
+
+  releases[0]();
+  await Promise.all([activeRead, duplicateRead]);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].afterMutation, true);
+  assert.equal(calls[1].weather, false);
+
+  releases[1]();
+  await requiredRead;
+  assert.equal(calls.length, 2);
+});
+
+test("weather fallback renders newer diagnostics and reload action", () => {
+  const nodes = installFakeDOM();
+  const diagnosticList = new FakeNode("section");
+  const notificationLog = new FakeNode("section");
+  nodes.set("diagnosticList", diagnosticList);
+  nodes.set("notificationLog", notificationLog);
+  let reloads = 0;
+  renderDiagnostics(
+    {
+      weather_status: {
+        last_successful_fetch_at: "2026-07-25T08:00:00Z",
+        last_error: "",
+      },
+      home_assistant: {},
+      notifications: {},
+    },
+    { automation: {}, refill: {} },
+    {
+      weather: {
+        last_successful_fetch_at: "2026-07-25T08:00:00Z",
+        last_error: "Wetterdienst nicht erreichbar.",
+        cache_fallback: true,
+        stale: false,
+      },
+      notification_log: [],
+    },
+    {},
+    {
+      "reload-weather": () => {
+        reloads += 1;
+      },
+    },
+  );
+
+  const weatherRow = diagnosticList.children[0];
+  assert.match(weatherRow.children[0].className, /warning/);
+  assert.match(nodeText(weatherRow), /Letzte gültige Daten/);
+  weatherRow.children[3].click();
+  assert.equal(reloads, 1);
 });
 
 test("API errors and custom dialog confirmation are observable", async () => {

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import hmac
+import json
 import re
 import stat
 import subprocess
@@ -20,6 +22,17 @@ ROOT = Path(__file__).resolve().parents[1]
 BRIDGE_TAG = "v1.4.3"
 BRIDGE_TAG_OBJECT = "f08acb6c5216c987cb6581513de499c9360d9f1a"
 BRIDGE_COMMIT = "e02ceb198264104fd8f2bc68eb8db7b24ac00dc8"
+LEGACY_TAG = "v1.4.2"
+LEGACY_TAG_OBJECT = "938af782a7a7aebfa8931995b39ff0ed45bb25c2"
+LEGACY_COMMIT = "b3fad615c232b97e2354dfd72b0013b80e6ed6d0"
+BRIDGE_RELEASE_PUBLISHED_AT = "2026-07-25T18:25:35Z"
+BRIDGE_ARCHIVE_NAME = "watering-planner-1.4.3.zip"
+BRIDGE_ARCHIVE_SIZE = 403_087
+BRIDGE_ARCHIVE_FILE_COUNT = 26
+BRIDGE_ARCHIVE_SHA256 = "78a38685d19c0952541bf96f9286b8eb11c5df0c2edc8de3a9bd285ed9f5ce7a"
+BRIDGE_CHECKSUM_NAME = f"{BRIDGE_ARCHIVE_NAME}.sha256"
+BRIDGE_CHECKSUM_SIZE = 93
+BRIDGE_CHECKSUM_SHA256 = "32dc99123f053d5530292023bb5e951a83c44c068f745e138cb8728ec123f0bf"
 HEX_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -42,6 +55,21 @@ def _git(root: Path, *arguments: str) -> str:
     if result.returncode:
         _fail(result.stderr.strip() or f"Git-Pruefung fehlgeschlagen: {' '.join(arguments)}")
     return result.stdout.strip()
+
+
+def _git_bytes(root: Path, *arguments: str) -> bytes:
+    result = subprocess.run(
+        ["git", *arguments],
+        cwd=root,
+        check=False,
+        capture_output=True,
+    )
+    if result.returncode:
+        _fail(
+            result.stderr.decode("utf-8", errors="replace").strip()
+            or f"Git-Pruefung fehlgeschlagen: {' '.join(arguments)}"
+        )
+    return result.stdout
 
 
 def verify_tag(
@@ -76,6 +104,121 @@ def verify_bridge_tag(
     if tag_object != expected_tag_object:
         _fail(f"{tag} wurde veraendert: Tag-Objekt {tag_object} statt {expected_tag_object}")
     return verify_tag(root, tag, tag.removeprefix("v"), expected_commit)
+
+
+def verify_bridge_history(
+    root: Path,
+    bridge_commit: str,
+    release_commit: str = "HEAD",
+) -> str:
+    """Prove that the immutable updater bridge is part of the release history."""
+    _git(root, "merge-base", "--is-ancestor", bridge_commit, release_commit)
+    return _git(root, "rev-parse", release_commit)
+
+
+def _managed_paths_at(root: Path, revision: str) -> tuple[str, ...]:
+    source = _git_bytes(
+        root,
+        "show",
+        f"{revision}:updater/updater.py",
+    ).decode("utf-8")
+    tree = ast.parse(source)
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(
+            isinstance(target, ast.Name) and target.id == "MANAGED_PATHS"
+            for target in node.targets
+        ):
+            continue
+        value = ast.literal_eval(node.value)
+        if (
+            isinstance(value, tuple)
+            and all(isinstance(item, str) for item in value)
+        ):
+            return value
+    _fail(f"MANAGED_PATHS fehlt im Updater von {revision}")
+
+
+def verify_bridge_update_path(
+    root: Path,
+    bridge_commit: str = BRIDGE_COMMIT,
+) -> dict[str, object]:
+    """Prove why 1.4.3 is required between the legacy and modular layouts."""
+    legacy_tag_object = _git(root, "rev-parse", f"refs/tags/{LEGACY_TAG}")
+    if legacy_tag_object != LEGACY_TAG_OBJECT:
+        _fail(
+            f"Tag-Objekt {LEGACY_TAG} ist {legacy_tag_object}, "
+            f"erwartet wird {LEGACY_TAG_OBJECT}"
+        )
+    legacy_commit = verify_tag(
+        root,
+        LEGACY_TAG,
+        LEGACY_TAG.removeprefix("v"),
+        LEGACY_COMMIT,
+    )
+    _git(root, "merge-base", "--is-ancestor", legacy_commit, bridge_commit)
+    legacy_paths = _managed_paths_at(root, legacy_commit)
+    bridge_paths = _managed_paths_at(root, bridge_commit)
+    modular_paths = {"watering_backend", "package.json"}
+    if modular_paths.intersection(legacy_paths):
+        _fail("Der v1.4.2-Updater darf die modularen Zielpfade noch nicht verwalten")
+    if not modular_paths.issubset(bridge_paths):
+        _fail("Der v1.4.3-Updater verwaltet die modularen Zielpfade nicht vollstaendig")
+    return {
+        "legacy_commit": legacy_commit,
+        "legacy_managed_paths": legacy_paths,
+        "bridge_managed_paths": bridge_paths,
+    }
+
+
+def verify_bridge_release_metadata(metadata_path: Path) -> dict[str, object]:
+    """Verify authenticated GitHub metadata for the published bridge assets."""
+    try:
+        release = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ReleaseVerificationError("Release-Metadaten fuer v1.4.3 sind ungueltig") from exc
+    if (
+        release.get("tag_name") != BRIDGE_TAG
+        or release.get("published_at") != BRIDGE_RELEASE_PUBLISHED_AT
+        or release.get("draft")
+        or release.get("prerelease")
+    ):
+        _fail("Release-Metadaten fuer v1.4.3 stimmen nicht mit der publizierten Bridge ueberein")
+    release_assets = release.get("assets")
+    if not isinstance(release_assets, list):
+        _fail("Release-Metadaten fuer v1.4.3 enthalten keine Asset-Liste")
+    assets = {
+        str(asset.get("name")): asset
+        for asset in release_assets
+        if isinstance(asset, dict)
+    }
+    expected = {
+        BRIDGE_ARCHIVE_NAME: (
+            f"sha256:{BRIDGE_ARCHIVE_SHA256}",
+            BRIDGE_ARCHIVE_SIZE,
+        ),
+        BRIDGE_CHECKSUM_NAME: (
+            f"sha256:{BRIDGE_CHECKSUM_SHA256}",
+            BRIDGE_CHECKSUM_SIZE,
+        ),
+    }
+    for name, (digest, size) in expected.items():
+        asset = assets.get(name)
+        if not asset or asset.get("digest") != digest:
+            _fail(f"Publiziertes Bridge-Asset {name} hat nicht den erwarteten SHA-256")
+        if size is not None:
+            try:
+                actual_size = int(asset.get("size", -1))
+            except (TypeError, ValueError):
+                actual_size = -1
+            if actual_size != size:
+                _fail(f"Publiziertes Bridge-Asset {name} hat nicht die erwartete Groesse")
+    return {
+        "published_at": release["published_at"],
+        "archive_sha256": BRIDGE_ARCHIVE_SHA256,
+        "checksum_sha256": BRIDGE_CHECKSUM_SHA256,
+    }
 
 
 def _raw_central_directory_names(archive_path: Path) -> list[str]:
@@ -194,6 +337,68 @@ def verify_checksum(archive_path: Path, checksum_path: Path) -> str:
     return actual_digest
 
 
+def verify_bridge_release_assets(
+    archive_path: Path,
+    checksum_path: Path,
+    *,
+    root: Path = ROOT,
+    bridge_commit: str = BRIDGE_COMMIT,
+) -> dict[str, object]:
+    """Verify downloaded v1.4.3 assets against their pinned published hashes."""
+    if archive_path.name != BRIDGE_ARCHIVE_NAME:
+        _fail(f"Unerwarteter Bridge-Paketname: {archive_path.name}")
+    if checksum_path.name != BRIDGE_CHECKSUM_NAME:
+        _fail(f"Unerwarteter Bridge-Pruefsummenname: {checksum_path.name}")
+    archive_digest = verify_checksum(archive_path, checksum_path)
+    checksum_digest = hashlib.sha256(checksum_path.read_bytes()).hexdigest()
+    if archive_digest != BRIDGE_ARCHIVE_SHA256:
+        _fail("Das heruntergeladene v1.4.3-Paket stimmt nicht mit dem publizierten SHA-256 ueberein")
+    if checksum_digest != BRIDGE_CHECKSUM_SHA256:
+        _fail("Die heruntergeladene v1.4.3-Pruefsumme stimmt nicht mit dem publizierten SHA-256 ueberein")
+    if archive_path.stat().st_size != BRIDGE_ARCHIVE_SIZE:
+        _fail("Das heruntergeladene v1.4.3-Paket hat nicht die publizierte Groesse")
+    package_root = f"watering-planner-{BRIDGE_TAG.removeprefix('v')}"
+    compared_files = 0
+    try:
+        with zipfile.ZipFile(archive_path) as archive:
+            for member in archive.infolist():
+                if member.is_dir():
+                    continue
+                path = PurePosixPath(member.filename)
+                if (
+                    len(path.parts) < 2
+                    or path.parts[0] != package_root
+                    or path.is_absolute()
+                    or ".." in path.parts
+                ):
+                    _fail("Das publizierte v1.4.3-Paket hat eine ungueltige Wurzel")
+                relative = PurePosixPath(*path.parts[1:]).as_posix()
+                tagged_source = _git_bytes(
+                    root,
+                    "show",
+                    f"{bridge_commit}:{relative}",
+                )
+                if archive.read(member) != tagged_source:
+                    _fail(
+                        "Bridge-Asset stimmt nicht mit dem unveraenderlichen "
+                        f"Tag-Inhalt ueberein: {relative}"
+                    )
+                compared_files += 1
+    except zipfile.BadZipFile as exc:
+        raise ReleaseVerificationError("Das publizierte v1.4.3-Paket ist kein gueltiges ZIP") from exc
+    if compared_files != BRIDGE_ARCHIVE_FILE_COUNT:
+        _fail(
+            "Das publizierte v1.4.3-Paket enthaelt "
+            f"{compared_files} statt {BRIDGE_ARCHIVE_FILE_COUNT} Dateien"
+        )
+    return {
+        "archive_sha256": archive_digest,
+        "checksum_sha256": checksum_digest,
+        "archive_size": archive_path.stat().st_size,
+        "source_file_count": compared_files,
+    }
+
+
 def _archive_text(archive: zipfile.ZipFile, name: str) -> str:
     try:
         return archive.read(name).decode("utf-8")
@@ -295,6 +500,9 @@ def verify_release_package(
     bridge_tag: str = BRIDGE_TAG,
     bridge_tag_object: str = BRIDGE_TAG_OBJECT,
     bridge_commit: str = BRIDGE_COMMIT,
+    bridge_release_metadata_path: Path | None = None,
+    bridge_release_archive_path: Path | None = None,
+    bridge_release_checksum_path: Path | None = None,
 ) -> dict[str, object]:
     root = root.resolve(strict=True)
     version = validate_version(
@@ -331,9 +539,32 @@ def verify_release_package(
                 _fail(f"Release-Datei stimmt nicht mit der Quelle ueberein: {name}")
 
     bridge = verify_bridge_tag(root, bridge_tag, bridge_tag_object, bridge_commit)
+    update_path = verify_bridge_update_path(root, bridge)
     release_commit = None
     if release_tag:
         release_commit = verify_tag(root, release_tag, version, require_head=True)
+    history_commit = verify_bridge_history(
+        root,
+        bridge,
+        release_commit or "HEAD",
+    )
+    bridge_release_metadata = (
+        verify_bridge_release_metadata(bridge_release_metadata_path)
+        if bridge_release_metadata_path
+        else None
+    )
+    if bool(bridge_release_archive_path) != bool(bridge_release_checksum_path):
+        _fail("Bridge-Paket und Bridge-Pruefsumme muessen gemeinsam angegeben werden")
+    bridge_release_assets = (
+        verify_bridge_release_assets(
+            bridge_release_archive_path,
+            bridge_release_checksum_path,
+            root=root,
+            bridge_commit=bridge,
+        )
+        if bridge_release_archive_path and bridge_release_checksum_path
+        else None
+    )
 
     return {
         "version": version,
@@ -343,8 +574,12 @@ def verify_release_package(
         "bridge_tag": bridge_tag,
         "bridge_tag_object": bridge_tag_object,
         "bridge_commit": bridge,
+        "bridge_update_path": update_path,
         "release_tag": release_tag,
         "release_commit": release_commit,
+        "bridge_history_commit": history_commit,
+        "bridge_release_metadata": bridge_release_metadata,
+        "bridge_release_assets": bridge_release_assets,
     }
 
 
@@ -357,6 +592,9 @@ def parse_args(arguments: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--bridge-tag", default=BRIDGE_TAG)
     parser.add_argument("--bridge-tag-object", default=BRIDGE_TAG_OBJECT)
     parser.add_argument("--bridge-commit", default=BRIDGE_COMMIT)
+    parser.add_argument("--bridge-release-metadata", type=Path)
+    parser.add_argument("--bridge-release-archive", type=Path)
+    parser.add_argument("--bridge-release-checksum", type=Path)
     return parser.parse_args(arguments)
 
 
@@ -374,6 +612,9 @@ def main(arguments: list[str] | None = None) -> int:
             bridge_tag=options.bridge_tag,
             bridge_tag_object=options.bridge_tag_object,
             bridge_commit=options.bridge_commit,
+            bridge_release_metadata_path=options.bridge_release_metadata,
+            bridge_release_archive_path=options.bridge_release_archive,
+            bridge_release_checksum_path=options.bridge_release_checksum,
         )
     except (OSError, ReleaseVerificationError, ValueError) as exc:
         print(f"Releasepruefung fehlgeschlagen: {exc}", file=sys.stderr)

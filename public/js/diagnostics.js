@@ -2,7 +2,10 @@ import { relativeAge } from "./format.js";
 import { badge, element, emptyState } from "./ui.js";
 
 export function buildDiagnosticRows(state, evaluation, diagnostics, updater) {
-  const weather = state?.weather_status || diagnostics?.weather || {};
+  const weather = {
+    ...(state?.weather_status || {}),
+    ...(diagnostics?.weather || {}),
+  };
   const ha = state?.home_assistant || {};
   const smtp = diagnostics?.smtp || state?.notifications || {};
   const refill = evaluation?.refill || {};
@@ -12,18 +15,30 @@ export function buildDiagnosticRows(state, evaluation, diagnostics, updater) {
     {
       id: "weather",
       label: "Wetterdienst",
-      status: weather.last_error ? "danger" : weather.last_successful_fetch_at ? "success" : "danger",
+      status: weather.cache_fallback
+        ? "warning"
+        : weather.last_error
+          ? "danger"
+          : weather.last_successful_fetch_at
+            ? "success"
+            : "danger",
       lastContact: weather.last_successful_fetch_at,
-      message: weather.last_error || (weather.last_successful_fetch_at ? "Open-Meteo erreichbar" : "Noch kein erfolgreicher Abruf"),
+      message: weather.cache_fallback
+        ? `${weather.last_error || "Wetterdienst nicht erreichbar"} Letzte gültige Daten werden verwendet.`
+        : weather.last_error || (weather.last_successful_fetch_at ? "Open-Meteo erreichbar" : "Noch kein erfolgreicher Abruf"),
       action: "reload-weather",
       actionLabel: "Neu laden",
     },
     {
       id: "weather-age",
       label: "Datenalter",
-      status: weather.stale ? "warning" : weather.last_successful_fetch_at ? "success" : "danger",
+      status: weather.stale || weather.cache_fallback ? "warning" : weather.last_successful_fetch_at ? "success" : "danger",
       lastContact: weather.last_successful_fetch_at,
-      message: weather.stale ? `Älter als ${weather.stale_after_minutes || 0} Minuten` : "Aktuell",
+      message: weather.stale
+        ? `Älter als ${weather.stale_after_minutes || 0} Minuten`
+        : weather.cache_fallback
+          ? "Letzte gültige Daten"
+          : "Aktuell",
       action: "reload-weather",
       actionLabel: "Aktualisieren",
     },

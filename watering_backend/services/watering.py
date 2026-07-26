@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import uuid
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from watering_backend.database import Database
@@ -53,6 +53,10 @@ class WateringService:
         self.pending_refill_request = pending_refill_request
         self.clear_pending_refill_request = clear_pending_refill_request
 
+    def _refresh_refill_plans(self) -> None:
+        """Persist the tank state relevant to upcoming refill windows."""
+        self.refill_status(self.tanks.balcony())
+
     def mark_run(
         self,
         delivered_ml: int,
@@ -99,6 +103,7 @@ class WateringService:
                 main_delta_ml=-actual_consumed_ml,
                 updated_at=timestamp,
             )
+        self._refresh_refill_plans()
         return {
             "id": event_id,
             "run_id": normalized_run_id,
@@ -166,9 +171,14 @@ class WateringService:
         planned_transfer_ml = int(refill["planned_transfer_ml"])
         if planned_transfer_ml <= 0:
             raise ValueError(refill["summary"] or "Keine Nachfüllung nötig")
-        now = self.local_now(
+        event_at = self.local_now(
             str(state["balcony"].get("timezone_name", "Europe/Berlin"))
-        ).astimezone(timezone.utc).isoformat()
+        ).astimezone(timezone.utc)
+        now = event_at.isoformat()
+        cooldown_until = (
+            event_at
+            + timedelta(minutes=max(0, int(refill["cooldown_minutes"])))
+        ).isoformat()
 
         with self.database.connection(immediate=True) as conn:
             existing = self.events.refill_by_run_id(
@@ -219,8 +229,21 @@ class WateringService:
                 source=source,
                 run_id=normalized_run_id,
             )
+            self.events.reconcile_refill_plans_after_event(
+                conn,
+                target_date=str(refill["target_date"]),
+                window_label=str(
+                    refill.get("window_label")
+                    or refill.get("active_window")
+                    or refill.get("last_window")
+                    or ""
+                ),
+                ran_at=now,
+                cooldown_until=cooldown_until,
+            )
         if pending:
             self.clear_pending_refill_request()
+        self._refresh_refill_plans()
         return {
             **refill,
             "run_id": normalized_run_id,
@@ -257,4 +280,4 @@ class WateringService:
                 capacity_ml=capacity,
                 source="ui",
             )
-
+        self._refresh_refill_plans()

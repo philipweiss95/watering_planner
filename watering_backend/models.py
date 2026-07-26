@@ -8,6 +8,7 @@ from typing import Literal, TypedDict
 Severity = Literal["info", "warning", "critical"]
 ConnectionSeverity = Literal["ok", "change", "urgent"]
 ForecastEventStatus = Literal["successful", "estimated", "unserved"]
+PlantSize = Literal["small", "medium", "large", "tree"]
 RefillAutomationStatus = Literal[
     "ready",
     "disabled",
@@ -141,6 +142,7 @@ class PlantCalculation(TypedDict, total=False):
     catalog_id: str
     name: str
     custom_name: str
+    size: PlantSize
     need_ml: int
     delivered_ml: int
     difference_ml: int

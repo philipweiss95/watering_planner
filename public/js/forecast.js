@@ -2,6 +2,7 @@ import { dateLabel, liters, statusLabel, time } from "./format.js";
 import { badge, element, emptyState } from "./ui.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
+export const VISIBLE_FORECAST_DAYS = 16;
 
 function svgElement(tag, attributes = {}) {
   const node = document.createElementNS(SVG_NS, tag);
@@ -9,27 +10,108 @@ function svgElement(tag, attributes = {}) {
   return node;
 }
 
+function calendarDateKey(value) {
+  if (!value) return "";
+  const source = String(value);
+  const prefix = source.match(/^(\d{4}-\d{2}-\d{2})(?:$|T)/)?.[1];
+  if (prefix) {
+    const parsed = new Date(`${prefix}T00:00:00Z`);
+    if (!Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === prefix) return prefix;
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "";
+  const year = parsed.getFullYear();
+  const month = String(parsed.getMonth() + 1).padStart(2, "0");
+  const day = String(parsed.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function calendarOrdinal(value) {
+  const key = calendarDateKey(value);
+  if (!key) return Number.NaN;
+  const [year, month, day] = key.split("-").map(Number);
+  return Math.floor(Date.UTC(year, month - 1, day) / 86400000);
+}
+
+function calendarDateFromOrdinal(value) {
+  return new Date(value * 86400000).toISOString().slice(0, 10);
+}
+
+function localTimeFraction(value, timezone) {
+  const source = String(value || "");
+  const direct = source.match(/T(\d{2}):(\d{2})(?::(\d{2}(?:\.\d+)?))?/);
+  if (direct) {
+    return (
+      Number(direct[1]) * 3600
+      + Number(direct[2]) * 60
+      + Number(direct[3] || 0)
+    ) / 86400;
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return 0;
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: timezone || "Europe/Berlin",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(parsed);
+  const numberPart = (type) =>
+    Number(parts.find((part) => part.type === type)?.value || 0);
+  return (
+    numberPart("hour") * 3600
+    + numberPart("minute") * 60
+    + numberPart("second")
+  ) / 86400;
+}
+
 export function buildForecastModel(depletion, capacities = {}) {
   const events = Array.isArray(depletion?.forecast_events) ? depletion.forecast_events : [];
   const mainCapacity = Math.max(1, Number(capacities.main || depletion?.main_available_ml || 1));
   const refillCapacity = Math.max(1, Number(capacities.refill || depletion?.refill_available_ml || 1));
-  const parsed = events.map((event, index) => ({
+  const timezone = capacities.timezone || "Europe/Berlin";
+  const allParsed = events.map((event, index) => ({
     ...event,
     index,
     timestamp: new Date(event.at).getTime(),
+    calendarDate: calendarDateKey(event.date || event.at),
     mainPercent: Number(event.main_tank_after_ml || 0) / mainCapacity * 100,
     refillPercent: Number(event.refill_tank_after_ml || 0) / refillCapacity * 100,
-  })).filter((event) => Number.isFinite(event.timestamp));
+  }))
+    .filter((event) => Number.isFinite(event.timestamp) && event.calendarDate)
+    .map((event) => ({
+      ...event,
+      axisPosition: calendarOrdinal(event.calendarDate)
+        + localTimeFraction(event.at, timezone),
+    }))
+    .sort((left, right) => left.timestamp - right.timestamp || left.index - right.index);
+  const projected = Array.isArray(depletion?.projected_days)
+    ? depletion.projected_days
+      .map((day) => ({ ...day, date: calendarDateKey(day?.date) }))
+      .filter((day) => day.date)
+    : [];
+  const availableDates = projected.length
+    ? projected.map((day) => day.date)
+    : allParsed.map((event) => event.calendarDate);
+  const ordinals = availableDates.map(calendarOrdinal).filter(Number.isFinite);
+  const firstOrdinal = ordinals.length ? Math.min(...ordinals) : Number.NaN;
+  const lastOrdinal = ordinals.length ? Math.max(...ordinals) : Number.NaN;
+  const visibleDayCount = Number.isFinite(firstOrdinal) && Number.isFinite(lastOrdinal)
+    ? Math.min(VISIBLE_FORECAST_DAYS, lastOrdinal - firstOrdinal + 1)
+    : 0;
+  const dates = Array.from(
+    { length: visibleDayCount },
+    (_value, index) => calendarDateFromOrdinal(firstOrdinal + index),
+  );
+  const visibleDates = new Set(dates);
+  const parsed = allParsed.filter((event) => visibleDates.has(event.calendarDate));
+  const projectedByDate = new Map(projected.map((day) => [day.date, day]));
   const groups = new Map();
   for (const event of parsed) {
-    const date = event.date || new Date(event.timestamp).toISOString().slice(0, 10);
+    const date = event.calendarDate;
     if (!groups.has(date)) groups.set(date, []);
     groups.get(date).push(event);
   }
-  const projected = Array.isArray(depletion?.projected_days) ? depletion.projected_days.slice(0, 16) : [];
-  const dates = projected.length
-    ? projected.map((day) => day.date)
-    : [...groups.keys()].slice(0, 16);
   let mainAfter = Number(depletion?.main_available_ml || 0);
   let refillAfter = Number(depletion?.refill_available_ml || 0);
   const days = dates.map((date) => {
@@ -44,28 +126,74 @@ export function buildForecastModel(depletion, capacities = {}) {
       watering: dayEvents.filter((event) => event.event_type === "watering").length,
       refills: dayEvents.filter((event) => event.event_type === "refill" && Number(event.transferred_ml || 0) > 0).length,
       unserved: dayEvents.some((event) => event.status === "unserved" && event.event_type === "watering"),
+      estimated: Boolean(
+        projectedByDate.get(date)?.estimated
+        || dayEvents.some((event) => event.estimated_weather),
+      ),
       mainAfterMl: mainAfter,
       refillAfterMl: refillAfter,
     };
   });
+  const projectedEstimatedDate = projected.find(
+    (day) => visibleDates.has(day.date) && day.estimated,
+  )?.date;
+  const estimatedDate = projectedEstimatedDate
+    || parsed.find((event) => event.estimated_weather)?.calendarDate
+    || "";
+  const firstUnservedAt = String(depletion?.first_unserved_watering_at || "");
+  const visibleUnserved = parsed.find(
+    (event) => event.event_type === "watering" && event.status === "unserved",
+  );
   return {
     events: parsed,
     days,
-    firstUnservedAt: depletion?.first_unserved_watering_at || "",
-    estimated: Boolean(depletion?.estimated_after_forecast),
-    estimatedStartTimestamp: parsed.find((event) => event.estimated_weather)?.timestamp || null,
+    firstUnservedAt: visibleDates.has(calendarDateKey(firstUnservedAt))
+      ? firstUnservedAt
+      : (visibleUnserved?.at || ""),
+    estimated: Boolean(estimatedDate),
+    estimatedStartTimestamp: estimatedDate
+      ? (parsed.find((event) => event.calendarDate >= estimatedDate)?.timestamp || null)
+      : null,
+    estimatedStartPosition: estimatedDate
+      ? calendarOrdinal(estimatedDate)
+      : null,
+    horizonStartDate: dates[0] || "",
+    horizonEndDate: dates.at(-1) || "",
+    horizonDays: dates.length,
+    horizonStartPosition: Number.isFinite(firstOrdinal)
+      ? firstOrdinal
+      : null,
+    horizonEndPosition: Number.isFinite(firstOrdinal)
+      ? firstOrdinal + dates.length
+      : null,
   };
 }
 
-function linePoints(events, key, width, height, margins) {
+function xCoordinate(position, min, max, width, margins) {
+  return margins.left
+    + (position - min) / Math.max(1, max - min)
+      * (width - margins.left - margins.right);
+}
+
+function linePoints(events, key, width, height, margins, min, max) {
   if (!events.length) return "";
-  const min = events[0].timestamp;
-  const max = Math.max(min + 1, events.at(-1).timestamp);
-  return events.map((event) => {
-    const x = margins.left + (event.timestamp - min) / (max - min) * (width - margins.left - margins.right);
+  const points = events.map((event) => {
+    const x = xCoordinate(
+      event.axisPosition,
+      min,
+      max,
+      width,
+      margins,
+    );
     const y = margins.top + (100 - Math.max(0, Math.min(100, event[key]))) / 100 * (height - margins.top - margins.bottom);
     return `${x.toFixed(1)},${y.toFixed(1)}`;
-  }).join(" ");
+  });
+  const final = events.at(-1);
+  if (final.axisPosition < max) {
+    const y = margins.top + (100 - Math.max(0, Math.min(100, final[key]))) / 100 * (height - margins.top - margins.bottom);
+    points.push(`${(width - margins.right).toFixed(1)},${y.toFixed(1)}`);
+  }
+  return points.join(" ");
 }
 
 export function renderForecast(state, evaluation) {
@@ -73,6 +201,7 @@ export function renderForecast(state, evaluation) {
   const model = buildForecastModel(depletion, {
     main: state?.balcony?.tank_capacity_ml,
     refill: state?.balcony?.refill_tank_capacity_ml,
+    timezone: state?.balcony?.timezone_name,
   });
   const legend = document.getElementById("forecastLegend");
   const legendItem = (label, swatch) => element("span", { className: "legend-item" }, [
@@ -93,6 +222,8 @@ export function renderForecast(state, evaluation) {
     const width = 900;
     const height = 360;
     const margins = { left: 52, right: 24, top: 24, bottom: 50 };
+    const min = model.horizonStartPosition;
+    const max = model.horizonEndPosition;
     for (const value of [0, 25, 50, 75, 100]) {
       const y = margins.top + (100 - value) / 100 * (height - margins.top - margins.bottom);
       chart.append(
@@ -101,11 +232,14 @@ export function renderForecast(state, evaluation) {
       );
     }
     if (model.estimated) {
-      const min = model.events[0].timestamp;
-      const max = Math.max(min + 1, model.events.at(-1).timestamp);
-      const estimatedStart = model.estimatedStartTimestamp || max;
-      const estimatedX = margins.left
-        + (estimatedStart - min) / (max - min) * (width - margins.left - margins.right);
+      const estimatedStart = model.estimatedStartPosition ?? max;
+      const estimatedX = xCoordinate(
+        estimatedStart,
+        min,
+        max,
+        width,
+        margins,
+      );
       chart.append(svgElement("rect", {
         x: estimatedX, y: margins.top, width: Math.max(0, width - margins.right - estimatedX),
         height: height - margins.top - margins.bottom, class: "estimated-area",
@@ -115,13 +249,39 @@ export function renderForecast(state, evaluation) {
       chart.append(estimatedLabel);
     }
     chart.append(
-      svgElement("polyline", { points: linePoints(model.events, "mainPercent", width, height, margins), class: "main-line" }),
-      svgElement("polyline", { points: linePoints(model.events, "refillPercent", width, height, margins), class: "refill-line" }),
+      svgElement("polyline", {
+        points: linePoints(
+          model.events,
+          "mainPercent",
+          width,
+          height,
+          margins,
+          min,
+          max,
+        ),
+        class: "main-line",
+      }),
+      svgElement("polyline", {
+        points: linePoints(
+          model.events,
+          "refillPercent",
+          width,
+          height,
+          margins,
+          min,
+          max,
+        ),
+        class: "refill-line",
+      }),
     );
-    const min = model.events[0].timestamp;
-    const max = Math.max(min + 1, model.events.at(-1).timestamp);
-    model.events.forEach((event, index) => {
-      const x = margins.left + (event.timestamp - min) / (max - min) * (width - margins.left - margins.right);
+    model.events.forEach((event) => {
+      const x = xCoordinate(
+        event.axisPosition,
+        min,
+        max,
+        width,
+        margins,
+      );
       const y = margins.top + (100 - Math.max(0, Math.min(100, event.mainPercent))) / 100 * (height - margins.top - margins.bottom);
       const className = event.status === "unserved" && event.event_type === "watering"
         ? "event-unserved"
@@ -133,12 +293,38 @@ export function renderForecast(state, evaluation) {
       markerTitle.textContent = `${dateLabel(event.at)} ${time(event.at)}: ${statusLabel(event.status)}, Haupttank ${liters(event.main_tank_after_ml)}`;
       marker.append(markerTitle);
       chart.append(marker);
-      if (index === 0 || index === model.events.length - 1 || index % Math.max(1, Math.round(model.events.length / 7)) === 0) {
-        const label = svgElement("text", { x, y: height - 17, class: "axis-label", "text-anchor": "middle" });
-        label.textContent = dateLabel(event.at, { weekday: undefined });
-        chart.append(label);
-      }
     });
+    const labelInterval = Math.max(
+      1,
+      Math.ceil(model.days.length / 6),
+    );
+    const labelIndexes = new Set([
+      ...model.days.map((_day, index) => index)
+        .filter((index) => index % labelInterval === 0),
+      model.days.length - 1,
+    ]);
+    for (const index of [...labelIndexes].sort((left, right) => left - right)) {
+      const day = model.days[index];
+      if (!day) continue;
+      const x = xCoordinate(
+        calendarOrdinal(day.date) + 0.5,
+        min,
+        max,
+        width,
+        margins,
+      );
+      const label = svgElement("text", {
+        x,
+        y: height - 17,
+        class: "axis-label",
+        "text-anchor": "middle",
+      });
+      label.textContent = dateLabel(
+        day.date,
+        { weekday: undefined },
+      );
+      chart.append(label);
+    }
   }
 
   const note = document.getElementById("forecastChartNote");
@@ -156,13 +342,20 @@ export function renderForecast(state, evaluation) {
     const copy = day.watering
       ? `${day.watering} Bewässerung${day.watering === 1 ? "" : "en"}${day.refills ? ` · ${day.refills} Nachfüllung${day.refills === 1 ? "" : "en"}` : ""}`
       : (day.refills ? `${day.refills} Nachfüllung${day.refills === 1 ? "" : "en"}` : "Kein Lauf");
-    return element("article", { className: "forecast-day" }, [
+    const statusBadge = day.unserved
+      ? badge("Nicht versorgbar", "danger")
+      : day.estimated
+        ? badge("Geschätzt", "warning")
+        : badge("Versorgt", "success");
+    return element("article", {
+      className: `forecast-day${day.estimated ? " estimated" : ""}`,
+    }, [
       element("div", {}, [element("strong", { text: dateLabel(day.date) })]),
       element("div", {}, [
         element("span", { text: copy }),
         element("small", { text: `Haupttank ${liters(day.mainAfterMl)} · Vorrat ${liters(day.refillAfterMl)}` }),
       ]),
-      badge(day.unserved ? "Nicht versorgbar" : "Versorgt", day.unserved ? "danger" : "success"),
+      statusBadge,
     ]);
   }));
 }

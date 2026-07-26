@@ -40,12 +40,18 @@ class Migration143Tests(unittest.TestCase):
             with application.database.connection() as conn:
                 after_first = domain_snapshot(conn)
                 first_schema = self._schema_snapshot(conn)
+                first_tree_size = conn.execute(
+                    "SELECT size FROM plants WHERE id = 15"
+                ).fetchone()["size"]
                 self._assert_migrated_schema(conn)
 
             application.initialize()
             with application.database.connection() as conn:
                 after_second = domain_snapshot(conn)
                 second_schema = self._schema_snapshot(conn)
+                second_tree_size = conn.execute(
+                    "SELECT size FROM plants WHERE id = 15"
+                ).fetchone()["size"]
                 self._assert_migrated_schema(conn)
                 migrated_percentage = conn.execute(
                     """
@@ -63,16 +69,20 @@ class Migration143Tests(unittest.TestCase):
             self.assertEqual(snapshot_json(after_first), before_json)
             self.assertEqual(snapshot_json(after_second), before_json)
             self.assertEqual(second_schema, first_schema)
-            self.assertEqual(float(migrated_percentage), 55.0)
+            self.assertEqual(first_tree_size, "tree")
+            self.assertEqual(second_tree_size, "tree")
+            self.assertEqual(float(migrated_percentage), 137.5)
             self.assertEqual(float(calibration_basis), 0.2)
 
             state = application.get_state()
             plants = {plant["id"]: plant for plant in state["plants"]}
             self.assertEqual(
                 [plants[plant_id]["catalog_id"] for plant_id in sorted(plants)],
-                ["olive", "tomato", "lavender", "citrus"],
+                ["olive", "tomato", "lavender", "citrus", "olive"],
             )
             self.assertEqual(plants[11]["custom_name"], "Olivia")
+            self.assertEqual(plants[15]["custom_name"], "Olivenbaum Altbestand")
+            self.assertEqual(plants[15]["size"], "tree")
             self.assertEqual(plants[14]["pot_type"], "reservoir_overflow")
             self.assertEqual(
                 state["balcony"]["tank_current_ml"],
@@ -98,11 +108,14 @@ class Migration143Tests(unittest.TestCase):
                 foreign_key_violations = conn.execute(
                     "PRAGMA foreign_key_check"
                 ).fetchall()
+                schema_version = conn.execute("PRAGMA user_version").fetchone()[0]
 
             self.assertEqual(actual, V143_SETTINGS)
+            self.assertEqual(schema_version, 0)
             self.assertEqual(foreign_key_violations, [])
-            self.assertIn("home_assistant_last_success_at", actual)
-            self.assertIn("updater_channel", actual)
+            self.assertIn("automation_pause_until", actual)
+            self.assertIn("main_pump_calibration_factor", actual)
+            self.assertEqual(actual["watering_amount_calibration_basis"], "0.2")
 
     def _assert_migrated_schema(self, conn: sqlite3.Connection) -> None:
         self.assertEqual(
@@ -123,6 +136,7 @@ class Migration143Tests(unittest.TestCase):
                 "notification_state",
                 "notification_log",
                 "refill_window_observations",
+                "refill_window_plans",
             }
             <= table_names
         )
@@ -157,6 +171,44 @@ class Migration143Tests(unittest.TestCase):
         for sql in indexes.values():
             self.assertIn("CREATE UNIQUE INDEX", sql)
             self.assertIn("WHERE run_id IS NOT NULL", sql)
+
+        refill_plan_columns = {
+            row["name"]
+            for row in conn.execute(
+                "PRAGMA table_info(refill_window_plans)"
+            )
+        }
+        self.assertTrue(
+            {
+                "window_key",
+                "target_date",
+                "window_start",
+                "window_end",
+                "need_detected",
+                "executable",
+                "expected_transfer_ml",
+                "created_at",
+                "last_checked_at",
+            }
+            <= refill_plan_columns
+        )
+        refill_plan_indexes = {
+            row["name"]
+            for row in conn.execute(
+                """
+                SELECT name FROM sqlite_master
+                WHERE type = 'index'
+                  AND tbl_name = 'refill_window_plans'
+                """
+            )
+        }
+        self.assertTrue(
+            {
+                "ux_refill_window_plans_bounds",
+                "ix_refill_window_plans_due",
+            }
+            <= refill_plan_indexes
+        )
 
     @staticmethod
     def _schema_snapshot(conn: sqlite3.Connection) -> list[tuple[str, str, str]]:

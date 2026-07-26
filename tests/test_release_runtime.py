@@ -24,12 +24,13 @@ class FakeRuntimeClient:
                 "refill_tank_current_ml": self.refill_tank,
             },
             "plants": [
-                {"id": 11, "catalog_id": "olive", "custom_name": "Olivia"},
-                {"id": 12, "catalog_id": "tomato", "custom_name": "Roma links"},
-                {"id": 13, "catalog_id": "lavender", "custom_name": "Lavendel klein"},
-                {"id": 14, "catalog_id": "citrus", "custom_name": "Zitrone am Gelander"},
+                {"id": 11, "catalog_id": "olive", "custom_name": "Olivia", "size": "large"},
+                {"id": 12, "catalog_id": "tomato", "custom_name": "Roma links", "size": "medium"},
+                {"id": 13, "catalog_id": "lavender", "custom_name": "Lavendel klein", "size": "small"},
+                {"id": 14, "catalog_id": "citrus", "custom_name": "Zitrone am Gelander", "size": "large"},
+                {"id": 15, "catalog_id": "olive", "custom_name": "Olivenbaum Altbestand", "size": "tree"},
             ],
-            "hoses": [{"number": f"{number:02d}"} for number in range(1, 8)],
+            "hoses": [{"number": f"{number:02d}"} for number in range(1, 9)],
         }
 
     def request(self, path, payload=None):
@@ -98,8 +99,8 @@ class ReleaseRuntimeScriptTests(unittest.TestCase):
             forbidden_values=["must-not-leak"],
         )
 
-        self.assertEqual(result["plant_count"], 4)
-        self.assertEqual(result["hose_count"], 7)
+        self.assertEqual(result["plant_count"], 5)
+        self.assertEqual(result["hose_count"], 8)
         self.assertEqual(result["watering_consumed_ml"], 500)
         self.assertEqual(result["refill_transferred_ml"], 2_000)
 

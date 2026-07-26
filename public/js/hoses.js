@@ -101,14 +101,14 @@ function warningNodes(warnings) {
   ]));
 }
 
-async function persistHoses(rows, state) {
+export async function persistHoses(rows, state, client = api) {
   const hardWarnings = validateHoses(rows, state.outlets || [], state.plants || []).filter((item) =>
     ["missing-number", "duplicate", "invalid-outlet", "invalid-plant", "outlet-limit"].includes(item.code));
   if (hardWarnings.length) throw new Error(hardWarnings[0].message);
-  await api.post("/api/hoses", { hoses: rows.map(({ number, outlet_id }) => ({ number, outlet_id })) });
+  await client.post("/api/hoses", { hoses: rows.map(({ number, outlet_id }) => ({ number, outlet_id })) });
   for (const plant of state.plants || []) {
     const assigned = rows.filter((row) => Number(row.plant_id) === Number(plant.id)).map((row) => row.number).join(", ");
-    await api.put(`/api/plants/${plant.id}`, {
+    await client.put(`/api/plants/${plant.id}`, {
       catalog_id: plant.catalog_id,
       custom_name: plant.custom_name,
       size: plant.size,
@@ -148,20 +148,20 @@ export function renderHoses(state, onChanged = async () => {}) {
     refreshWarnings();
     try {
       await persistHoses(hoseDataFromForm(table), state);
-      await onChanged();
+      await onChanged({ afterMutation: true });
       showToast("Schlauch gelöscht", {
         actionLabel: "Rückgängig",
         onAction: async () => {
           const currentState = await api.get("/api/state");
           const restored = [...currentState.hoses, snapshot];
           await persistHoses(restored, currentState);
-          await onChanged();
+          await onChanged({ afterMutation: true });
           showToast("Schlauch wiederhergestellt");
         },
       });
     } catch (error) {
       showToast(error.message, { error: true });
-      await onChanged();
+      await onChanged({ afterMutation: true });
     }
   };
   for (const hose of state.hoses || []) table.append(hoseRow(hose, state, removeRow));
@@ -186,7 +186,7 @@ export function initHoses(getState, onChanged) {
     try {
       await persistHoses(hoseDataFromForm(document.getElementById("hoseTable")), state);
       showToast("Schlauchzuordnung gespeichert");
-      await onChanged();
+      await onChanged({ afterMutation: true });
     } catch (error) {
       showToast(error.message, { error: true });
       document.getElementById("hoseWarnings").prepend(...warningNodes([{ message: error.message }]));

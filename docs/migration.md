@@ -27,6 +27,15 @@ lautet
 5. Nach dem Neustart Schema, Tankstände, Pflanzen, Katalog-IDs,
    Schlauchzuordnungen und Standortdaten prüfen.
 
+Ein direkter Sprung von 1.4.2 auf 1.5.0 ist nicht unterstützt. Der in 1.4.2
+enthaltene Updater verwaltet die modularen Zielpfade noch nicht. Auf einer
+solchen Installation muss deshalb zuerst das bereits veröffentlichte,
+unveränderte Release 1.4.3 installiert werden. Der ab 1.5 enthaltene Updater
+prüft zusätzlich die installierte `VERSION` und meldet
+`update_requires_v1_4_3_bridge`, bevor er ein weiteres Release herunterlädt.
+Diese zusätzliche Prüfung ersetzt den notwendigen Zwischenschritt für einen
+noch laufenden 1.4.2-Updater nicht.
+
 Version 1.4.3 ändert die Bewässerungsfachlogik nicht. Ihr Updater verwaltet bei
 Installation und Datei-Rollback genau diese Pfade:
 
@@ -92,13 +101,16 @@ docker compose start watering-planner
    `server.py`.
 2. Das bestehende `data`-Volume und `.env.synology` bleiben unverändert.
 3. `NOTIFICATIONS_ENABLED` für den ersten Start von 1.5.0 auf `false` lassen.
-4. Beim Start ergänzt `init_db()` automatisch bis Schema-Version 3:
+4. Beim Start ergänzt `init_db()` automatisch bis Schema-Version 4:
    `run_id`-Spalten, Unique-Indizes sowie `notification_state` und
    `notification_log`. Schema 3 ergänzt additive SMTP-Versuchsfelder und
-   `refill_window_observations`. Vorhandene Ereignisse und Tankstände bleiben
-   erhalten; alle SQLite-Verbindungen erzwingen danach Fremdschlüssel.
+   `refill_window_observations`. Schema 4 ergänzt die persistenten,
+   zeitzonensicheren `refill_window_plans` und übernimmt vorhandene
+   Beobachtungen idempotent. Vorhandene Pflanzen einschließlich `size=tree`,
+   Ereignisse und Tankstände bleiben erhalten; alle SQLite-Verbindungen
+   erzwingen danach Fremdschlüssel.
 5. Nach dem Start `GET /api/health` und `GET /api/state` prüfen. Optional per
-   SQLite `PRAGMA user_version;` kontrollieren; erwartet wird `3`.
+   SQLite `PRAGMA user_version;` kontrollieren; erwartet wird `4`.
 
 Alte Aufrufer ohne `run_id` funktionieren übergangsweise weiter. Sie sind bei
 einem HTTP-Retry aber nicht idempotent. Deshalb müssen alle produktiven
@@ -212,3 +224,37 @@ die bereits unter 1.5.0 entstanden sind. Für einen garantiert identischen
 
 Erst nach erfolgreicher Abnahme sollten Benachrichtigungen und unbeaufsichtigte
 Automationen wieder aktiviert werden.
+
+## Grenze der automatischen Updater-Prüfung
+
+Die CI verwendet den unveränderten Updater-Code aus dem Tag `v1.4.3`, spielt
+damit das 1.5.0-Paket ein und prüft Dateiübernahme sowie Rollback gegen
+Fehlerfälle. Planner- und Updater-Images werden zusätzlich real gebaut; der
+migrierte Planner wird im Container gestartet und über seine APIs geprüft.
+
+Der Selbsttausch des bereits laufenden Updater-Containers benötigt jedoch den
+Docker-Socket und die echten Bind-Mount-Pfade des Synology-Hosts. Dieser letzte
+Handoff wird in CI mit kontrollierten Docker-Antworten simuliert und kann die
+Host-spezifischen Rechte, Pfade und Container-Namen der Synology nicht
+vollständig beweisen. Deshalb nach der Installation manuell prüfen:
+
+1. Genau ein Container `watering-planner-updater` läuft.
+2. Planner und Updater zeigen Version 1.5.0 beziehungsweise verwenden die
+   Images mit Tag 1.5.0.
+3. Beide Healthchecks sind grün.
+4. `data/` und `.env.synology` sind weiterhin unverändert eingebunden.
+
+Der Release-Workflow lädt außerdem die bereits veröffentlichten
+1.4.3-Bridge-Assets erneut. Er prüft ihre GitHub-Metadaten, Paketgröße und die
+fest hinterlegten SHA-256-Werte. Normale Unit-Tests bleiben dabei vollständig
+offline. Eine zusätzliche Tag-Prüfung belegt, dass der 1.4.2-Updater die
+modularen Pfade noch nicht verwaltet, der 1.4.3-Updater dagegen
+`watering_backend/` und `package.json` übernimmt.
+
+- `watering-planner-1.4.3.zip`:
+  `78a38685d19c0952541bf96f9286b8eb11c5df0c2edc8de3a9bd285ed9f5ce7a`
+- Prüfsummen-Asset:
+  `32dc99123f053d5530292023bb5e951a83c44c068f745e138cb8728ec123f0bf`
+
+Zusätzlich werden alle 26 Dateien im Bridge-Paket bytegenau mit Commit
+`e02ceb198264104fd8f2bc68eb8db7b24ac00dc8` verglichen.

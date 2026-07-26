@@ -49,6 +49,23 @@ def format_liters_for_text(ml: int | float) -> str:
     return f"{round(float(ml) / 1000, 1):g} l"
 
 
+def refill_window_key(
+    target_date: date | str,
+    start: datetime,
+    end: datetime,
+) -> str:
+    """Identify a local schedule window by its unambiguous UTC bounds."""
+    target = (
+        target_date.isoformat()
+        if isinstance(target_date, date)
+        else str(target_date)
+    )
+    return (
+        f"{target}|{aware_utc(start).isoformat()}|"
+        f"{aware_utc(end).isoformat()}"
+    )
+
+
 class RefillService:
     """Plan refill windows and persist their observations without HTTP state."""
 
@@ -104,6 +121,7 @@ class RefillService:
         timezone_name = str(
             balcony.get("timezone_name", "Europe/Berlin")
         )
+        now_utc = self._utc_now()
         now = self._local_now(timezone_name)
         config = self.settings.planner_config()
         target_date = now.date()
@@ -145,11 +163,7 @@ class RefillService:
             else 0
         )
 
-        scheduled_pairs = self._scheduler(
-            now.date(),
-            timezone_name,
-            config,
-        )
+        scheduled_pairs = self._scheduler(now.date(), timezone_name, config)
         refill_window_pairs = [
             (start, end, str(window["start"]))
             for (start, end), window in zip(
@@ -161,12 +175,12 @@ class RefillService:
         elapsed_windows = [
             start
             for start, end, _label in refill_window_pairs
-            if end < now
+            if aware_utc(end) <= now_utc
         ]
         eligible_windows = [
             start
             for start, end, _label in refill_window_pairs
-            if start <= now <= end
+            if aware_utc(start) <= now_utc < aware_utc(end)
         ]
         pending_windows = [
             item
@@ -189,7 +203,7 @@ class RefillService:
             active_window.strftime("%H:%M") if active_window else ""
         )
         next_window = next(
-            (item for item in refill_windows if item > now),
+            (item for item in refill_windows if aware_utc(item) > now_utc),
             None,
         )
         if not next_window and config["refill_windows"]:
@@ -213,7 +227,12 @@ class RefillService:
             if last_event_at
             else None
         )
-        cooldown_active = bool(cooldown_until and now < cooldown_until)
+        cooldown_until_utc = (
+            aware_utc(cooldown_until) if cooldown_until else None
+        )
+        cooldown_active = bool(
+            cooldown_until_utc and now_utc < cooldown_until_utc
+        )
         schedule_due = bool(active_window)
         need_exists = bool(
             transferable_ml > 0 and pump_ml_per_min > 0
@@ -225,24 +244,54 @@ class RefillService:
             and not cooldown_active
         )
         catch_up = False
-        eligible_now = bool(
-            enabled
-            and main_missing_ml > 0
-            and refill_current > 0
-            and pump_ml_per_min > 0
-            and not cooldown_active
-        )
 
-        if active_window:
-            active_pair = next(
-                (
-                    item
-                    for item in refill_window_pairs
-                    if item[0] == active_window
-                ),
-                None,
+        # Persist today's and tomorrow's absolute opportunities before they
+        # open. A restart or worker outage during a window can then still
+        # distinguish a missed executable run from an impossible one.
+        checked_at = now_utc.isoformat()
+        for plan_day in (target_date, target_date + timedelta(days=1)):
+            day_pairs = self._scheduler(
+                plan_day,
+                timezone_name,
+                config,
             )
-            if active_pair:
+            configured_keys: set[str] = set()
+            for (start, end), window in zip(
+                day_pairs,
+                config["refill_windows"],
+            ):
+                start_utc = aware_utc(start)
+                end_utc = aware_utc(end)
+                key = refill_window_key(plan_day, start, end)
+                configured_keys.add(key)
+                # Refill windows are half-open intervals. At the exact end no
+                # transfer can start, and the last executable snapshot must
+                # remain intact for missed-window detection on the next poll.
+                if end_utc <= now_utc:
+                    continue
+
+                observed_in_window = (
+                    start_utc <= now_utc < end_utc
+                )
+                available_from = start_utc
+                if observed_in_window:
+                    available_from = now_utc
+                if (
+                    cooldown_until_utc
+                    and cooldown_until_utc > available_from
+                ):
+                    available_from = cooldown_until_utc
+                available_minutes = max(
+                    0.0,
+                    (end_utc - available_from).total_seconds() / 60,
+                )
+                window_transfer_limit = math.floor(
+                    available_minutes * pump_ml_per_min
+                )
+                expected_transfer_ml = min(
+                    transferable_ml,
+                    max(0, window_transfer_limit),
+                )
                 blocking_reason = (
                     "disabled"
                     if not enabled
@@ -253,36 +302,118 @@ class RefillService:
                     else "pump_flow_missing"
                     if pump_ml_per_min <= 0
                     else "cooldown"
-                    if cooldown_active
+                    if cooldown_until_utc
+                    and cooldown_until_utc >= end_utc
+                    else "invalid_window"
+                    if end_utc <= start_utc
+                    else "window_too_short"
+                    if expected_transfer_ml <= 0
                     else ""
                 )
-                self.events.record_refill_window_observation(
-                    target_date=target_date.isoformat(),
-                    window_label=active_pair[2],
-                    window_start=active_pair[0].isoformat(),
-                    window_end=active_pair[1].isoformat(),
-                    need_detected=main_missing_ml > 0,
-                    eligible=eligible_now,
-                    blocking_reason=blocking_reason,
-                    observed_at=now.isoformat(),
+                executable = bool(
+                    enabled
+                    and main_missing_ml > 0
+                    and refill_current > 0
+                    and pump_ml_per_min > 0
+                    and expected_transfer_ml > 0
+                    and end_utc > start_utc
                 )
-
-        observed = {
-            str(item["window_label"]): item
-            for item in self.events.refill_window_observations(
-                target_date=target_date.isoformat()
+                self.events.upsert_refill_window_plan(
+                    window_key=key,
+                    target_date=plan_day.isoformat(),
+                    window_label=str(window["start"]),
+                    window_start=start_utc.isoformat(),
+                    window_end=end_utc.isoformat(),
+                    need_detected=main_missing_ml > 0,
+                    executable=executable,
+                    expected_transfer_ml=expected_transfer_ml,
+                    blocking_reason=blocking_reason,
+                    observed_in_window=observed_in_window,
+                    checked_at=checked_at,
+                    cooldown_minutes=int(
+                        config["refill_min_interval_minutes"]
+                    ),
+                )
+            self.events.cancel_obsolete_refill_window_plans(
+                target_date=plan_day.isoformat(),
+                active_window_keys=configured_keys,
+                after_at=checked_at,
+                cancelled_at=checked_at,
             )
-        }
-        missed_windows = [
-            start
-            for start, end, label in refill_window_pairs
-            if end < now
-            and not self.events.refill_for_target(target_date, label)
-            and bool(observed.get(label, {}).get("need_detected"))
-            and bool(observed.get(label, {}).get("eligible"))
-        ]
 
-        if not enabled:
+        recent_dates = [
+            (target_date - timedelta(days=1)).isoformat(),
+            target_date.isoformat(),
+        ]
+        missed_window_details: list[dict[str, Any]] = []
+        completed_plan_keys: set[str] = set()
+        for plan in self.events.refill_window_plans(
+            target_dates=recent_dates,
+        ):
+            if plan.get("cancelled_at"):
+                continue
+            event = self.events.refill_for_target(
+                str(plan["target_date"]),
+                str(plan["window_label"]),
+            )
+            if event and int(event.get("transferred_ml", 0)) > 0:
+                fulfilled_at = str(event.get("ran_at", checked_at))
+                self.events.mark_refill_window_fulfilled(
+                    str(plan["window_key"]),
+                    fulfilled_at,
+                    checked_at,
+                )
+                plan["fulfilled_at"] = fulfilled_at
+            if plan.get("fulfilled_at"):
+                completed_plan_keys.add(str(plan["window_key"]))
+                continue
+            window_end = parse_event_datetime(plan.get("window_end"))
+            if (
+                window_end
+                and aware_utc(window_end) < now_utc
+                and bool(plan.get("need_detected"))
+                and bool(plan.get("executable"))
+                and int(plan.get("expected_transfer_ml", 0)) > 0
+            ):
+                missed_window_details.append(
+                    {
+                        "window_key": str(plan["window_key"]),
+                        "target_date": str(plan["target_date"]),
+                        "window_label": str(plan["window_label"]),
+                        "window_start": str(plan["window_start"]),
+                        "window_end": str(plan["window_end"]),
+                        "expected_transfer_ml": int(
+                            plan["expected_transfer_ml"]
+                        ),
+                    }
+                )
+        missed_windows = [
+            item["window_label"]
+            for item in missed_window_details
+            if item["target_date"] == target_date.isoformat()
+        ]
+        if completed_plan_keys:
+            completed_windows = [
+                start
+                for start, end, label in refill_window_pairs
+                if refill_window_key(target_date, start, end)
+                in completed_plan_keys
+            ]
+
+        if missed_window_details:
+            status, severity, blocked, blocked_reason = (
+                "window_missed",
+                "critical",
+                True,
+                "window_missed",
+            )
+            summary = "Nachf\u00fcllfenster verpasst."
+            if next_window:
+                summary += (
+                    " N\u00e4chste Nachf\u00fcllung um "
+                    f"{next_window.strftime('%H:%M')}."
+                )
+        elif not enabled:
             status, severity, blocked, blocked_reason = (
                 "disabled",
                 "info",
@@ -342,17 +473,6 @@ class RefillService:
             summary = (
                 "Nachf\u00fcllbedarf besteht, "
                 "Nachf\u00fcllpumpe darf laufen."
-            )
-        elif missed_windows:
-            status, severity, blocked, blocked_reason = (
-                "window_missed",
-                "critical",
-                True,
-                "window_missed",
-            )
-            summary = (
-                "Nachf\u00fcllfenster verpasst. N\u00e4chste "
-                f"Nachf\u00fcllung um {next_window.strftime('%H:%M')}."
             )
         elif completed_windows:
             status, severity, blocked, blocked_reason = (
@@ -429,9 +549,9 @@ class RefillService:
             ),
             "already_done": bool(completed_windows),
             "missed_today": bool(missed_windows),
-            "missed_windows": [
-                item.strftime("%H:%M") for item in missed_windows
-            ],
+            "missed": bool(missed_window_details),
+            "missed_windows": missed_windows,
+            "missed_window_details": missed_window_details,
             "cooldown_active": cooldown_active,
             "cooldown_minutes": int(
                 config["refill_min_interval_minutes"]

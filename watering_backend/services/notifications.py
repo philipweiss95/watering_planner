@@ -95,6 +95,11 @@ class NotificationConditionsService:
         main_current = int(balcony["tank_current_ml"])
         refill_current = int(balcony["refill_tank_current_ml"])
         refill_capacity = max(1, int(balcony["refill_tank_capacity_ml"]))
+        refill_tank_low = (
+            refill_current <= 0
+            or refill_current / refill_capacity
+            <= TANK_LOW_PERCENT / 100
+        )
         conditions = [
             self.notification_condition(
                 "main_tank_cycle",
@@ -108,11 +113,7 @@ class NotificationConditionsService:
             ),
             self.notification_condition(
                 "refill_tank_low",
-                (
-                    refill_current <= 0
-                    or refill_current / refill_capacity
-                    <= TANK_LOW_PERCENT / 100
-                ),
+                refill_tank_low,
                 "warning" if refill_current > 0 else "critical",
                 "Vorratstank niedrig",
                 (
@@ -123,10 +124,73 @@ class NotificationConditionsService:
         ]
         refill = self._refill_status(balcony)
         refill_blocked = bool(refill.get("blocked"))
+        missed_windows = list(
+            dict.fromkeys(
+                str(window_label)
+                for window_label in refill.get("missed_windows", [])
+                if str(window_label)
+            )
+        )
+        missed_records: list[tuple[str, str, str]] = []
+        seen_window_keys: set[str] = set()
+        for detail in refill.get("missed_window_details", []):
+            if not isinstance(detail, dict):
+                continue
+            target_date = str(
+                detail.get("target_date")
+                or refill.get("target_date")
+                or ""
+            )
+            window_label = str(detail.get("window_label") or "")
+            window_key = str(
+                detail.get("window_key")
+                or f"{target_date}:{window_label}"
+            )
+            if (
+                not target_date
+                or not window_label
+                or window_key in seen_window_keys
+            ):
+                continue
+            seen_window_keys.add(window_key)
+            missed_records.append(
+                (
+                    f"refill_run_missed:{target_date}:{window_label}",
+                    target_date,
+                    window_label,
+                )
+            )
+        if not missed_records:
+            missed_records = [
+                (
+                    (
+                        "refill_run_missed:"
+                        f"{refill['target_date']}:{window_label}"
+                    ),
+                    str(refill["target_date"]),
+                    window_label,
+                )
+                for window_label in missed_windows
+            ]
+        blocked_reason = str(
+            refill.get("blocked_reason")
+            or refill.get("status")
+            or ""
+        )
+        # A specific condition owns an empty reserve or missed window. The
+        # generic key remains available for every other automation blocker.
+        generic_refill_blocked = bool(
+            refill_blocked
+            and not missed_records
+            and not (
+                refill_tank_low
+                and blocked_reason == "refill_tank_empty"
+            )
+        )
         conditions.append(
             self.notification_condition(
                 "automatic_refill_blocked",
-                refill_blocked,
+                generic_refill_blocked,
                 "critical",
                 "Automatische Nachfuellung blockiert",
                 str(
@@ -138,10 +202,7 @@ class NotificationConditionsService:
             )
         )
         active_missed_keys: set[str] = set()
-        for window_label in refill.get("missed_windows", []):
-            alert_key = (
-                f"refill_run_missed:{refill['target_date']}:{window_label}"
-            )
+        for alert_key, target_date, window_label in missed_records:
             active_missed_keys.add(alert_key)
             conditions.append(
                 self.notification_condition(
@@ -150,7 +211,8 @@ class NotificationConditionsService:
                     "critical",
                     "Nachfuelllauf verpasst",
                     (
-                        f"Im Nachfuellfenster {window_label} bestand Bedarf, "
+                        f"Im Nachfuellfenster {target_date} "
+                        f"{window_label} bestand Bedarf, "
                         "aber es wurde kein Lauf verbucht."
                     ),
                 )

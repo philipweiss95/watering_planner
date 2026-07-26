@@ -7,6 +7,11 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
+MIN_NOTIFICATION_WORKER_INTERVAL_SECONDS = 10
+MAX_NOTIFICATION_WORKER_INTERVAL_SECONDS = 3600
+LEGACY_MAX_NOTIFICATION_WORKER_INTERVAL_SECONDS = 86400
+
+
 DEFAULT_PLANNER_CONFIG: dict[str, Any] = {
     "watering_window_start": "07:00",
     "watering_window_end": "19:00",
@@ -155,8 +160,8 @@ def validate_planner_config(value: object) -> dict[str, Any]:
     result["notification_worker_interval_seconds"] = _bounded_int(
         result["notification_worker_interval_seconds"],
         "notification_worker_interval_seconds",
-        10,
-        86400,
+        MIN_NOTIFICATION_WORKER_INTERVAL_SECONDS,
+        MAX_NOTIFICATION_WORKER_INTERVAL_SECONDS,
     )
     return result
 

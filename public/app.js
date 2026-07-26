@@ -6,6 +6,11 @@ import { renderHistory } from "./js/history.js";
 import { initHoses, renderHoses } from "./js/hoses.js";
 import { initNavigation } from "./js/navigation.js";
 import { initPlants, renderPlants } from "./js/plants.js";
+import {
+  createRefreshCoordinator,
+  loadRefreshSnapshot,
+  refreshIssueMessage,
+} from "./js/refresh.js";
 import { initSettings, renderSettings } from "./js/settings.js";
 import { getStore, setStore } from "./js/store.js";
 import { confirmDialog, hydrateIcons, showToast } from "./js/ui.js";
@@ -16,36 +21,27 @@ import { initUpdater, renderUpdater } from "./js/updater.js";
 window.scrollTo(0, 0);
 
 let navigate = () => {};
-let refreshing = false;
 
 function currentData() {
   return getStore();
 }
 
-async function fetchOptional(path) {
-  try {
-    return await api.get(path);
-  } catch (error) {
-    return { error: error.message };
-  }
-}
-
-async function loadEvaluation() {
-  try {
-    return await api.get("/api/homekit/check?auto=true&slot=morning");
-  } catch (error) {
-    setStore({ error: error.message });
-    return null;
-  }
-}
-
 async function reloadWeather() {
-  try {
-    await api.get("/api/weather?force=true");
+  const result = await refreshAll({ forceWeather: true });
+  if (result?.failed) return;
+  if (result?.evaluationError) return;
+  if (result?.forceError) {
+    showToast(result.forceError.message, { error: true });
+  } else if (
+    result?.weatherStatus?.cache_fallback
+    || result?.weatherStatus?.last_error
+  ) {
+    showToast(
+      "Wetterdienst nicht erreichbar. Letzte gültige Daten bleiben aktiv.",
+      { error: true },
+    );
+  } else {
     showToast("Wetterdaten aktualisiert");
-    await refreshAll();
-  } catch (error) {
-    showToast(error.message, { error: true });
   }
 }
 
@@ -79,48 +75,41 @@ function renderAll() {
   document.getElementById("headerSubtitle").textContent = data.evaluation?.weather?.simulation ? "Simulation" : "Meine Terrasse";
 }
 
-async function refreshAll(options = {}) {
-  if (refreshing) return;
-  refreshing = true;
+async function performRefresh(options = {}) {
   document.getElementById("headerStatus").textContent = "Wird aktualisiert";
   try {
-    const state = await api.get("/api/state");
-    document.documentElement.dataset.appVersion = `v${state.version || "1.5.0"}`;
-    setStore({ state, loading: false });
-    renderAll();
-    const diagnosticsPromise = fetchOptional("/api/diagnostics/notifications");
-    const updaterPromise = fetchOptional("/api/update/status");
-    const [evaluation, eventsResult] = await Promise.all([
-      options.weather === false ? Promise.resolve(getStore().evaluation) : loadEvaluation(),
-      api.get("/api/watering-events?limit=50").catch(() => ({ events: getStore().events })),
-    ]);
-    setStore({
-      state,
-      evaluation,
-      events: eventsResult.events || [],
-      error: evaluation ? "" : getStore().error,
-      simulation: Boolean(evaluation?.weather?.simulation),
+    const snapshot = await loadRefreshSnapshot(api, getStore(), {
+      ...options,
+      onState: (state, refreshState) => {
+        document.documentElement.dataset.appVersion =
+          `v${state.version || "1.5.0"}`;
+        setStore({
+          state,
+          loading: false,
+          ...(refreshState.evaluationPending
+            ? { evaluation: null }
+            : {}),
+        });
+        renderAll();
+      },
     });
+    setStore(snapshot.patch);
     renderAll();
-    Promise.all([diagnosticsPromise, updaterPromise]).then(([notificationDiagnostics, updater]) => {
-      setStore({ notificationDiagnostics, updater });
-      renderDiagnostics(state, getStore().evaluation, notificationDiagnostics, updater, {
-        "reload-weather": reloadWeather,
-        "test-ha": testHomeAssistant,
-        "test-email": testEmail,
-        "toggle-automation": toggleAutomation,
-        "manual-refill": runManualRefill,
-        "open-updater": () => navigate("info"),
-      });
-      renderUpdater(state, updater);
-    });
+    const issueMessage = refreshIssueMessage(snapshot);
+    if (issueMessage) showToast(issueMessage, { error: true });
+    return snapshot;
   } catch (error) {
     setStore({ loading: false, error: error.message });
     document.getElementById("headerStatus").textContent = "Server nicht erreichbar";
     showToast("Daten konnten nicht geladen werden", { error: true });
-  } finally {
-    refreshing = false;
+    return { failed: true, error };
   }
+}
+
+const coordinatedRefresh = createRefreshCoordinator(performRefresh);
+
+function refreshAll(options = {}) {
+  return coordinatedRefresh(options);
 }
 
 async function fillMainTank() {
@@ -133,7 +122,7 @@ async function fillMainTank() {
   try {
     await api.post("/api/tanks/main/fill", {});
     showToast("Haupttank als voll markiert");
-    await refreshAll();
+    await refreshAll({ afterMutation: true });
   } catch (error) {
     showToast(error.message, { error: true });
   }
@@ -149,7 +138,7 @@ async function fillRefillTank() {
   try {
     await api.post("/api/tanks/refill/fill", {});
     showToast("Vorratstank als voll markiert");
-    await refreshAll();
+    await refreshAll({ afterMutation: true });
   } catch (error) {
     showToast(error.message, { error: true });
   }
@@ -171,7 +160,7 @@ async function runManualWatering() {
   try {
     await api.post("/api/manual-run", { auto_weather: true, run_id: uniqueRunId("watering") });
     showToast("Pumpenlauf an Home Assistant übergeben");
-    await refreshAll();
+    await refreshAll({ afterMutation: true });
   } catch (error) {
     showToast(error.message, { error: true });
   }
@@ -192,7 +181,7 @@ async function runManualRefill() {
   try {
     await api.post("/api/manual-refill", { auto_weather: true, run_id: uniqueRunId("refill") });
     showToast("Nachfüllung an Home Assistant übergeben");
-    await refreshAll();
+    await refreshAll({ afterMutation: true });
   } catch (error) {
     showToast(error.message, { error: true });
   }
@@ -203,7 +192,7 @@ async function toggleAutomation() {
   try {
     await api.post(paused ? "/api/automation/resume" : "/api/automation/pause", {});
     showToast(paused ? "Bewässerungsautomatik fortgesetzt" : "Bewässerungsautomatik bis morgen pausiert");
-    await refreshAll({ weather: false });
+    await refreshAll({ weather: false, afterMutation: true });
   } catch (error) {
     showToast(error.message, { error: true });
   }
@@ -216,7 +205,7 @@ async function testHomeAssistant() {
   } catch {
     showToast("Home Assistant ist nicht erreichbar", { error: true });
   }
-  await refreshAll({ weather: false });
+  await refreshAll({ weather: false, afterMutation: true });
 }
 
 async function testEmail() {
@@ -226,7 +215,7 @@ async function testEmail() {
   } catch (error) {
     showToast(error.message, { error: true });
   }
-  await refreshAll({ weather: false });
+  await refreshAll({ weather: false, afterMutation: true });
 }
 
 function bindControls() {
@@ -238,7 +227,7 @@ function bindControls() {
     } catch {
       // A failed condition check is reflected in the refreshed system rows.
     }
-    await refreshAll({ weather: false });
+    await refreshAll({ weather: false, afterMutation: true });
   });
   initPlants(currentData, refreshAll);
   initHoses(() => getStore().state, refreshAll);

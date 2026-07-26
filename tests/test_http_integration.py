@@ -4,9 +4,11 @@ import json
 import tempfile
 import threading
 import unittest
+from datetime import datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from urllib.request import Request, urlopen
+from unittest.mock import MagicMock
 
 from watering_backend.app import ApplicationPaths, create_application
 
@@ -96,6 +98,61 @@ class HttpIntegrationTests(unittest.TestCase):
             before["balcony"]["tank_current_ml"]
             - after["balcony"]["tank_current_ml"],
             first["booking"]["actual_consumed_ml"],
+        )
+
+    def test_forced_cache_fallback_is_evaluated_without_second_fetch(
+        self,
+    ) -> None:
+        balcony = self.application.get_state()["balcony"]
+        cache_key = {
+            "latitude": round(float(balcony["latitude"]), 6),
+            "longitude": round(float(balcony["longitude"]), 6),
+            "timezone": balcony["timezone_name"],
+        }
+        fetched_at = (
+            datetime.now(timezone.utc) - timedelta(minutes=30)
+        ).isoformat()
+        cached_weather = {
+            "source": "open-meteo",
+            "mode": "forecast",
+            "simulation": False,
+            "temperature_c": 24,
+            "rain_mm": 0,
+            "wind_kmh": 6,
+            "sunshine_hours": 7,
+            "et0_mm": 3.5,
+            "planning_day": {
+                "date": datetime.now(timezone.utc).date().isoformat(),
+                "temperature_c": 24,
+                "rain_mm": 0,
+                "wind_kmh": 6,
+                "sunshine_hours": 7,
+                "et0_mm": 3.5,
+            },
+            "forecast": [],
+            "fetched_at": fetched_at,
+        }
+        self.application.settings.set(
+            "weather_cache",
+            json.dumps(
+                {"cache_key": cache_key, "weather": cached_weather}
+            ),
+        )
+        opener = MagicMock(side_effect=OSError("offline"))
+        self.application.weather.opener = opener
+
+        result = self.request(
+            "/api/weather?force=true&evaluate=true&slot=morning"
+        )
+
+        self.assertEqual(opener.call_count, 1)
+        self.assertTrue(result["weather"]["cache_fallback"])
+        self.assertTrue(
+            result["evaluation"]["weather"]["cache_fallback"]
+        )
+        self.assertEqual(
+            result["evaluation"]["weather"]["fetched_at"],
+            fetched_at,
         )
 
 

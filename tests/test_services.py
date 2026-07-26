@@ -8,6 +8,9 @@ from zoneinfo import ZoneInfo
 from watering_backend.config import DEFAULT_PLANNER_CONFIG
 from watering_backend.services.evaluation import calculate_plant_results
 from watering_backend.services.forecast import ForecastService
+from watering_backend.services.notifications import (
+    NotificationConditionsService,
+)
 from watering_backend.services.scheduling import SchedulingService
 
 
@@ -17,6 +20,30 @@ class EmptyEvents:
 
     def latest_refill(self) -> None:
         return None
+
+
+class CountingNotificationUpdater:
+    def __init__(self):
+        self.active_keys: set[str] = set()
+        self.sent_keys: list[str] = []
+
+    def update_condition(self, **condition) -> dict:
+        alert_key = str(condition["alert_key"])
+        active = bool(condition["active"])
+        if active and alert_key not in self.active_keys:
+            self.active_keys.add(alert_key)
+            self.sent_keys.append(alert_key)
+            status = "sent"
+        else:
+            if not active:
+                self.active_keys.discard(alert_key)
+            status = "deduplicated" if active else "inactive"
+        return {
+            "alert_key": alert_key,
+            "active": active,
+            "status": status,
+            "error": "",
+        }
 
 
 class ServiceTests(unittest.TestCase):
@@ -258,6 +285,195 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(apply_plan.call_count, 2)
         self.assertEqual(distributed_windows.call_count, 2)
         window_datetime.assert_not_called()
+
+    def test_backend_forecast_keeps_45_day_supply_horizon(self):
+        service = ForecastService(
+            events=EmptyEvents(),
+            state_provider=Mock(),
+            planner_config=Mock(),
+            refill_enabled=Mock(),
+            calibrated_consumption=Mock(),
+            local_now=Mock(),
+            window_datetime=Mock(),
+            distributed_windows=Mock(),
+            calculate_plants=Mock(),
+            configured_plan=Mock(),
+            apply_plan_to_weather=Mock(),
+            weather_forecast_days=16,
+            tank_forecast_days=45,
+        )
+
+        days = service.normalized_forecast_days(
+            {
+                "forecast": [
+                    {
+                        "date": "2026-07-25",
+                        "temperature_c": 25,
+                        "rain_mm": 0,
+                        "wind_kmh": 5,
+                        "sunshine_hours": 8,
+                        "et0_mm": 4,
+                    }
+                ]
+            },
+            date(2026, 7, 25),
+        )
+
+        self.assertEqual(len(days), 45)
+        self.assertNotIn("estimated_from_last_forecast_day", days[0])
+        self.assertTrue(days[16]["estimated_from_last_forecast_day"])
+        self.assertEqual(days[-1]["date"], "2026-09-07")
+
+    def _notification_conditions(
+        self,
+        refill: dict,
+        *,
+        refill_current_ml: int = 10000,
+    ) -> tuple[
+        NotificationConditionsService,
+        CountingNotificationUpdater,
+    ]:
+        updater = CountingNotificationUpdater()
+        state = {
+            "balcony": {
+                "tank_current_ml": 10000,
+                "refill_tank_current_ml": refill_current_ml,
+                "refill_tank_capacity_ml": 10000,
+                "timezone_name": "Europe/Berlin",
+            },
+            "hoses": [],
+        }
+        config = {
+            "notification_cooldown_minutes": 60,
+            "notification_retry_minutes": 5,
+            "notification_resolved_enabled": True,
+            "supply_warning_days": 3,
+        }
+
+        def unavailable_weather(_balcony):
+            raise ValueError("weather unavailable")
+
+        service = NotificationConditionsService(
+            state=lambda: state,
+            calibrated_consumption=lambda _nominal: 0,
+            refill_status=lambda _balcony: refill,
+            fetch_weather=unavailable_weather,
+            evaluate_weather=lambda _weather: {},
+            weather_diagnostics=lambda: {
+                "stale": False,
+                "last_error": "",
+                "last_successful_fetch_at": (
+                    "2026-07-25T08:00:00+00:00"
+                ),
+                "stale_after_minutes": 180,
+            },
+            planner_config=lambda: config,
+            local_now=lambda _timezone_name: datetime(
+                2026,
+                7,
+                25,
+                10,
+                0,
+                tzinfo=ZoneInfo("Europe/Berlin"),
+            ),
+            notification_service=lambda: updater,
+            previous_missed_keys=lambda: [],
+        )
+        return service, updater
+
+    def test_refill_notification_conditions_prefer_specific_root_cause(
+        self,
+    ):
+        scenarios = [
+            (
+                "empty reserve",
+                {
+                    "status": "refill_tank_empty",
+                    "blocked": True,
+                    "blocked_reason": "refill_tank_empty",
+                    "summary": "Vorratstank ist leer.",
+                    "target_date": "2026-07-25",
+                    "missed_windows": [],
+                },
+                0,
+                "refill_tank_low",
+            ),
+            (
+                "missed window",
+                {
+                    "status": "window_missed",
+                    "blocked": True,
+                    "blocked_reason": "window_missed",
+                    "summary": "Nachfuellfenster verpasst.",
+                    "target_date": "2026-07-25",
+                    "missed_windows": ["01:00", "01:00"],
+                },
+                10000,
+                "refill_run_missed:2026-07-25:01:00",
+            ),
+            (
+                "missed previous-day window",
+                {
+                    "status": "window_missed",
+                    "blocked": True,
+                    "blocked_reason": "window_missed",
+                    "summary": "Nachfuellfenster verpasst.",
+                    "target_date": "2026-07-26",
+                    "missed_windows": [],
+                    "missed_window_details": [
+                        {
+                            "target_date": "2026-07-25",
+                            "window_label": "23:30",
+                            "window_key": (
+                                "2026-07-25|"
+                                "2026-07-25T21:30:00+00:00|"
+                                "2026-07-25T22:00:00+00:00"
+                            ),
+                        }
+                    ],
+                },
+                10000,
+                "refill_run_missed:2026-07-25:23:30",
+            ),
+            (
+                "independent blocker",
+                {
+                    "status": "pump_flow_missing",
+                    "blocked": True,
+                    "blocked_reason": "pump_flow_missing",
+                    "summary": "Pumpendurchsatz fehlt.",
+                    "target_date": "2026-07-25",
+                    "missed_windows": [],
+                },
+                10000,
+                "automatic_refill_blocked",
+            ),
+        ]
+        for name, refill, refill_current_ml, expected_key in scenarios:
+            with self.subTest(name=name):
+                service, updater = self._notification_conditions(
+                    refill,
+                    refill_current_ml=refill_current_ml,
+                )
+                conditions = service.notification_conditions()
+                active_refill_keys = [
+                    item["alert_key"]
+                    for item in conditions
+                    if item["active"]
+                    and (
+                        item["alert_key"] == "refill_tank_low"
+                        or item["alert_key"]
+                        == "automatic_refill_blocked"
+                        or item["alert_key"].startswith(
+                            "refill_run_missed:"
+                        )
+                    )
+                ]
+                self.assertEqual(active_refill_keys, [expected_key])
+
+                service.run_notification_check()
+                service.run_notification_check()
+                self.assertEqual(updater.sent_keys, [expected_key])
 
 
 if __name__ == "__main__":

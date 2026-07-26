@@ -43,6 +43,78 @@ class UpdaterTests(unittest.TestCase):
         self.assertGreater(updater.version_key("1.1.0"), updater.version_key("1.0.9"))
         self.assertGreater(updater.version_key("1.0.0"), updater.version_key("1.0.0-rc.1"))
 
+    def test_modular_update_requires_published_bridge_version(self):
+        self.assertEqual(updater.validate_update_source_version("1.4.3"), "1.4.3")
+        self.assertEqual(updater.validate_update_source_version("1.5.0"), "1.5.0")
+        for value in ("", "1.4.2", "v1.3.3"):
+            with self.subTest(value=value), self.assertRaisesRegex(
+                ValueError,
+                "update_requires_v1_4_3_bridge",
+            ):
+                updater.validate_update_source_version(value)
+
+    def test_installed_project_version_is_authoritative(self):
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            (project / "VERSION").write_text("1.4.3\n", encoding="utf-8")
+
+            self.assertEqual(updater.installed_project_version(project), "1.4.3")
+
+            (project / "VERSION").write_text("not-a-version\n", encoding="utf-8")
+            with self.assertRaisesRegex(
+                ValueError,
+                "installed_project_version_invalid",
+            ):
+                updater.installed_project_version(project)
+
+    def test_install_from_142_is_rejected_before_release_download(self):
+        states = []
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            (project / "VERSION").write_text("1.4.2\n", encoding="utf-8")
+            with (
+                patch.object(updater, "PROJECT_DIR", project),
+                patch.object(updater, "latest_release") as latest_release,
+                patch.object(
+                    updater,
+                    "update_state",
+                    side_effect=lambda **state: states.append(state),
+                ),
+            ):
+                updater.install_update("9.9.9")
+
+        latest_release.assert_not_called()
+        self.assertEqual(states[-1]["status"], "error")
+        self.assertIn("update_requires_v1_4_3_bridge", states[-1]["message"])
+        self.assertFalse(updater.INSTALL_RUNNING.is_set())
+
+    def test_install_ignores_stale_reported_version_when_bridge_is_installed(self):
+        states = []
+        release = {
+            "version": "1.4.3",
+            "name": "v1.4.3",
+            "publishedAt": "2026-07-25T18:25:35Z",
+            "notes": "",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            (project / "VERSION").write_text("1.4.3\n", encoding="utf-8")
+            with (
+                patch.object(updater, "PROJECT_DIR", project),
+                patch.object(updater, "latest_release", return_value=release),
+                patch.object(
+                    updater,
+                    "update_state",
+                    side_effect=lambda **state: states.append(state),
+                ),
+            ):
+                updater.install_update("1.4.2")
+
+        self.assertEqual(states[0]["currentVersion"], "1.4.3")
+        self.assertEqual(states[0]["reportedVersion"], "1.4.2")
+        self.assertEqual(states[-1]["status"], "ok")
+        self.assertFalse(updater.INSTALL_RUNNING.is_set())
+
     def test_archive_validation_rejects_path_traversal(self):
         with tempfile.TemporaryDirectory() as directory:
             archive_path = Path(directory) / "release.zip"

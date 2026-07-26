@@ -133,7 +133,7 @@ function renderBalconyPlan(state, onChanged) {
           pos_y: Number(marker.dataset.y),
         });
         showToast("Position gespeichert");
-        await onChanged({ weather: false });
+        await onChanged({ weather: false, afterMutation: true });
       } catch (error) {
         showToast(error.message, { error: true });
       }
@@ -319,7 +319,7 @@ export function initSettings(getData, onChanged, onSimulation) {
       await api.post("/api/balcony", payload);
       showToast("Einstellungen gespeichert");
       document.getElementById("settingsSaveStatus").textContent = "Gespeichert";
-      await onChanged();
+      await onChanged({ afterMutation: true });
     } catch (error) {
       document.getElementById("settingsSaveStatus").textContent = error.message;
       showToast(error.message, { error: true });
@@ -343,7 +343,7 @@ export function initSettings(getData, onChanged, onSimulation) {
         measured_level_percent: Number(document.getElementById("mainCalibrationLevel").value),
       });
       showToast("Haupttank kalibriert");
-      await onChanged();
+      await onChanged({ afterMutation: true });
     } catch (error) {
       showToast(error.message, { error: true });
     }
@@ -354,7 +354,7 @@ export function initSettings(getData, onChanged, onSimulation) {
         measured_level_percent: Number(document.getElementById("refillCalibrationLevel").value),
       });
       showToast("Vorratstank kalibriert");
-      await onChanged();
+      await onChanged({ afterMutation: true });
     } catch (error) {
       showToast(error.message, { error: true });
     }

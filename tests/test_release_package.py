@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import shutil
 import stat
 import unittest
@@ -88,6 +89,82 @@ class ReleasePackageTests(unittest.TestCase):
             verifier._git(ROOT, "rev-parse", "refs/tags/v1.4.3"),
             "f08acb6c5216c987cb6581513de499c9360d9f1a",
         )
+        self.assertEqual(
+            verifier.verify_bridge_history(ROOT, verifier.BRIDGE_COMMIT),
+            verifier._git(ROOT, "rev-parse", "HEAD"),
+        )
+        update_path = verifier.verify_bridge_update_path(
+            ROOT,
+            verifier.BRIDGE_COMMIT,
+        )
+        self.assertNotIn(
+            "watering_backend",
+            update_path["legacy_managed_paths"],
+        )
+        self.assertNotIn(
+            "package.json",
+            update_path["legacy_managed_paths"],
+        )
+        self.assertIn(
+            "watering_backend",
+            update_path["bridge_managed_paths"],
+        )
+        self.assertIn(
+            "package.json",
+            update_path["bridge_managed_paths"],
+        )
+
+    def test_release_history_rejects_commit_without_bridge_ancestor(self):
+        bridge_parent = verifier._git(
+            ROOT,
+            "rev-parse",
+            f"{verifier.BRIDGE_COMMIT}^",
+        )
+        with self.assertRaisesRegex(
+            verifier.ReleaseVerificationError,
+            "merge-base --is-ancestor",
+        ):
+            verifier.verify_bridge_history(
+                ROOT,
+                verifier.BRIDGE_COMMIT,
+                bridge_parent,
+            )
+
+    def test_published_bridge_release_metadata_is_pinned_offline(self):
+        metadata = {
+            "tag_name": verifier.BRIDGE_TAG,
+            "published_at": verifier.BRIDGE_RELEASE_PUBLISHED_AT,
+            "draft": False,
+            "prerelease": False,
+            "assets": [
+                {
+                    "name": verifier.BRIDGE_ARCHIVE_NAME,
+                    "size": verifier.BRIDGE_ARCHIVE_SIZE,
+                    "digest": f"sha256:{verifier.BRIDGE_ARCHIVE_SHA256}",
+                },
+                {
+                    "name": verifier.BRIDGE_CHECKSUM_NAME,
+                    "size": verifier.BRIDGE_CHECKSUM_SIZE,
+                    "digest": f"sha256:{verifier.BRIDGE_CHECKSUM_SHA256}",
+                },
+            ],
+        }
+        with temporary_directory() as directory:
+            path = Path(directory) / "release.json"
+            path.write_text(json.dumps(metadata), encoding="utf-8")
+            verified = verifier.verify_bridge_release_metadata(path)
+            self.assertEqual(
+                verified["archive_sha256"],
+                verifier.BRIDGE_ARCHIVE_SHA256,
+            )
+
+            metadata["assets"][0]["digest"] = f"sha256:{'0' * 64}"
+            path.write_text(json.dumps(metadata), encoding="utf-8")
+            with self.assertRaisesRegex(
+                verifier.ReleaseVerificationError,
+                "erwarteten SHA-256",
+            ):
+                verifier.verify_bridge_release_metadata(path)
 
     def test_checksum_must_match_and_use_strict_format(self):
         with temporary_directory() as directory:

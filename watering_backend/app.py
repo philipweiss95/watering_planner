@@ -389,6 +389,10 @@ class Application:
                 minimum_percent=MIN_WATERING_AMOUNT_PERCENT,
                 maximum_percent=MAX_WATERING_AMOUNT_PERCENT,
             )
+        # Plan absolute refill opportunities at startup as well as during
+        # normal status polls. This keeps missed-window detection independent
+        # of the notification worker being alive while a window is open.
+        self.refill.status(self.tanks.balcony())
 
     def connect(self):
         return self.database.connection()

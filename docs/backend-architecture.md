@@ -115,14 +115,25 @@ Schutzlinie gegen parallele Doppelbuchungen.
 
 1. `RefillService` bewertet aktuelle Tankstände, Zeitfenster, Bedarf,
    Pumpendurchsatz, Cooldown und bisherige Ereignisse.
-2. Abgeschlossene Fenster werden persistent beobachtet, damit ein verpasster
-   Lauf erst nach Fensterende gemeldet wird.
-3. `WateringService.mark_refill_run()` prüft die `run_id` unter
+2. Beim Start und bei jeder Statusprüfung werden die absoluten Fenster für
+   heute und morgen in `refill_window_plans` vorgemerkt. Der Schlüssel enthält
+   Datum sowie Start und Ende in UTC und bleibt dadurch über DST-Wechsel
+   eindeutig.
+3. Bedarf, technische Ausführbarkeit, erwartete Transfermenge und die
+   Beobachtung innerhalb des Fensters werden persistent und idempotent
+   fortgeschrieben. Tankbuchungen aktualisieren offene Pläne unmittelbar;
+   ein atomarer Zeitstempelvergleich verhindert, dass eine ältere parallele
+   Berechnung einen neueren Zustand überschreibt. Ein verbuchtes
+   Nachfüllereignis erfüllt den Plan.
+4. Nach Fensterende wird ein ausführbarer, benötigter und nicht erfüllter Plan
+   als `window_missed` gemeldet. Historische Pläne bleiben unverändert;
+   Konfigurationsänderungen stornieren nur noch nicht begonnene Zukunftspläne.
+5. `WateringService.mark_refill_run()` prüft die `run_id` unter
    `BEGIN IMMEDIATE`.
-4. Die tatsächlich mögliche Menge wird erneut gegen Haupttankkapazität und
+6. Die tatsächlich mögliche Menge wird erneut gegen Haupttankkapazität und
    Vorratstank begrenzt.
-5. Beide Tankstände und das Nachfüllereignis werden atomar verbucht.
-6. Die Prognose stellt Wasser erst entsprechend Pumpendurchsatz und
+7. Beide Tankstände und das Nachfüllereignis werden atomar verbucht.
+8. Die Prognose stellt Wasser erst entsprechend Pumpendurchsatz und
    Fertigstellungszeit im Haupttank bereit.
 
 Vorratswasser versorgt niemals direkt einen Bewässerungslauf.
@@ -142,7 +153,7 @@ Vorratswasser versorgt niemals direkt einen Bewässerungslauf.
 
 `Application.initialize()` führt `schema.initialize()` bei jedem Start aus.
 Die Schritte sind additiv und wiederholbar; `PRAGMA user_version` ist aktuell
-`3`.
+`4`.
 
 Wichtige Ergänzungen gegenüber 1.4.2:
 
@@ -152,6 +163,8 @@ Wichtige Ergänzungen gegenüber 1.4.2:
 - `notification_state` und `notification_log`
 - SMTP-Versuch, letzter Erfolg, Fehler und Fehlerzähler
 - `refill_window_observations`
+- `refill_window_plans` mit absoluten UTC-Grenzen, Bedarf,
+  Ausführbarkeit, Transfermenge, Erfüllung und Stornierung
 
 Legacy-Pflanzen und Schlauchzuordnungen werden ohne Duplikate übernommen.
 Ein realitätsnahes 1.4.2-Fixture wird zweimal migriert und auf Datenerhalt,
@@ -167,6 +180,16 @@ und `NOTIFICATION_WORKER_DISABLED` nicht gesetzt ist. Der Worker:
 3. persistiert Deduplizierung und Retryzustand,
 4. überlebt einzelne Prüf- oder SMTP-Fehler,
 5. wird beim Server-Shutdown mit `stop()` und `join()` beendet.
+
+Das Intervall ist serverseitig auf 10 bis 3600 Sekunden begrenzt. Die
+Nachfüllfenstererkennung hängt dennoch nicht von einem Worker-Lauf im offenen
+Fenster ab, weil `Application.initialize()` und jede Statusprüfung heute und
+morgen persistent vorplanen.
+
+Gespeicherte Altwerte von 1 bis 86400 Sekunden werden beim Lesen einmalig auf
+10 bis 3600 Sekunden normalisiert. Dadurch starten bestehende Installationen
+weiterhin; neue Konfigurationen müssen die engere Grenze bereits bei der API-
+Validierung einhalten.
 
 ## Kompatibilität
 

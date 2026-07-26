@@ -9,6 +9,10 @@ from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from typing import Callable, Iterable
 
+from watering_backend.config import (
+    MAX_NOTIFICATION_WORKER_INTERVAL_SECONDS,
+    MIN_NOTIFICATION_WORKER_INTERVAL_SECONDS,
+)
 from watering_backend.repositories.notifications import NotificationsRepository
 
 
@@ -275,7 +279,23 @@ class NotificationWorker:
     ):
         self._checker = checker
         self._service = service
-        self._interval_seconds = max(10, int(interval_seconds))
+        try:
+            checked_interval = int(interval_seconds)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "notification worker interval must be an integer"
+            ) from exc
+        if not (
+            MIN_NOTIFICATION_WORKER_INTERVAL_SECONDS
+            <= checked_interval
+            <= MAX_NOTIFICATION_WORKER_INTERVAL_SECONDS
+        ):
+            raise ValueError(
+                "notification worker interval must be between "
+                f"{MIN_NOTIFICATION_WORKER_INTERVAL_SECONDS} and "
+                f"{MAX_NOTIFICATION_WORKER_INTERVAL_SECONDS} seconds"
+            )
+        self._interval_seconds = checked_interval
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 

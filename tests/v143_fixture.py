@@ -8,8 +8,8 @@ from typing import Any
 
 
 # v1.4.3 is the updater bridge release. Its application/database code is
-# unchanged from v1.4.2, so this is the schema created by the published
-# v1.4.2 server and carried by the immutable v1.4.3 tag.
+# unchanged from v1.4.2, so this is the schema after that server has completed
+# init_db() and is then carried by the immutable v1.4.3 tag.
 V143_SCHEMA = """
 PRAGMA user_version = 0;
 
@@ -119,7 +119,7 @@ CREATE TABLE app_settings (
 """
 
 
-V143_WATER_MODEL_CALIBRATION = 0.08
+V143_WATER_MODEL_CALIBRATION = 0.20
 
 V143_BALCONY = (
     1,
@@ -144,7 +144,7 @@ V143_CATALOG = (
     (
         "olive",
         "Olivenbaum",
-        "Mediterrane Gehoelze",
+        "Mediterrane Gehölze",
         22,
         1.15,
         0.8,
@@ -152,12 +152,12 @@ V143_CATALOG = (
         0.42,
         35,
         0.72,
-        "Bestandskatalog",
+        "Mag es hell, eher trocken, aber nicht komplett austrocknen lassen.",
     ),
     (
         "tomato",
         "Tomatenpflanze",
-        "Gemuese",
+        "Gemüse",
         48,
         1.25,
         1.2,
@@ -165,12 +165,12 @@ V143_CATALOG = (
         0.45,
         20,
         1.12,
-        "Bestandskatalog",
+        "Sehr hoher Bedarf, regelmäßige Wassergaben vermeiden Fruchtplatzen.",
     ),
     (
         "lavender",
         "Lavendel",
-        "Kraeuter",
+        "Kräuter",
         16,
         1.25,
         0.65,
@@ -178,12 +178,12 @@ V143_CATALOG = (
         0.2,
         10,
         0.62,
-        "Bestandskatalog",
+        "Trockenheitsliebend, Staunässe vermeiden.",
     ),
     (
         "citrus",
         "Zitrusbaum",
-        "Mediterrane Gehoelze",
+        "Mediterrane Gehölze",
         30,
         1.15,
         0.95,
@@ -191,7 +191,7 @@ V143_CATALOG = (
         0.48,
         35,
         0.95,
-        "Bestandskatalog",
+        "Hell und gleichmäßig feucht, bei Hitze und Fruchtansatz durstiger.",
     ),
 )
 
@@ -259,6 +259,20 @@ V143_PLANTS = (
         190.0,
         "2025-04-28T07:45:00+00:00",
     ),
+    (
+        15,
+        "olive",
+        "Olivenbaum Altbestand",
+        "tree",
+        82.0,
+        "reservoir_overflow",
+        3,
+        0.18,
+        0.76,
+        "08",
+        67.0,
+        "2024-03-16T11:20:00+00:00",
+    ),
 )
 
 V143_HOSES = (
@@ -269,6 +283,7 @@ V143_HOSES = (
     ("05", 4, 14),
     ("06", 4, 14),
     ("07", 1, None),
+    ("08", 3, 15),
 )
 
 V143_WATERING_EVENTS = (
@@ -374,15 +389,11 @@ V143_TANK_FILL_EVENTS = (
 
 V143_SETTINGS = {
     "automation_pause_until": "2026-06-02T07:30:00+02:00",
-    "home_assistant_last_error": "",
-    "home_assistant_last_success_at": "2026-05-30T18:10:00+00:00",
-    "legacy_preserved_key": "benutzerwert-bleibt-erhalten",
     "main_pump_calibration_factor": "1.121951",
     "refill_automation_enabled": "true",
     "refill_cooldown_minutes_per_liter": "24",
     "refill_schedule_times": '["05:30","13:15","21:00"]',
-    "updater_channel": "stable",
-    "updater_last_success_at": "2026-05-30T17:55:00+00:00",
+    "watering_amount_calibration_basis": "0.2",
     "watering_amount_percent": "137.5",
 }
 
@@ -573,9 +584,8 @@ def domain_snapshot(conn: sqlite3.Connection) -> dict[str, Any]:
             """
         ),
         "settings": settings,
-        # v1.5 changes the percentage basis from 0.08 to 0.20. Comparing
-        # their product verifies that the configured effective factor remains
-        # unchanged even though the stored percentage is migrated.
+        # The already-started v1.4.3 application stored basis 0.20. Comparing
+        # the product guards against an accidental second legacy conversion.
         "effective_watering_calibration": round(
             watering_amount * calibration_basis / 100.0,
             12,

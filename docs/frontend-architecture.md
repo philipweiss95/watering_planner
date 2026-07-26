@@ -6,6 +6,8 @@ verwendet native Browser-APIs und keine CDN- oder Laufzeitabhängigkeiten.
 ## Module
 
 - `js/api.js`, `store.js`: HTTP-Zugriff und globaler Zustand
+- `js/refresh.js`: serialisierte Datenaktualisierung, Force-Priorität und
+  atomare Zusammenführung des Wetterstatus
 - `js/navigation.js`: hashbasierte Ansichten und Fokuswechsel
 - `js/dashboard.js`: Hauptaktion, Tageszeitleiste und kompakte Statuswerte
 - `js/forecast.js`: SVG-Tankverlauf und barrierearme 16-Tage-Liste
@@ -29,10 +31,13 @@ Regeln getrennt. Dynamische und nutzerdefinierte Inhalte werden mit
   **Verlauf**. Aktuell fällige Läufe stehen vor entfernten, extrapolierten
   Reichweitenwarnungen.
 - **Prognose** zeigt Haupt- und Vorratstank, Bewässerungs- und
-  Nachfüllmarkierungen, den ersten Ausfall und extrapolierte Bereiche.
+  Nachfüllmarkierungen, den ersten Ausfall und extrapolierte Bereiche. SVG,
+  Achse und Tagesliste verwenden dieselben ersten 16 lokalen Kalendertage;
+  die interne Reichweitenberechnung bleibt davon ungekürzt.
 - **Pflanzen** zeigt Bedarf gegen tatsächliche Tagesversorgung. Modellwerte
   sind eingeklappt; Anschlussaktionen sind fachlich benannt und ignorierte
-  Empfehlungen können wieder eingeblendet werden.
+  Empfehlungen können wieder eingeblendet werden. Die Legacy-Größe `tree`
+  erscheint einheitlich als **Baum/Strauch**.
 - **Schläuche** ist auf Desktop eine Tabelle und auf Mobilgeräten eine
   Kartenliste. Zuordnung und Ausgang werden direkt editiert.
 - **Setup** gruppiert Zeitplan, Tanks, Nachfüllung, Standort, Kalibrierung und
@@ -40,6 +45,9 @@ Regeln getrennt. Dynamische und nutzerdefinierte Inhalte werden mit
   eingeklappt.
 - **System** enthält Wetter, Datenalter, Home Assistant, beide Automatiken,
   SMTP, Datenbank und Updater mit jeweils höchstens einer passenden Aktion.
+- Erfolgreiche und fehlgeschlagene Wetterabrufe aktualisieren Status,
+  Datenalter, Cache-Fallback und Fehler im selben Refresh. Mehrere schnelle
+  Aktualisierungen laufen als Single-Flight; `force=true` hat Vorrang.
 - Löschen verwendet zugängliche Bestätigungsdialoge und bietet anschließend
   eine zeitlich begrenzte Aktion **Rückgängig**.
 

@@ -119,6 +119,74 @@ class EventsRepository:
         )
         return int(cursor.lastrowid)
 
+    def reconcile_refill_plans_after_event(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        target_date: str,
+        window_label: str,
+        ran_at: str,
+        cooldown_until: str,
+    ) -> None:
+        """Apply a committed refill to its plans in the same transaction.
+
+        A process may stop immediately after the event is written. Keeping the
+        matching fulfilment and fully covered cooldown windows in the event
+        transaction prevents an executable pre-window snapshot from becoming a
+        false missed run after restart.
+        """
+        if window_label:
+            conn.execute(
+                """
+                UPDATE refill_window_plans
+                SET fulfilled_at = COALESCE(fulfilled_at, ?),
+                    last_checked_at = CASE
+                        WHEN julianday(?) >= julianday(last_checked_at)
+                            THEN ?
+                        ELSE last_checked_at
+                    END
+                WHERE target_date = ?
+                  AND window_label = ?
+                  AND cancelled_at IS NULL
+                  AND julianday(window_start) <= julianday(?)
+                  AND julianday(window_end) > julianday(?)
+                """,
+                (
+                    ran_at,
+                    ran_at,
+                    ran_at,
+                    target_date,
+                    window_label,
+                    ran_at,
+                    ran_at,
+                ),
+            )
+
+        conn.execute(
+            """
+            UPDATE refill_window_plans
+            SET executable = 0,
+                expected_transfer_ml = 0,
+                blocking_reason = 'cooldown',
+                last_checked_at = CASE
+                    WHEN julianday(?) >= julianday(last_checked_at)
+                        THEN ?
+                    ELSE last_checked_at
+                END
+            WHERE cancelled_at IS NULL
+              AND fulfilled_at IS NULL
+              AND executable = 1
+              AND julianday(window_start) >= julianday(?)
+              AND julianday(window_end) <= julianday(?)
+            """,
+            (
+                ran_at,
+                ran_at,
+                ran_at,
+                cooldown_until,
+            ),
+        )
+
     def insert_tank_fill(
         self,
         conn: sqlite3.Connection,
@@ -494,3 +562,169 @@ class EventsRepository:
         query += " ORDER BY window_start DESC"
         with self.database.connection() as conn:
             return [dict(row) for row in conn.execute(query, params).fetchall()]
+
+    def upsert_refill_window_plan(
+        self,
+        *,
+        window_key: str,
+        target_date: str,
+        window_label: str,
+        window_start: str,
+        window_end: str,
+        need_detected: bool,
+        executable: bool,
+        expected_transfer_ml: int,
+        blocking_reason: str,
+        observed_in_window: bool,
+        checked_at: str,
+        cooldown_minutes: int = 0,
+    ) -> None:
+        """Persist the newest snapshot of one absolute refill opportunity.
+
+        ``last_checked_at`` is generated in canonical UTC by the service.
+        The conflict guard is part of the SQL statement so a slower status
+        calculation cannot overwrite a newer snapshot after waiting for the
+        database transaction. The event lookup inside the write transaction
+        also reconstructs a full-window cooldown after a concurrent event,
+        even when the status calculation started before that event committed.
+        """
+        with self.database.connection(immediate=True) as conn:
+            normalized_executable = bool(executable)
+            normalized_expected_ml = max(0, int(expected_transfer_ml))
+            normalized_blocking_reason = blocking_reason
+            if normalized_executable and int(cooldown_minutes) > 0:
+                covering_event = conn.execute(
+                    """
+                    SELECT 1
+                    FROM refill_events
+                    WHERE transferred_ml > 0
+                      AND julianday(ran_at) <= julianday(?)
+                      AND julianday(ran_at)
+                            + (? / 1440.0) >= julianday(?)
+                    LIMIT 1
+                    """,
+                    (
+                        window_start,
+                        int(cooldown_minutes),
+                        window_end,
+                    ),
+                ).fetchone()
+                if covering_event:
+                    normalized_executable = False
+                    normalized_expected_ml = 0
+                    normalized_blocking_reason = "cooldown"
+            conn.execute(
+                """
+                INSERT INTO refill_window_plans(
+                    window_key, target_date, window_label,
+                    window_start, window_end, need_detected, executable,
+                    expected_transfer_ml, blocking_reason,
+                    observed_in_window, created_at, last_checked_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(window_key) DO UPDATE SET
+                    window_label = excluded.window_label,
+                    need_detected = excluded.need_detected,
+                    executable = excluded.executable,
+                    expected_transfer_ml = excluded.expected_transfer_ml,
+                    blocking_reason = excluded.blocking_reason,
+                    observed_in_window = MAX(
+                        refill_window_plans.observed_in_window,
+                        excluded.observed_in_window
+                    ),
+                    cancelled_at = NULL,
+                    last_checked_at = excluded.last_checked_at
+                WHERE julianday(excluded.last_checked_at) >=
+                      julianday(refill_window_plans.last_checked_at)
+                """,
+                (
+                    window_key,
+                    target_date,
+                    window_label,
+                    window_start,
+                    window_end,
+                    int(need_detected),
+                    int(normalized_executable),
+                    normalized_expected_ml,
+                    normalized_blocking_reason,
+                    int(observed_in_window),
+                    checked_at,
+                    checked_at,
+                ),
+            )
+
+    def cancel_obsolete_refill_window_plans(
+        self,
+        *,
+        target_date: str,
+        active_window_keys: set[str],
+        after_at: str,
+        cancelled_at: str,
+    ) -> None:
+        """Cancel only future plans; elapsed observations remain immutable."""
+        query = """
+            UPDATE refill_window_plans
+            SET cancelled_at = ?, last_checked_at = ?
+            WHERE target_date = ?
+              AND cancelled_at IS NULL
+              AND fulfilled_at IS NULL
+              AND window_start > ?
+              AND julianday(last_checked_at) <= julianday(?)
+        """
+        params: list[Any] = [
+            cancelled_at,
+            cancelled_at,
+            target_date,
+            after_at,
+            cancelled_at,
+        ]
+        if active_window_keys:
+            placeholders = ",".join("?" for _ in active_window_keys)
+            query += f" AND window_key NOT IN ({placeholders})"
+            params.extend(sorted(active_window_keys))
+        with self.database.connection(immediate=True) as conn:
+            conn.execute(query, params)
+
+    def mark_refill_window_fulfilled(
+        self,
+        window_key: str,
+        fulfilled_at: str,
+        checked_at: str,
+    ) -> None:
+        with self.database.connection(immediate=True) as conn:
+            conn.execute(
+                """
+                UPDATE refill_window_plans
+                SET fulfilled_at = COALESCE(fulfilled_at, ?),
+                    last_checked_at = CASE
+                        WHEN julianday(?) >= julianday(last_checked_at)
+                            THEN ?
+                        ELSE last_checked_at
+                    END
+                WHERE window_key = ?
+                """,
+                (
+                    fulfilled_at,
+                    checked_at,
+                    checked_at,
+                    window_key,
+                ),
+            )
+
+    def refill_window_plans(
+        self,
+        *,
+        target_dates: list[str] | tuple[str, ...] | None = None,
+    ) -> list[dict[str, Any]]:
+        query = "SELECT * FROM refill_window_plans"
+        params: list[Any] = []
+        if target_dates:
+            placeholders = ",".join("?" for _ in target_dates)
+            query += f" WHERE target_date IN ({placeholders})"
+            params.extend(target_dates)
+        query += " ORDER BY window_start, window_key"
+        with self.database.connection() as conn:
+            return [
+                dict(row)
+                for row in conn.execute(query, params).fetchall()
+            ]

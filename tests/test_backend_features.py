@@ -108,9 +108,27 @@ class BackendFeatureTests(unittest.TestCase):
         self.assertEqual(slow_opener.call_count, 1)
         self.assertEqual(len(results), 5)
 
-        with patch("server.urlopen", side_effect=OSError("offline")):
+        cache = json.loads(server.get_setting("weather_cache"))
+        cache["weather"]["fetched_at"] = (
+            datetime.now(timezone.utc) - timedelta(minutes=30)
+        ).isoformat()
+        server.set_setting("weather_cache", json.dumps(cache))
+        offline = MagicMock(side_effect=OSError("offline"))
+        with patch("server.urlopen", offline):
             fallback = server.fetch_weather(balcony, force=True)
+            throttled = server.fetch_weather(balcony)
+            self.assertEqual(offline.call_count, 1)
+            server.set_setting(
+                "last_weather_fetch_attempt_at",
+                (
+                    datetime.now(timezone.utc) - timedelta(minutes=6)
+                ).isoformat(),
+            )
+            retried = server.fetch_weather(balcony)
+        self.assertEqual(offline.call_count, 2)
         self.assertTrue(fallback["cache_fallback"])
+        self.assertTrue(throttled["cache_fallback"])
+        self.assertTrue(retried["cache_fallback"])
         self.assertIn("voruebergehend", fallback["weather_error"])
         self.assertTrue(server.weather_diagnostics()["last_error"])
 

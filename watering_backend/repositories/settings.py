@@ -6,7 +6,13 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
-from watering_backend.config import parse_hhmm, validate_planner_config
+from watering_backend.config import (
+    LEGACY_MAX_NOTIFICATION_WORKER_INTERVAL_SECONDS,
+    MAX_NOTIFICATION_WORKER_INTERVAL_SECONDS,
+    MIN_NOTIFICATION_WORKER_INTERVAL_SECONDS,
+    parse_hhmm,
+    validate_planner_config,
+)
 from watering_backend.database import Database
 
 
@@ -66,6 +72,7 @@ class SettingsRepository:
     def planner_config(self) -> dict:
         raw = self.get("planner_config", "")
         saved: dict = {}
+        normalized_legacy_interval = False
         if raw:
             try:
                 value = json.loads(raw)
@@ -73,6 +80,35 @@ class SettingsRepository:
                     saved = value
             except json.JSONDecodeError:
                 saved = {}
+        legacy_interval = saved.get(
+            "notification_worker_interval_seconds"
+        )
+        try:
+            parsed_legacy_interval = int(legacy_interval)
+        except (TypeError, ValueError):
+            parsed_legacy_interval = None
+        if (
+            parsed_legacy_interval is not None
+            and 1
+            <= parsed_legacy_interval
+            <= LEGACY_MAX_NOTIFICATION_WORKER_INTERVAL_SECONDS
+            and not (
+                MIN_NOTIFICATION_WORKER_INTERVAL_SECONDS
+                <= parsed_legacy_interval
+                <= MAX_NOTIFICATION_WORKER_INTERVAL_SECONDS
+            )
+        ):
+            # Releases before 1.5 accepted worker intervals up to one day.
+            # Keep those databases bootable, but persist the nearest safe
+            # value so short refill windows are observed going forward.
+            saved["notification_worker_interval_seconds"] = min(
+                MAX_NOTIFICATION_WORKER_INTERVAL_SECONDS,
+                max(
+                    MIN_NOTIFICATION_WORKER_INTERVAL_SECONDS,
+                    parsed_legacy_interval,
+                ),
+            )
+            normalized_legacy_interval = True
         if "refill_windows" not in saved:
             legacy_raw = self.get(
                 "refill_schedule_times",
@@ -100,7 +136,17 @@ class SettingsRepository:
             saved["refill_min_interval_minutes"] = (
                 self.defaults.refill_min_interval_minutes
             )
-        return validate_planner_config(saved)
+        config = validate_planner_config(saved)
+        if normalized_legacy_interval:
+            self.set(
+                "planner_config",
+                json.dumps(
+                    config,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ),
+            )
+        return config
 
     def save_planner_config(self, value: object) -> dict:
         config = validate_planner_config(value)

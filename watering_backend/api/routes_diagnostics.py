@@ -40,7 +40,19 @@ def weather(
     try:
         balcony = context.get_state()["balcony"]
         force = _truthy(request.first("force", "false"))
-        return ApiResponse(context.fetch_weather(balcony, force=force))
+        weather_payload = context.fetch_weather(balcony, force=force)
+        if _truthy(request.first("evaluate", "false")):
+            evaluation = context.evaluate_weather(
+                weather_payload,
+                request.first("slot", "morning"),
+            )
+            return ApiResponse(
+                {
+                    "weather": weather_payload,
+                    "evaluation": evaluation,
+                }
+            )
+        return ApiResponse(weather_payload)
     except ValueError as exc:
         return error_response(str(exc), HTTPStatus.BAD_GATEWAY)
 

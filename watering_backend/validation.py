@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import math
 import re
-from typing import Any, Iterable
+from typing import Any, Iterable, get_args
+
+from watering_backend.models import PlantSize
 
 
-PLANT_SIZES = frozenset({"small", "medium", "large"})
+PLANT_SIZES = frozenset(get_args(PlantSize))
 POT_TYPES = frozenset({"overflow", "reservoir", "reservoir_overflow", "closed"})
 WALL_SIDES = frozenset({"north", "east", "south", "west"})
 

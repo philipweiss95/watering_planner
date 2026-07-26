@@ -5,6 +5,13 @@ import { badge, confirmDialog, element, emptyState, formDialog, icon, progress, 
 const ignoredKey = "watering-planner-ignored-connections";
 let activeFilter = "all";
 
+export const PLANT_SIZE_OPTIONS = Object.freeze([
+  ["small", "Klein"],
+  ["medium", "Mittel"],
+  ["large", "Groß"],
+  ["tree", "Baum/Strauch"],
+]);
+
 function loadIgnored() {
   try {
     return new Set(JSON.parse(localStorage.getItem(ignoredKey) || "[]").map(Number));
@@ -91,7 +98,7 @@ export function plantForm(state, plant = null) {
     }));
   }
   const size = element("select", { name: "size" });
-  [["small", "Klein"], ["medium", "Mittel"], ["large", "Groß"]].forEach(([value, label]) => {
+  PLANT_SIZE_OPTIONS.forEach(([value, label]) => {
     size.append(element("option", { value, text: label, selected: (plant?.size || "medium") === value }));
   });
   const potType = element("select", { name: "pot_type" });
@@ -130,7 +137,7 @@ async function editPlant(state, plant, onChanged) {
   if (plant) await api.put(`/api/plants/${plant.id}`, payload);
   else await api.post("/api/plants", payload);
   showToast(plant ? "Pflanze gespeichert" : "Pflanze hinzugefügt");
-  await onChanged();
+  await onChanged({ afterMutation: true });
 }
 
 async function removePlant(state, plant, onChanged) {
@@ -143,12 +150,12 @@ async function removePlant(state, plant, onChanged) {
   if (!confirmed) return;
   const snapshot = plantPayload(plant);
   await api.delete(`/api/plants/${plant.id}`);
-  await onChanged();
+  await onChanged({ afterMutation: true });
   showToast("Pflanze gelöscht", {
     actionLabel: "Rückgängig",
     onAction: async () => {
       await restorePlant(snapshot);
-      await onChanged();
+      await onChanged({ afterMutation: true });
       showToast("Pflanze wiederhergestellt");
     },
   });

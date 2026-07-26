@@ -88,10 +88,23 @@ jobs:
           touch .env.synology
           docker compose down --remove-orphans
       - name: Build and verify 1.5.0 update package
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          BRIDGE_DIR="$RUNNER_TEMP/v1.4.3-release"
+          mkdir -p "$BRIDGE_DIR"
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/v1.4.3" \
+            > "$BRIDGE_DIR/release.json"
+          gh release download v1.4.3 \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "watering-planner-1.4.3.zip*" \
+            --dir "$BRIDGE_DIR"
           python scripts/package_release.py
           python scripts/verify_release_package.py \
             --expected-version 1.5.0 \
             --bridge-tag v1.4.3 \
             --bridge-tag-object f08acb6c5216c987cb6581513de499c9360d9f1a \
-            --bridge-commit e02ceb198264104fd8f2bc68eb8db7b24ac00dc8
+            --bridge-commit e02ceb198264104fd8f2bc68eb8db7b24ac00dc8 \
+            --bridge-release-metadata "$BRIDGE_DIR/release.json" \
+            --bridge-release-archive "$BRIDGE_DIR/watering-planner-1.4.3.zip" \
+            --bridge-release-checksum "$BRIDGE_DIR/watering-planner-1.4.3.zip.sha256"

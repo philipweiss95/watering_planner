@@ -102,6 +102,13 @@ Die iPhone-PWA danach vollständig schließen und neu laden. Der genaue Ablauf
 einschließlich Datei- und Datenbank-Rollback steht in
 [docs/migration.md](docs/migration.md).
 
+Ein direkter Sprung von 1.4.2 auf 1.5.0 ist nicht unterstützt. Der mit 1.4.2
+ausgelieferte Updater kennt die modularen Zielpfade noch nicht; deshalb auf
+1.4.2 zuerst das unveränderte Release 1.4.3 installieren. Der ab 1.5
+enthaltene Updater prüft zusätzlich die installierte `VERSION` und bricht bei
+einem älteren Ausgangsstand vor dem Download mit dem Hinweis auf die
+Brückenversion ab.
+
 Die Berechnung nutzt Temperatur, Tagesniederschlag, Wind, FAO-Referenzverdunstung ET₀, Sonnenscheindauer, Balkon-/Terrassenausrichtung in Grad, Koordinaten, Pflanzenpositionen und die vier Wandhöhen nach Seite. Wenn Open-Meteo keine ET₀-Werte liefert oder manuelle Wetterdaten genutzt werden, schätzt die App ET₀ aus Temperatur, Sonnenscheindauer und Wind. Zusätzlich wird Wind als Balkon-Expositionsfaktor berechnet: hohe Windgeschwindigkeiten erhöhen Transpiration und Topfverdunstung, niedrige Wände schützen weniger.
 
 Für den letzten noch vollständig möglichen Gießlauf simuliert die App mindestens 16 Prognosetage chronologisch. Ein Gießlauf ist nur versorgt, wenn zu seinem Zeitpunkt genügend Wasser im Haupttank liegt. Vorratswasser wird erst nach einem zulässigen Nachfüllereignis verfügbar. Reicht der Ereignishorizont nicht bis zur Erschöpfung, bleibt die bisherige mittlere Langzeitschätzung als Kompatibilitätswert erhalten.
