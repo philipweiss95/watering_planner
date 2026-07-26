@@ -153,6 +153,59 @@ class HomeAssistantExampleTests(unittest.TestCase):
         )
         self.assertIn('duration: "00:00:15"', guard_path)
 
+    def test_restart_with_unclear_pump_rearms_guard_and_keeps_run_id(
+        self,
+    ) -> None:
+        automations = (
+            ROOT / "home-assistant" / "automations.yaml"
+        ).read_text(encoding="utf-8")
+        restart_start = automations.index(
+            "id: bewaesserung_nachfuellpumpe_neustart_sicherung"
+        )
+        restart_end = automations.index(
+            "- id: bewaesserung_nachfuellpumpe_sicherheitsabschaltung",
+            restart_start,
+        )
+        restart_path = automations[restart_start:restart_end]
+
+        off_wait = restart_path.index("wait_template")
+        confirmed_off = restart_path.index(
+            "{{ is_state('switch.smart_plug_mini_refill', 'off') }}",
+            off_wait,
+        )
+        guard_cancel = restart_path.index(
+            "action: timer.cancel",
+            confirmed_off,
+        )
+        run_id_clear = restart_path.index(
+            "action: input_text.set_value",
+            guard_cancel,
+        )
+        fallback = restart_path.index("default:", run_id_clear)
+        guard_restart = restart_path.index(
+            "action: timer.start",
+            fallback,
+        )
+        duration = restart_path.index(
+            'duration: "00:00:15"',
+            guard_restart,
+        )
+
+        self.assertLess(off_wait, confirmed_off)
+        self.assertLess(confirmed_off, guard_cancel)
+        self.assertLess(guard_cancel, run_id_clear)
+        self.assertLess(run_id_clear, fallback)
+        self.assertLess(fallback, guard_restart)
+        self.assertLess(guard_restart, duration)
+        self.assertEqual(
+            restart_path.count("action: input_text.set_value"),
+            1,
+        )
+        self.assertIn(
+            "id: bewaesserung_nachfuellpumpe_sicherheitsabschaltung",
+            automations[restart_end:],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

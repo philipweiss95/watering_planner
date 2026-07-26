@@ -46,6 +46,8 @@ Alle stabilen Änderungen am Watering Planner werden in dieser Datei dokumentier
 - Fehlende Home-Assistant-Einschaltbestätigungen lösen sofort eine geprüfte
   Sicherheitsabschaltung aus; Timer und Laufkennung bleiben bis zum bestätigten
   Ausschalten erhalten.
+- Auch nach einem Home-Assistant-Neustart wird bei unklarem Pumpenzustand der
+  Guard-Timer erneut gestartet und die aktive Laufkennung beibehalten.
 - Leere Tankkorrekturen werden in Oberfläche und API abgelehnt. Wiederholte
   Abgleiche sind nur bei identischem Modus und identischen Werten idempotent;
   widersprüchliche Wiederholungen liefern einen Konflikt.

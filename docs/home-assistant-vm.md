@@ -163,6 +163,8 @@ Die Vorlagen trennen die Aufgaben:
   startet den Sicherheitstimer für einen weiteren Abschaltversuch neu.
 - `Bewaesserung - Nachfuellpumpe nach Neustart sichern` schaltet die Pumpe
   beim Home-Assistant-Start aus und meldet eine gemerkte `run_id` als unklar.
+  Ohne bestätigtes `off` bleibt die Kennung erhalten und der Guard-Timer wird
+  erneut für 15 Sekunden gestartet.
 - Fehlt nach `switch.turn_on` die Einschaltbestätigung, sendet das Script
   sofort `switch.turn_off`, wartet höchstens zehn Sekunden auf `off` und
   meldet dem Planner einen möglichen Teiltransfer. Timer und `run_id` werden

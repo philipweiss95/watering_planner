@@ -136,6 +136,12 @@
                 entity_id: input_text.watering_refill_active_run_id
               data:
                 value: ""
+      default:
+        - action: timer.start
+          target:
+            entity_id: timer.watering_refill_pump_guard
+          data:
+            duration: "00:00:15"
 
 - id: bewaesserung_nachfuellpumpe_sicherheitsabschaltung
   alias: Bewaesserung - Nachfuellpumpe Sicherheitsabschaltung

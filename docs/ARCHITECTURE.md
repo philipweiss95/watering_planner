@@ -101,6 +101,9 @@ Fehlt direkt nach `switch.turn_on` die Einschaltbestätigung, wird unverzüglich
 ausgeschaltet und der mögliche Teiltransfer gemeldet. Timer und aktive Kennung
 werden erst nach bestätigtem `off` gelöscht. Bleibt der Zustand unklar, startet
 der Sicherheitswächter erneut und behält die Kennung für den nächsten Versuch.
+Dasselbe gilt nach einem Home-Assistant-Neustart: Wird `off` nicht bestätigt,
+wird der Guard ausdrücklich für weitere 15 Sekunden gestartet und die aktive
+`run_id` bleibt bis zu einer später bestätigten Abschaltung erhalten.
 
 ## Atomare Konfiguration
 
