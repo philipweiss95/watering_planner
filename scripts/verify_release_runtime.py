@@ -329,7 +329,10 @@ def verify_runtime(
 def parse_args(arguments: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Prueft einen laufenden 1.5-Releasecontainer.")
     parser.add_argument("--base-url", default="http://127.0.0.1:8080")
-    parser.add_argument("--expected-version", default="1.5.0")
+    parser.add_argument(
+        "--expected-version",
+        default=(ROOT / "VERSION").read_text(encoding="utf-8").strip(),
+    )
     parser.add_argument("--health-timeout", type=float, default=120)
     parser.add_argument("--request-timeout", type=float, default=10)
     parser.add_argument("--run-prefix")

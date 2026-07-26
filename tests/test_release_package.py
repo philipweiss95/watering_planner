@@ -298,13 +298,15 @@ class ReleasePackageTests(unittest.TestCase):
         replacements = (
             (
                 f"{PACKAGE_ROOT}/docker-compose.yml",
-                b"image: watering-planner:1.5.0",
+                f"image: watering-planner:{VERSION}".encode(),
                 b"image: watering-planner:1.5.9",
                 "Compose-Imageversion",
             ),
             (
                 f"{PACKAGE_ROOT}/public/sw.js",
-                b'const CACHE_NAME = "watering-planner-1.5.0";',
+                (
+                    f'const CACHE_NAME = "watering-planner-{VERSION}";'
+                ).encode(),
                 b'const CACHE_NAME = "watering-planner-1.5.9";',
                 "PWA-Cacheversion",
             ),

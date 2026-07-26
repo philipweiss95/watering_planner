@@ -90,6 +90,15 @@ Version 1.0 enthält außerdem auf der **Info-Seite** einen internen Synology-Up
 
 Der Updater erneuert sich am Ende eines Updates über einen unabhängigen, kurzlebigen Übergabecontainer. Dadurch bleibt der Compose-Befehl aktiv, während der alte Updater ersetzt wird. Seit Version 1.3.1 bestätigt der Helfer zusätzlich das erwartete Image und den Health-Status. Erst wenn anschließend genau ein Updater-Container übrig ist, wird das Update als erfolgreich markiert. Ein gestarteter Updater kann unterbrochene Ersetzungen außerdem selbst bereinigen und den kanonischen Containernamen wiederherstellen.
 
+### Update von 1.5.0 auf 1.5.1
+
+Version 1.5.1 kann direkt mit dem in 1.5.0 enthaltenen Updater installiert
+werden. Vorher wie gewohnt `data/watering.sqlite3` und `.env.synology` sichern.
+Nach dem Update die iPhone-PWA vollständig schließen und neu öffnen, damit der
+Cache `watering-planner-1.5.1` geladen wird. Die SMTP-Einrichtung befindet sich
+anschließend unter **Setup > Benachrichtigungen**; gespeicherte Werte werden
+nicht wieder im Browser angezeigt.
+
 ### Update von 1.4.3 auf 1.5.0
 
 Version 1.4.3 ist die bereits veröffentlichte und notwendige Brückenversion.

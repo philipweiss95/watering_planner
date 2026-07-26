@@ -6,18 +6,26 @@ Brückenversion für dieses Update und auf der Synology bereits installiert. Sie
 muss weder neu erstellt noch erneut veröffentlicht werden.
 
 Der Git-Tag `v1.4.3` zeigt über das Tag-Objekt `f08acb6c` auf Commit
-`e02ceb198`. Der Branch `main` enthält weiterhin Version 1.4.2 und ist deshalb
-nicht die technische Ausgangsbasis dieser Migration.
-Der Entwicklungsbranch `codex/backend-modularization` enthält den
-Bridge-Commit als echten Git-Vorfahren. Ein späterer normaler Merge nach
-`main` erhält damit die veröffentlichte 1.4.3-Historie. Das
+`e02ceb198`. Der veröffentlichte Verlauf von `main` enthält inzwischen
+Version 1.5.0 und den Bridge-Commit als echten Git-Vorfahren. Auch 1.5.1 baut
+direkt auf diesem Verlauf auf. Das
 Release-Verifikationsskript prüft Tag-Objekt, Ziel-Commit und Abstammung vor
-jedem 1.5.0-Paket erneut; weder `main` noch `v1.4.3` werden dabei verändert.
+jedem 1.5.x-Paket erneut; `v1.4.3` wird dabei nicht verändert.
 
 Das veröffentlichte Paket `watering-planner-1.4.3.zip` enthält 26 Dateien,
 deren Inhalt mit diesem Commit übereinstimmt. Seine verifizierte SHA-256-Summe
 lautet
 `78a38685d19c0952541bf96f9286b8eb11c5df0c2edc8de3a9bd285ed9f5ce7a`.
+
+## Patch-Update von 1.5.0 auf 1.5.1
+
+1. `data/watering.sqlite3` und `.env.synology` sichern.
+2. Unter **Info > Updates** Version 1.5.1 installieren.
+3. Nach dem Containerwechsel `/api/health`, Tankstände und manuelle Aktionen
+   prüfen.
+4. Die PWA vollständig schließen und neu öffnen.
+5. SMTP bei Bedarf unter **Setup > Benachrichtigungen** write-only eintragen
+   und anschließend über **System > Test-E-Mail senden** prüfen.
 
 ## Updatepfad von 1.4.3 auf 1.5.0
 
@@ -245,7 +253,7 @@ Automationen wieder aktiviert werden.
 ## Grenze der automatischen Updater-Prüfung
 
 Die CI verwendet den unveränderten Updater-Code aus dem Tag `v1.4.3`, spielt
-damit das 1.5.0-Paket ein und prüft Dateiübernahme sowie Rollback gegen
+damit das aktuelle 1.5.x-Paket ein und prüft Dateiübernahme sowie Rollback gegen
 Fehlerfälle. Planner- und Updater-Images werden zusätzlich real gebaut; der
 migrierte Planner wird im Container gestartet und über seine APIs geprüft.
 
@@ -256,8 +264,8 @@ Host-spezifischen Rechte, Pfade und Container-Namen der Synology nicht
 vollständig beweisen. Deshalb nach der Installation manuell prüfen:
 
 1. Genau ein Container `watering-planner-updater` läuft.
-2. Planner und Updater zeigen Version 1.5.0 beziehungsweise verwenden die
-   Images mit Tag 1.5.0.
+2. Planner und Updater zeigen Version 1.5.1 beziehungsweise verwenden die
+   Images mit Tag 1.5.1.
 3. Beide Healthchecks sind grün.
 4. `data/` und `.env.synology` sind weiterhin unverändert eingebunden.
 

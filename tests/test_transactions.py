@@ -60,6 +60,9 @@ class TransactionTests(unittest.TestCase):
         )
 
     def test_registered_routes_integrate_with_real_application(self) -> None:
+        expected_version = (
+            Path(__file__).parent.parent / "VERSION"
+        ).read_text(encoding="utf-8").strip()
         router = build_router()
         health = router.dispatch(
             ApiRequest("GET", "/api/health"),
@@ -70,8 +73,11 @@ class TransactionTests(unittest.TestCase):
             self.application,
         )
 
-        self.assertEqual(health.payload, {"ok": True, "version": "1.5.0"})
-        self.assertEqual(state.payload["version"], "1.5.0")
+        self.assertEqual(
+            health.payload,
+            {"ok": True, "version": expected_version},
+        )
+        self.assertEqual(state.payload["version"], expected_version)
         self.assertEqual(len(state.payload["plants"]), 3)
 
 

@@ -2,7 +2,7 @@
 
 Die vollständige Modulübersicht steht in
 [backend-architecture.md](backend-architecture.md). Dieses Dokument hält die
-für Betrieb und Migration wichtigen Garantien der Version 1.5.0 fest.
+für Betrieb und Migration wichtigen Garantien der Versionen 1.5.x fest.
 
 ## Persistente Nachfüllfenster
 

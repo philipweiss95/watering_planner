@@ -21,7 +21,7 @@ from v143_fixture import create_v143_database
 ROOT = Path(__file__).resolve().parents[1]
 BRIDGE_TAG = "v1.4.3"
 BRIDGE_COMMIT = "e02ceb198264104fd8f2bc68eb8db7b24ac00dc8"
-TARGET_VERSION = "1.5.0"
+TARGET_VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 
 
 def load_module(path: Path, prefix: str):

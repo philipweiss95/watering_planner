@@ -4,6 +4,8 @@ Alle stabilen Änderungen am Watering Planner werden in dieser Datei dokumentier
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-07-26
+
 - Manuelles Gießen und manuelles Nachfüllen sind auf dem Dashboard dauerhaft
   sichtbar und zeigen ihren aktuellen Freigabe- oder Sperrgrund.
 - SMTP kann write-only über die Weboberfläche eingerichtet werden; gespeicherte
