@@ -60,7 +60,7 @@ jobs:
         run: |
           docker compose up -d --no-build --wait --wait-timeout 120
           python scripts/verify_release_runtime.py \
-            --expected-version 1.5.0 \
+            --expected-version "$(cat VERSION)" \
             --run-prefix "ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             --forbidden-value ci-runtime-secret-must-not-leak
       - name: Stop runtime containers
@@ -68,7 +68,7 @@ jobs:
         run: |
           touch .env.synology
           docker compose down --remove-orphans
-      - name: Build and verify 1.5.0 update package
+      - name: Build and verify update package
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -82,7 +82,7 @@ jobs:
             --dir "$BRIDGE_DIR"
           python scripts/package_release.py
           python scripts/verify_release_package.py \
-            --expected-version 1.5.0 \
+            --expected-version "$(cat VERSION)" \
             --bridge-tag v1.4.3 \
             --bridge-tag-object f08acb6c5216c987cb6581513de499c9360d9f1a \
             --bridge-commit e02ceb198264104fd8f2bc68eb8db7b24ac00dc8 \

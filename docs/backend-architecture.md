@@ -241,7 +241,9 @@ SQL in ein Repository und Fachentscheidungen in einen Service.
 
 ## Geheimnisse
 
-SMTP-Konfiguration kommt ausschließlich aus:
+SMTP-Konfiguration wird write-only in serverseitigen `app_settings` mit dem
+Präfix `secret_smtp_` gespeichert. Nicht gesetzte Werte fallen weiterhin auf
+folgende Umgebungsvariablen zurück:
 
 - `NOTIFICATIONS_ENABLED`
 - `SMTP_HOST`, `SMTP_PORT`
@@ -251,7 +253,15 @@ SMTP-Konfiguration kommt ausschließlich aus:
 - `NOTIFICATION_WORKER_DISABLED` für Tests
 
 Passwörter und Home-Assistant-Webhook-URLs erscheinen weder in
-`/api/state` noch in Diagnoseantworten.
+`/api/state` noch in Diagnoseantworten. Dasselbe gilt für SMTP-Host,
+Benutzername, Absender, Empfänger und Sicherheitsmodus. Die Browser-API liefert
+nur Boolesche Angaben wie `configured` und `username_configured`.
+
+`POST /api/notifications/config` validiert alle übergebenen Werte, speichert sie
+in einer SQLite-Transaktion und startet den Benachrichtigungsworker bei Bedarf
+neu. Leere Felder überschreiben keine vorhandenen Werte. Da die Werte Teil der
+SQLite-Datenbank sind, enthält ein Datenbankbackup auch die SMTP-Geheimnisse und
+muss entsprechend geschützt werden.
 
 ## Verbleibende technische Schulden
 

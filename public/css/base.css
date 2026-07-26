@@ -4,6 +4,8 @@
 
 html {
   min-height: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
   background: var(--surface-page);
   font-family: var(--font-ui);
   letter-spacing: 0;
@@ -12,6 +14,8 @@ html {
 
 body {
   min-height: 100vh;
+  max-width: 100%;
+  overflow-x: hidden;
   margin: 0;
   color: var(--text);
   background: var(--surface-page);

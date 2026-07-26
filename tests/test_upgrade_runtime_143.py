@@ -19,6 +19,7 @@ from watering_backend.app import ApplicationPaths, create_application
 
 
 ROOT = Path(__file__).resolve().parents[1]
+EXPECTED_VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 FIXED_LOCAL_NOW = datetime(
     2026,
     7,
@@ -112,8 +113,8 @@ class UpgradeRuntime143Tests(unittest.TestCase):
         health = self.request("/api/health")
         state = self.request("/api/state")
         self.assertTrue(health["ok"])
-        self.assertEqual(health["version"], "1.5.0")
-        self.assertEqual(state["version"], "1.5.0")
+        self.assertEqual(health["version"], EXPECTED_VERSION)
+        self.assertEqual(state["version"], EXPECTED_VERSION)
         self.assertEqual(
             [
                 plant["catalog_id"]

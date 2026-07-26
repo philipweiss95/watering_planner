@@ -396,6 +396,12 @@
   border-radius: var(--radius);
 }
 
+.settings-section > *,
+.smtp-config,
+.smtp-config > * {
+  min-width: 0;
+}
+
 fieldset.settings-section > legend {
   padding: 0 var(--space-2);
   font-weight: 750;
@@ -418,6 +424,11 @@ fieldset.settings-section > legend {
   cursor: pointer;
   font-weight: 750;
   list-style: none;
+}
+
+.settings-section > summary > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .settings-section > summary::-webkit-details-marker {
@@ -464,6 +475,51 @@ fieldset.settings-section > legend {
   grid-template-columns: repeat(2, minmax(0, 1fr)) 44px;
   gap: var(--space-2);
   align-items: end;
+}
+
+.window-row input[type="time"] {
+  min-width: 0;
+  width: 100%;
+}
+
+.manual-section .section-heading p,
+.smtp-config .subsection-heading p {
+  margin: 2px 0 0;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.manual-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.manual-action {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-2) 0;
+}
+
+.manual-action p {
+  min-width: 0;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+
+.manual-action-button {
+  white-space: nowrap;
+}
+
+.smtp-config {
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
 }
 
 .calibration-grid {

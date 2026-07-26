@@ -122,6 +122,48 @@ class HttpIntegrationTests(unittest.TestCase):
             first["booking"]["actual_consumed_ml"],
         )
 
+    def test_smtp_configuration_endpoint_never_reads_secrets_back(
+        self,
+    ) -> None:
+        self.application.environment = {
+            "NOTIFICATION_WORKER_DISABLED": "true",
+        }
+        secret = "http-secret-must-not-be-returned"
+        result = self.request(
+            "/api/notifications/config",
+            {
+                "enabled": True,
+                "host": "smtp.http.private",
+                "port": 465,
+                "username": "http-user",
+                "password": secret,
+                "sender": "planner@http.private",
+                "recipients": "owner@http.private",
+                "security": "ssl",
+            },
+        )
+        self.assertTrue(result["saved"])
+        self.assertTrue(result["smtp"]["configured"])
+        self.assertTrue(result["smtp"]["write_only"])
+
+        browser_json = json.dumps(
+            {
+                "result": result,
+                "state": self.request("/api/state"),
+                "diagnostics": self.request(
+                    "/api/diagnostics/notifications"
+                ),
+            }
+        )
+        for protected in (
+            secret,
+            "smtp.http.private",
+            "http-user",
+            "planner@http.private",
+            "owner@http.private",
+        ):
+            self.assertNotIn(protected, browser_json)
+
     def test_forced_cache_fallback_is_evaluated_without_second_fetch(
         self,
     ) -> None:

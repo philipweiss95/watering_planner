@@ -47,6 +47,51 @@ export function buildTimeline(evaluation, now = new Date()) {
   });
 }
 
+export function buildManualActionsModel(state, evaluation) {
+  const watering = evaluation?.manual_run || {};
+  const refill = evaluation?.manual_refill || {};
+  const refillState = evaluation?.refill || {};
+  const homeAssistantConfigured = Boolean(
+    state?.home_assistant?.configured,
+  );
+  const plannedRefill = Number(refill.planned_transfer_ml || 0);
+  const refillAvailable = typeof refill.available === "boolean"
+    ? refill.available
+    : Boolean(
+      homeAssistantConfigured
+      && plannedRefill > 0
+      && !refillState.active_run
+      && !refillState.manual_review_required
+      && !refillState.cooldown_active,
+    );
+  return [
+    {
+      id: "manual-watering",
+      action: "manual-run",
+      icon: "play",
+      label: "Jetzt gießen",
+      available: Boolean(watering.available),
+      reason: watering.reason || (
+        evaluation
+          ? "Manueller Gießlauf ist derzeit nicht freigegeben."
+          : "Tagesplan wird geladen."
+      ),
+    },
+    {
+      id: "manual-refill",
+      action: "manual-refill",
+      icon: "container",
+      label: "Tank nachfüllen",
+      available: refillAvailable,
+      reason: refill.reason || refill.summary || (
+        plannedRefill > 0
+          ? `${liters(plannedRefill)} sind vorgesehen.`
+          : "Der Haupttank benötigt aktuell keine Nachfüllung."
+      ),
+    },
+  ];
+}
+
 export function buildDashboardModel(state, evaluation, now = new Date()) {
   if (!state) {
     return {
@@ -212,6 +257,37 @@ export function renderDashboard(state, evaluation, actions = {}) {
   if (!timeline.length) list.append(element("li", { className: "empty-state", text: "Heute sind keine Läufe geplant." }));
   document.getElementById("timelineSummary").textContent =
     `${Number(evaluation?.cycles_completed_today || 0)} erledigt · ${Number(evaluation?.remaining_cycles_today || 0)} offen`;
+
+  const manualContainer = document.getElementById("manualActions");
+  manualContainer.replaceChildren(
+    ...buildManualActionsModel(state, evaluation).map((item) => {
+      const button = element(
+        "button",
+        {
+          className: item.available
+            ? "secondary manual-action-button"
+            : "secondary manual-action-button",
+          type: "button",
+          disabled: !item.available,
+          attrs: {
+            "aria-describedby": `${item.id}-reason`,
+            title: item.available ? item.label : item.reason,
+          },
+        },
+        [icon(item.icon), element("span", { text: item.label })],
+      );
+      if (item.available && actions[item.action]) {
+        button.addEventListener("click", actions[item.action]);
+      }
+      return element("div", { className: "manual-action" }, [
+        button,
+        element("p", {
+          id: `${item.id}-reason`,
+          text: item.reason,
+        }),
+      ]);
+    }),
+  );
 
   const mainCurrent = Number(state?.balcony?.tank_current_ml || 0);
   const mainCapacity = Math.max(1, Number(state?.balcony?.tank_capacity_ml || evaluation?.tank?.capacity_ml || 1));

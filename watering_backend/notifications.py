@@ -4,6 +4,7 @@ import os
 import smtplib
 import ssl
 import threading
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
@@ -35,32 +36,46 @@ class SMTPConfig:
     security: str
 
     @classmethod
-    def from_env(cls) -> "SMTPConfig":
-        security = os.environ.get("SMTP_SECURITY", "starttls").strip().lower()
+    def from_mapping(
+        cls,
+        values: Mapping[str, str],
+    ) -> "SMTPConfig":
+        security = str(
+            values.get("SMTP_SECURITY", "starttls")
+        ).strip().lower() or "starttls"
         if security not in {"ssl", "starttls", "none"}:
             raise ValueError("SMTP_SECURITY muss ssl, starttls oder none sein")
         default_port = 465 if security == "ssl" else 587 if security == "starttls" else 25
         try:
-            port = int(os.environ.get("SMTP_PORT", str(default_port)))
+            port = int(
+                str(values.get("SMTP_PORT", "")).strip()
+                or str(default_port)
+            )
         except ValueError as exc:
             raise ValueError("SMTP_PORT muss eine ganze Zahl sein") from exc
         if not 1 <= port <= 65535:
             raise ValueError("SMTP_PORT muss zwischen 1 und 65535 liegen")
         recipients = tuple(
             item.strip()
-            for item in os.environ.get("SMTP_TO", "").replace(";", ",").split(",")
+            for item in str(values.get("SMTP_TO", ""))
+            .replace(";", ",")
+            .split(",")
             if item.strip()
         )
         return cls(
-            enabled=_truthy(os.environ.get("NOTIFICATIONS_ENABLED")),
-            host=os.environ.get("SMTP_HOST", "").strip(),
+            enabled=_truthy(values.get("NOTIFICATIONS_ENABLED")),
+            host=str(values.get("SMTP_HOST", "")).strip(),
             port=port,
-            username=os.environ.get("SMTP_USERNAME", "").strip(),
-            password=os.environ.get("SMTP_PASSWORD", ""),
-            sender=os.environ.get("SMTP_FROM", "").strip(),
+            username=str(values.get("SMTP_USERNAME", "")).strip(),
+            password=str(values.get("SMTP_PASSWORD", "")),
+            sender=str(values.get("SMTP_FROM", "")).strip(),
             recipients=recipients,
             security=security,
         )
+
+    @classmethod
+    def from_env(cls) -> "SMTPConfig":
+        return cls.from_mapping(os.environ)
 
     def validate_for_send(self) -> None:
         if not self.enabled:
@@ -72,12 +87,11 @@ class SMTPConfig:
         return {
             "enabled": self.enabled,
             "configured": bool(self.host and self.sender and self.recipients),
-            "host": self.host,
-            "port": self.port,
-            "from": self.sender,
-            "to": list(self.recipients),
-            "security": self.security,
+            "host_configured": bool(self.host),
+            "sender_configured": bool(self.sender),
+            "recipients_configured": bool(self.recipients),
             "username_configured": bool(self.username),
+            "credentials_configured": bool(self.username and self.password),
         }
 
 
@@ -99,6 +113,28 @@ def send_email(config: SMTPConfig, subject: str, body: str) -> None:
         client.send_message(message)
 
 
+def _safe_smtp_error(
+    error: Exception,
+    config: SMTPConfig | None = None,
+) -> str:
+    message = str(error) or error.__class__.__name__
+    if config is not None:
+        protected = {
+            config.host,
+            config.username,
+            config.password,
+            config.sender,
+            *config.recipients,
+        }
+        for value in sorted(
+            (item for item in protected if item),
+            key=len,
+            reverse=True,
+        ):
+            message = message.replace(value, "[geschützt]")
+    return message[:1000]
+
+
 class NotificationService:
     def __init__(
         self,
@@ -106,6 +142,7 @@ class NotificationService:
         now: Callable[[], datetime] | None = None,
         *,
         repository: NotificationsRepository | None = None,
+        config_provider: Callable[[], SMTPConfig] | None = None,
     ):
         if repository is None:
             if connect is None:
@@ -114,15 +151,28 @@ class NotificationService:
         self._connect = connect
         self._repository = repository
         self._now = now or (lambda: datetime.now(timezone.utc))
+        self._config_provider = config_provider or SMTPConfig.from_env
 
     def send_test(self) -> dict:
-        config = SMTPConfig.from_env()
+        config = self._config_provider()
         created_at = self._now().astimezone(timezone.utc).isoformat()
         try:
             send_email(config, "Watering Planner: Test", "Die SMTP-Konfiguration funktioniert.")
         except Exception as exc:
-            self._log("smtp_test", "info", "test", "Watering Planner: Test", str(exc), created_at, "failed", str(exc))
-            raise ValueError(f"Test-E-Mail konnte nicht gesendet werden: {exc}") from exc
+            error = _safe_smtp_error(exc, config)
+            self._log(
+                "smtp_test",
+                "info",
+                "test",
+                "Watering Planner: Test",
+                error,
+                created_at,
+                "failed",
+                error,
+            )
+            raise ValueError(
+                f"Test-E-Mail konnte nicht gesendet werden: {error}"
+            ) from exc
         self._log(
             "smtp_test",
             "info",
@@ -192,14 +242,20 @@ class NotificationService:
             error = previous_error if consecutive_failures else ""
             if should_send:
                 attempted_at = now.isoformat()
+                smtp_config: SMTPConfig | None = None
                 try:
-                    send_email(SMTPConfig.from_env(), send_subject, send_message_text)
+                    smtp_config = self._config_provider()
+                    send_email(
+                        smtp_config,
+                        send_subject,
+                        send_message_text,
+                    )
                     sent_at = now.isoformat()
                     status = "sent"
                     consecutive_failures = 0
                 except Exception as exc:
                     status = "failed"
-                    error = str(exc)
+                    error = _safe_smtp_error(exc, smtp_config)
                     consecutive_failures += 1
                 transaction.append_log(
                     alert_key=alert_key,
@@ -235,7 +291,7 @@ class NotificationService:
     def diagnostics(self, limit: int = 50) -> dict:
         active, log = self._repository.diagnostics(limit)
         try:
-            smtp_status = SMTPConfig.from_env().public_status()
+            smtp_status = self._config_provider().public_status()
         except ValueError as exc:
             smtp_status = {"enabled": False, "configured": False, "configuration_error": str(exc)}
         return {

@@ -3,7 +3,11 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { api, ApiError } from "../public/js/api.js";
-import { buildDashboardModel, buildTimeline } from "../public/js/dashboard.js";
+import {
+  buildDashboardModel,
+  buildManualActionsModel,
+  buildTimeline,
+} from "../public/js/dashboard.js";
 import {
   buildDiagnosticRows,
   renderDiagnostics,
@@ -34,7 +38,11 @@ import {
   reconciliationForm,
   reconciliationPayload,
 } from "../public/js/refill-reconciliation.js";
-import { previewSchedule, validateRefillWindows } from "../public/js/settings.js";
+import {
+  previewSchedule,
+  smtpConfigurationPayload,
+  validateRefillWindows,
+} from "../public/js/settings.js";
 import { confirmDialog, escapeHTML } from "../public/js/ui.js";
 
 class FakeNode {
@@ -206,6 +214,86 @@ test("dashboard prioritizes concrete action states", () => {
       baseEvaluation,
     ).action,
     "test-ha",
+  );
+});
+
+test("manual watering and refill actions remain visible with API status", () => {
+  const state = { home_assistant: { configured: true } };
+  const allowed = buildManualActionsModel(state, {
+    manual_run: {
+      available: true,
+      reason: "Gießen ist bereit.",
+    },
+    manual_refill: {
+      available: true,
+      reason: "Nachfüllen ist bereit.",
+      planned_transfer_ml: 2500,
+    },
+    refill: {},
+  });
+  assert.deepEqual(
+    allowed.map((item) => [item.action, item.available]),
+    [["manual-run", true], ["manual-refill", true]],
+  );
+
+  const legacyRefillPayload = buildManualActionsModel(state, {
+    manual_run: { available: false, reason: "Tank leer." },
+    manual_refill: {
+      planned_transfer_ml: 1800,
+      summary: "1,8 l vorgesehen.",
+    },
+    refill: {},
+  });
+  assert.equal(legacyRefillPayload[0].available, false);
+  assert.equal(legacyRefillPayload[1].available, true);
+
+  const blocked = buildManualActionsModel(state, {
+    manual_run: { available: false },
+    manual_refill: { planned_transfer_ml: 1800 },
+    refill: { manual_review_required: true },
+  });
+  assert.equal(blocked[1].available, false);
+});
+
+test("SMTP write-only payload omits every blank field", () => {
+  assert.deepEqual(
+    smtpConfigurationPayload({
+      enabled: true,
+      host: " smtp.example.test ",
+      port: "587",
+      username: "",
+      password: "secret",
+      sender: "planner@example.test",
+      recipients: "owner@example.test",
+      security: "starttls",
+      clear_credentials: false,
+    }),
+    {
+      enabled: true,
+      host: "smtp.example.test",
+      port: 587,
+      password: "secret",
+      sender: "planner@example.test",
+      recipients: "owner@example.test",
+      security: "starttls",
+    },
+  );
+  assert.deepEqual(
+    smtpConfigurationPayload({
+      enabled: false,
+      host: "",
+      port: "",
+      username: "",
+      password: "",
+      sender: "",
+      recipients: "",
+      security: "",
+      clear_credentials: true,
+    }),
+    {
+      enabled: false,
+      clear_credentials: true,
+    },
   );
 });
 
@@ -1214,7 +1302,7 @@ test("frontend sources use custom feedback and include mobile boundaries", async
   assert.doesNotMatch(scripts, /\.innerHTML\s*=/);
   assert.match(ui, /confirmDialog/);
   assert.match(`${plants}\n${hoses}`, /Rückgängig/);
-  assert.match(responsive, /max-width:\s*390px/);
+  assert.match(responsive, /max-width:\s*540px/);
   assert.match(responsive, /safe-area-inset-bottom/);
   assert.match(index, /id="forecastChart"/);
   assert.match(app, /\/api\/notifications\/test/);

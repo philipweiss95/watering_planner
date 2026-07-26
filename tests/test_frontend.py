@@ -76,7 +76,7 @@ class FrontendStructureTests(unittest.TestCase):
     def test_mobile_css_has_safe_areas_focus_and_stable_chart(self):
         css = "\n".join(path.read_text(encoding="utf-8") for path in (PUBLIC / "css").glob("*.css"))
         self.assertIn("@media (max-width: 719px)", css)
-        self.assertIn("@media (max-width: 390px)", css)
+        self.assertIn("@media (max-width: 540px)", css)
         self.assertIn("safe-area-inset-bottom", css)
         self.assertIn(":focus-visible", css)
         self.assertIn("min-height: 44px", css)
@@ -88,6 +88,21 @@ class FrontendStructureTests(unittest.TestCase):
         self.assertNotRegex(sources, r"https?://(?:cdn|unpkg|jsdelivr)")
         self.assertNotIn("SMTP_PASSWORD", sources)
         self.assertNotIn("HOME_ASSISTANT_WEBHOOK_URL", sources)
+
+    def test_mobile_forms_are_bounded_and_smtp_is_write_only(self):
+        components = self.read("css/components.css")
+        responsive = self.read("css/responsive.css")
+        index = self.read("index.html")
+        settings = self.read("js/settings.js")
+        self.assertIn("min-width: 0;", components)
+        self.assertIn(".field-grid > *", responsive)
+        self.assertIn(
+            'name="smtp_password" type="password"',
+            index,
+        )
+        self.assertNotIn('value="smtp.', index)
+        self.assertIn("/api/notifications/config", settings)
+        self.assertIn("Werte werden nicht angezeigt", settings)
 
 
 if __name__ == "__main__":

@@ -22,6 +22,8 @@ import { initUpdater, renderUpdater } from "./js/updater.js";
 window.scrollTo(0, 0);
 
 let navigate = () => {};
+let manualWateringPending = false;
+let manualRefillPending = false;
 
 function currentData() {
   return getStore();
@@ -55,6 +57,7 @@ function renderAll() {
     "test-ha": testHomeAssistant,
     forecast: () => navigate("forecast"),
     "manual-run": runManualWatering,
+    "manual-refill": runManualRefill,
     "resume-automation": toggleAutomation,
   });
   if (data.state) {
@@ -93,7 +96,7 @@ async function performRefresh(options = {}) {
       ...options,
       onState: (state, refreshState) => {
         document.documentElement.dataset.appVersion =
-          `v${state.version || "1.5.0"}`;
+          `v${state.version || "1.5.1"}`;
         setStore({
           state,
           loading: false,
@@ -161,40 +164,70 @@ function uniqueRunId(type) {
 }
 
 async function runManualWatering() {
+  if (manualWateringPending) return;
   const evaluation = getStore().evaluation;
+  if (!evaluation?.manual_run?.available) {
+    showToast(
+      evaluation?.manual_run?.reason
+        || "Manuelles Gießen ist derzeit nicht möglich",
+      { error: true },
+    );
+    return;
+  }
   const accepted = await confirmDialog({
     title: "Bewässerung starten",
     message: `Einen vollständigen Pumpenlauf mit ${Math.round(evaluation?.pump?.consumed_per_cycle_ml || 0)} ml kalibriertem Tankverbrauch anfordern?`,
     confirmText: "Lauf starten",
   });
   if (!accepted) return;
+  manualWateringPending = true;
   try {
     await api.post("/api/manual-run", { auto_weather: true, run_id: uniqueRunId("watering") });
     showToast("Pumpenlauf an Home Assistant übergeben");
     await refreshAll({ afterMutation: true });
   } catch (error) {
     showToast(error.message, { error: true });
+  } finally {
+    manualWateringPending = false;
   }
 }
 
 async function runManualRefill() {
+  if (manualRefillPending) return;
   const evaluation = getStore().evaluation;
-  if (!evaluation?.manual_refill?.available) {
+  const refill = evaluation?.manual_refill || {};
+  const availabilitySpecified =
+    typeof refill.available === "boolean";
+  const fallbackAvailable = Boolean(
+    getStore().state?.home_assistant?.configured
+    && Number(refill.planned_transfer_ml || 0) > 0
+    && !evaluation?.refill?.active_run
+    && !evaluation?.refill?.manual_review_required
+    && !evaluation?.refill?.cooldown_active,
+  );
+  if (
+    availabilitySpecified
+      ? !refill.available
+      : !fallbackAvailable
+  ) {
     showToast(evaluation?.manual_refill?.reason || "Nachfüllung ist derzeit nicht möglich", { error: true });
     return;
   }
   const accepted = await confirmDialog({
     title: "Nachfüllung starten",
-    message: `Geplante Nachfüllmenge ${Math.round(evaluation.manual_refill.planned_transfer_ml || 0)} ml an Home Assistant übergeben?`,
+    message: `Geplante Nachfüllmenge ${Math.round(refill.planned_transfer_ml || 0)} ml an Home Assistant übergeben?`,
     confirmText: "Nachfüllung starten",
   });
   if (!accepted) return;
+  manualRefillPending = true;
   try {
     await api.post("/api/manual-refill", { auto_weather: true, run_id: uniqueRunId("refill") });
     showToast("Nachfüllung an Home Assistant übergeben");
     await refreshAll({ afterMutation: true });
   } catch (error) {
     showToast(error.message, { error: true });
+  } finally {
+    manualRefillPending = false;
   }
 }
 
