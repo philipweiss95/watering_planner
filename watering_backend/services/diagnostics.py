@@ -16,10 +16,12 @@ class DiagnosticsService:
         *,
         settings: SettingsRepository,
         planner_config: Callable[[], dict[str, Any]],
+        smtp_config: Callable[[], SMTPConfig] = SMTPConfig.from_env,
         now: Callable[[], datetime] | None = None,
     ):
         self.settings = settings
         self.planner_config = planner_config
+        self.smtp_config = smtp_config
         self.now = now or (lambda: datetime.now(timezone.utc))
 
     def weather(self) -> dict[str, Any]:
@@ -71,10 +73,9 @@ class DiagnosticsService:
             "stale": stale,
         }
 
-    @staticmethod
-    def notification_public_status() -> dict[str, Any]:
+    def notification_public_status(self) -> dict[str, Any]:
         try:
-            return SMTPConfig.from_env().public_status()
+            return self.smtp_config().public_status()
         except ValueError as exc:
             return {
                 "enabled": False,

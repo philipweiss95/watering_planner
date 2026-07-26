@@ -65,6 +65,21 @@ def test_notification(
     return ApiResponse(context.send_test_notification())
 
 
+def save_notification_configuration(
+    context: ApiContext,
+    request: ApiRequest,
+    _params: dict[str, str],
+) -> ApiResponse:
+    return ApiResponse(
+        {
+            "saved": True,
+            "smtp": context.save_notification_configuration(
+                request.json()
+            ),
+        }
+    )
+
+
 def check_notifications(
     context: ApiContext,
     _request: ApiRequest,
@@ -93,5 +108,9 @@ def register(router: Router) -> None:
     router.get("/api/diagnostics/home-assistant", home_assistant_diagnostics)
     router.get("/api/weather", weather)
     router.post("/api/notifications/test", test_notification)
+    router.post(
+        "/api/notifications/config",
+        save_notification_configuration,
+    )
     router.post("/api/diagnostics/notifications/check", check_notifications)
     router.post("/api/diagnostics/home-assistant/test", test_home_assistant)

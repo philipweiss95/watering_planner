@@ -208,6 +208,7 @@ sind verbindlich. Der schmale Endpunkt
 - `GET /api/diagnostics/home-assistant`: letzter Home-Assistant-Status ohne Webhook-URL
 - `POST /api/diagnostics/notifications/check`: Warnbedingungen sofort prüfen
 - `POST /api/diagnostics/home-assistant/test`: Home Assistant erreichen, ohne den privaten Webhook auszulösen
+- `POST /api/notifications/config`: SMTP-Werte write-only speichern; die Antwort enthält nur Konfigurationsstatus
 - `POST /api/notifications/test`: SMTP-Test-E-Mail senden
 - `POST /api/manual-run`: vollständigen Pumpzyklus sofort über Home Assistant anfordern
 - `POST /api/manual-refill`: Nachfülllauf sofort über Home Assistant anfordern
@@ -236,3 +237,9 @@ Frontend-Module, Bedienänderungen und geprüfte Desktop-/Mobilzustände stehen 
 [docs/frontend-architecture.md](docs/frontend-architecture.md). Die konkreten
 Schritte für Datenbank, Home Assistant, Umgebungsvariablen, PWA und Rollback
 stehen in [docs/migration.md](docs/migration.md).
+
+SMTP kann unter `Setup > Benachrichtigungen` eingerichtet werden. Gespeicherte
+Server-, Konto-, Absender- und Empfängerwerte werden nie wieder in die
+Weboberfläche oder eine Browser-API geladen. Leere Felder behalten den
+bisherigen Wert; `Anmeldedaten löschen` entfernt Benutzername und Passwort.
+Die Variablen aus `.env.synology` bleiben als Fallback kompatibel.

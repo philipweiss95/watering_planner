@@ -36,6 +36,24 @@ class SettingsRepository:
         self.database = database
         self.defaults = defaults or SettingsDefaults()
 
+    def find(
+        self,
+        key: str,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> str | None:
+        if conn is None:
+            with self.database.connection() as active:
+                return self.find(key, conn=active)
+        try:
+            row = conn.execute(
+                "SELECT value FROM app_settings WHERE key = ?",
+                (key,),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            return None
+        return str(row["value"]) if row else None
+
     def get(
         self,
         key: str,
@@ -43,17 +61,8 @@ class SettingsRepository:
         *,
         conn: sqlite3.Connection | None = None,
     ) -> str:
-        if conn is None:
-            with self.database.connection() as active:
-                return self.get(key, default, conn=active)
-        try:
-            row = conn.execute(
-                "SELECT value FROM app_settings WHERE key = ?",
-                (key,),
-            ).fetchone()
-        except sqlite3.OperationalError:
-            return default
-        return str(row["value"]) if row else default
+        value = self.find(key, conn=conn)
+        return default if value is None else value
 
     def set(
         self,

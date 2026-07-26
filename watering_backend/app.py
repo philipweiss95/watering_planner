@@ -28,7 +28,6 @@ from watering_backend.http_api import serve
 from watering_backend.notifications import (
     NotificationService,
     NotificationWorker,
-    SMTPConfig,
 )
 from watering_backend.repositories import (
     EventsRepository,
@@ -69,6 +68,7 @@ from watering_backend.services.scheduling import (
     window_datetime,
 )
 from watering_backend.services.state import StateService
+from watering_backend.services.smtp import SMTPConfigurationService
 from watering_backend.services.updater import UpdaterService
 from watering_backend.services.watering import WateringService
 from watering_backend.services.weather import WeatherService
@@ -152,6 +152,10 @@ class Application:
         self.refill_run_repository = RefillRunsRepository(self.database)
         self.tanks = TanksRepository(self.database)
         self.notification_repository = NotificationsRepository(self.database)
+        self.smtp_configuration = SMTPConfigurationService(
+            self.settings,
+            self.environment,
+        )
 
         self.scheduling = SchedulingService(
             self.settings.planner_config,
@@ -190,11 +194,13 @@ class Application:
         self.diagnostics = DiagnosticsService(
             settings=self.settings,
             planner_config=self.settings.planner_config,
+            smtp_config=self.smtp_configuration.load,
             now=lambda: self.now_datetime(),
         )
         self.notification_transport = NotificationService(
             repository=self.notification_repository,
             now=lambda: self.now_datetime(),
+            config_provider=self.smtp_configuration.load,
         )
         self.notification_service_provider: Callable[
             [],
@@ -218,7 +224,7 @@ class Application:
             version=self.app_version,
             planner_config=self.settings.planner_config,
             weather_diagnostics=self.diagnostics.weather,
-            notification_status=self.diagnostics.notification_public_status,
+            notification_status=self.smtp_configuration.public_status,
             home_assistant_diagnostics=self.home_assistant.diagnostics,
             calibration_status=self.calibration.status,
             completed_cycles_today=self.completed_cycles_today,
@@ -630,10 +636,21 @@ class Application:
         return self.notification_service_provider()
 
     def notification_diagnostics(self) -> dict[str, Any]:
-        return self.notification_service().diagnostics()
+        result = self.notification_service().diagnostics()
+        result["smtp"] = self.smtp_configuration.public_status()
+        return result
 
     def send_test_notification(self) -> dict[str, Any]:
         return self.notification_service().send_test()
+
+    def save_notification_configuration(
+        self,
+        payload: object,
+    ) -> dict[str, Any]:
+        result = self.smtp_configuration.save(payload)
+        self.stop_notification_worker()
+        self.start_notification_worker()
+        return result
 
     def run_notification_check(self) -> list[dict[str, Any]]:
         return self.notification_conditions.run_notification_check()
@@ -686,7 +703,7 @@ class Application:
             self.environment.get("NOTIFICATION_WORKER_DISABLED", "")
         ).lower() in {"1", "true", "yes", "on"}
         try:
-            smtp_config = SMTPConfig.from_env()
+            smtp_config = self.smtp_configuration.load()
         except ValueError:
             return None
         if disabled or not smtp_config.enabled:
