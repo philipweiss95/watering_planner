@@ -42,7 +42,7 @@ Pläne. Historische Beobachtungen werden nicht nachträglich umgedeutet. UTC-
 Grenzen halten die Schlüssel bei Sommer- und Winterzeit eindeutig.
 
 Frühe 1.5-Daten aus `refill_window_observations` werden additiv und
-wiederholbar übernommen. Schema-Version 6 verändert keine vorhandenen
+wiederholbar übernommen. Schema-Version 7 verändert keine vorhandenen
 Bewässerungs-, Nachfüll-, Pflanzen- oder Tankdaten.
 
 ## Persistente Nachfüllläufe
@@ -85,7 +85,10 @@ Unklare Läufe sperren Reservierung und Claim weiterer Läufe. Der Endpunkt
 `POST /api/refill/runs/{run_id}/reconcile` löst sie mit `no_transfer`,
 `full_transfer`, `measured_transfer`, `tank_levels_corrected` oder
 `cancelled_after_review` atomar auf. Abgleichart, Zeitpunkt und Notiz werden
-in `refill_runs` gespeichert. Existiert bereits ein physisches
+in `refill_runs` gespeichert. Schema 7 ergänzt dazu die normalisierte
+Abgleichanfrage. Nur eine inhaltlich identische Wiederholung ist idempotent;
+abweichende Modi, Mengen oder Tankstände werden als Konflikt abgelehnt.
+Existiert bereits ein physisches
 `refill_event`, bleibt es unverändert; dann sind nur Tankstandkorrektur oder
 die dokumentierte Prüfbestätigung zulässig.
 
@@ -94,6 +97,10 @@ einen restaurierbaren Sicherheitstimer und schaltet die Pumpe sowohl beim
 Timerablauf als auch bei einem Home-Assistant-Neustart aus. Ein Neustart kann
 die bis dahin tatsächlich übertragene Teilmenge nicht rekonstruieren; der Lauf
 wird deshalb als unklar gemeldet und muss anhand der Tankstände geprüft werden.
+Fehlt direkt nach `switch.turn_on` die Einschaltbestätigung, wird unverzüglich
+ausgeschaltet und der mögliche Teiltransfer gemeldet. Timer und aktive Kennung
+werden erst nach bestätigtem `off` gelöscht. Bleibt der Zustand unklar, startet
+der Sicherheitswächter erneut und behält die Kennung für den nächsten Versuch.
 
 ## Atomare Konfiguration
 

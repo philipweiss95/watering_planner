@@ -159,8 +159,14 @@ Die Vorlagen trennen die Aufgaben:
 - `Bewaesserung - Manuelle Nachfuellung` nimmt über einen zweiten Webhook einen vom Dashboard angeforderten Nachfülllauf entgegen und startet dasselbe Nachfüllskript.
 - `Bewaesserung - Nachfuellpumpe Sicherheitsabschaltung` schaltet die zweite
   Steckdose unabhängig vom Script aus, falls der Sicherheitstimer abläuft.
+  Bleibt der Schalterzustand unklar, behält sie die aktive `run_id` und
+  startet den Sicherheitstimer für einen weiteren Abschaltversuch neu.
 - `Bewaesserung - Nachfuellpumpe nach Neustart sichern` schaltet die Pumpe
   beim Home-Assistant-Start aus und meldet eine gemerkte `run_id` als unklar.
+- Fehlt nach `switch.turn_on` die Einschaltbestätigung, sendet das Script
+  sofort `switch.turn_off`, wartet höchstens zehn Sekunden auf `off` und
+  meldet dem Planner einen möglichen Teiltransfer. Timer und `run_id` werden
+  erst nach bestätigtem Ausschalten gelöscht.
 
 Falls die Steckdosen in Home Assistant andere Entity-IDs erhalten haben, `switch.smart_plug_mini` und `switch.smart_plug_mini_refill` in der Vorlage `configuration.yaml` ersetzen.
 

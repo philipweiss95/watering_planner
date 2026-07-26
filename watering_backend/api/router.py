@@ -10,6 +10,7 @@ from typing import Any, Callable, Mapping, Protocol
 from urllib.parse import parse_qs, urlparse
 
 from watering_backend.api.responses import ApiResponse, error_response
+from watering_backend.errors import ConflictError
 
 
 class ApiContext(Protocol):
@@ -252,6 +253,10 @@ class Router:
                 continue
             try:
                 return route.handler(context, request, params)
+            except ConflictError as exc:
+                if not route.catch_client_errors:
+                    raise
+                return error_response(str(exc), HTTPStatus.CONFLICT)
             except _CLIENT_ERRORS as exc:
                 if not route.catch_client_errors:
                     raise

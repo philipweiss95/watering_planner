@@ -172,7 +172,7 @@ Vorratswasser versorgt niemals direkt einen Bewässerungslauf.
 
 `Application.initialize()` führt `schema.initialize()` bei jedem Start aus.
 Die Schritte sind additiv und wiederholbar; `PRAGMA user_version` ist aktuell
-`6`.
+`7`.
 
 Wichtige Ergänzungen gegenüber 1.4.2:
 

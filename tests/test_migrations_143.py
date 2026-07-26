@@ -232,6 +232,7 @@ class Migration143Tests(unittest.TestCase):
                 "reconciled_at",
                 "reconciliation_mode",
                 "reconciliation_note",
+                "reconciliation_payload",
             }
             <= refill_run_columns
         )

@@ -102,10 +102,12 @@
         entity_id: switch.smart_plug_mini_refill
       continue_on_error: true
 
-    - action: timer.cancel
-      target:
-        entity_id: timer.watering_refill_pump_guard
-      continue_on_error: true
+    - alias: Ausschalten nach Home-Assistant-Neustart pruefen
+      wait_template: >
+        {{ is_state('switch.smart_plug_mini_refill', 'off') }}
+      timeout:
+        seconds: 10
+      continue_on_timeout: true
 
     - variables:
         interrupted_run_id: "{{ states('input_text.watering_refill_active_run_id') }}"
@@ -119,6 +121,15 @@
                 run_id: "{{ interrupted_run_id }}"
                 error: "Home Assistant wurde waehrend des Nachfuelllaufs neu gestartet."
                 may_have_transferred: true
+              continue_on_error: true
+
+    - choose:
+        - conditions: >
+            {{ is_state('switch.smart_plug_mini_refill', 'off') }}
+          sequence:
+            - action: timer.cancel
+              target:
+                entity_id: timer.watering_refill_pump_guard
               continue_on_error: true
             - action: input_text.set_value
               target:
@@ -146,6 +157,13 @@
         entity_id: switch.smart_plug_mini_refill
       continue_on_error: true
 
+    - alias: Sicherheitsabschaltung bestaetigen
+      wait_template: >
+        {{ is_state('switch.smart_plug_mini_refill', 'off') }}
+      timeout:
+        seconds: 10
+      continue_on_timeout: true
+
     - choose:
         - conditions: >
             {{ interrupted_run_id not in ['', 'unknown', 'unavailable'] }}
@@ -156,11 +174,22 @@
                 error: "Sicherheitsabschaltung nach ausbleibendem Scriptabschluss."
                 may_have_transferred: true
               continue_on_error: true
+
+    - choose:
+        - conditions: >
+            {{ is_state('switch.smart_plug_mini_refill', 'off') }}
+          sequence:
             - action: input_text.set_value
               target:
                 entity_id: input_text.watering_refill_active_run_id
               data:
                 value: ""
+      default:
+        - action: timer.start
+          target:
+            entity_id: timer.watering_refill_pump_guard
+          data:
+            duration: "00:00:15"
 
 - id: bewaesserung_tank_warnung
   alias: Bewaesserung - Tankwarnung

@@ -195,22 +195,40 @@ script:
           - conditions: >
               {{ not is_state('switch.smart_plug_mini_refill', 'on') }}
             sequence:
-              - action: timer.cancel
+              - alias: Nach fehlender Einschaltbestaetigung sofort ausschalten
+                action: switch.turn_off
                 target:
-                  entity_id: timer.watering_refill_pump_guard
+                  entity_id: switch.smart_plug_mini_refill
+                continue_on_error: true
+              - alias: Ausschalten nach fehlender Einschaltbestaetigung pruefen
+                wait_template: >
+                  {{ is_state('switch.smart_plug_mini_refill', 'off') }}
+                timeout:
+                  seconds: 10
+                continue_on_timeout: true
               - action: rest_command.bewaesserung_refill_fail
                 data:
                   run_id: "{{ reserved_run_id }}"
-                  error: "Nachfuellpumpe konnte nicht eingeschaltet werden."
-                  may_have_transferred: false
+                  error: "Einschaltbestaetigung fehlte; ein Teiltransfer ist moeglich."
+                  may_have_transferred: true
                 continue_on_error: true
-              - action: input_text.set_value
-                target:
-                  entity_id: input_text.watering_refill_active_run_id
-                data:
-                  value: ""
-              - stop: Nachfuellpumpe wurde nicht eingeschaltet
-                error: true
+              - choose:
+                  - conditions: >
+                      {{ is_state('switch.smart_plug_mini_refill', 'off') }}
+                    sequence:
+                      - action: timer.cancel
+                        target:
+                          entity_id: timer.watering_refill_pump_guard
+                      - action: input_text.set_value
+                        target:
+                          entity_id: input_text.watering_refill_active_run_id
+                        data:
+                          value: ""
+                      - stop: Einschaltbestaetigung fehlte; Pumpe ist sicher aus
+                        error: true
+                default:
+                  - stop: Pumpenzustand bleibt unklar; Sicherheitsabschaltung bleibt aktiv
+                    error: true
 
       - alias: Persistierte Nachfuelldauer abwarten
         delay:

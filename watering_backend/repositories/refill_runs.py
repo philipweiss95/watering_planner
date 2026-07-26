@@ -235,6 +235,7 @@ class RefillRunsRepository:
         reconciled_at: str,
         reconciliation_mode: str,
         reconciliation_note: str,
+        reconciliation_payload: str,
         completion_reason: str,
         accounted_transfer_ml: int | None = None,
         physical_transfer_ml: int | None = None,
@@ -280,6 +281,7 @@ class RefillRunsRepository:
                 reconciled_at = ?,
                 reconciliation_mode = ?,
                 reconciliation_note = ?,
+                reconciliation_payload = ?,
                 active_slot = NULL,
                 updated_at = ?
             WHERE run_id = ?
@@ -301,6 +303,7 @@ class RefillRunsRepository:
                 reconciled_at,
                 reconciliation_mode,
                 reconciliation_note,
+                reconciliation_payload,
                 reconciled_at,
                 run_id,
             ),

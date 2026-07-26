@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import sqlite3
 from datetime import datetime, timedelta, timezone
@@ -7,6 +8,7 @@ from typing import Any, Callable
 
 from watering_backend.config import local_timezone
 from watering_backend.database import Database
+from watering_backend.errors import ConflictError
 from watering_backend.repositories.events import EventsRepository
 from watering_backend.repositories.refill_runs import RefillRunsRepository
 from watering_backend.repositories.settings import SettingsRepository
@@ -662,6 +664,10 @@ class RefillRunService:
     def _integer_ml(value: object, label: str) -> int:
         if isinstance(value, bool):
             raise ValueError(f"{label} muss eine ganze Zahl sein")
+        if value is None or (
+            isinstance(value, str) and not value.strip()
+        ):
+            raise ValueError(f"{label} darf nicht leer sein")
         try:
             numeric = float(value)
         except (TypeError, ValueError) as exc:
@@ -674,6 +680,66 @@ class RefillRunService:
                 f"{label} muss zwischen 0 und 1000000 ml liegen"
             )
         return integer
+
+    @staticmethod
+    def _canonical_reconciliation_payload(
+        *,
+        mode: str,
+        note: str,
+        measured_transfer_ml: int | None = None,
+        main_tank_current_ml: int | None = None,
+        refill_tank_current_ml: int | None = None,
+    ) -> str:
+        payload: dict[str, object] = {
+            "mode": mode,
+            "note": note,
+        }
+        if mode == "measured_transfer":
+            payload["measured_transfer_ml"] = measured_transfer_ml
+        elif mode == "tank_levels_corrected":
+            payload["main_tank_current_ml"] = main_tank_current_ml
+            payload["refill_tank_current_ml"] = refill_tank_current_ml
+        return json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+    def _stored_reconciliation_payload(
+        self,
+        run: dict[str, Any],
+    ) -> str:
+        persisted = str(run.get("reconciliation_payload") or "")
+        if persisted:
+            try:
+                decoded = json.loads(persisted)
+            except json.JSONDecodeError:
+                return persisted
+            return json.dumps(
+                decoded,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+
+        mode = str(run.get("reconciliation_mode") or "")
+        values: dict[str, Any] = {
+            "mode": mode,
+            "note": str(run.get("reconciliation_note") or ""),
+        }
+        if mode == "measured_transfer":
+            values["measured_transfer_ml"] = run.get(
+                "physical_transfer_ml"
+            )
+        elif mode == "tank_levels_corrected":
+            values["main_tank_current_ml"] = run.get(
+                "main_after_complete_ml"
+            )
+            values["refill_tank_current_ml"] = run.get(
+                "refill_after_complete_ml"
+            )
+        return self._canonical_reconciliation_payload(**values)
 
     def reconcile(
         self,
@@ -696,6 +762,37 @@ class RefillRunService:
         if len(normalized_note) > 500:
             raise ValueError("Abgleichnotiz darf höchstens 500 Zeichen haben")
 
+        normalized_measured_ml: int | None = None
+        normalized_main_ml: int | None = None
+        normalized_refill_ml: int | None = None
+        if normalized_mode == "measured_transfer":
+            normalized_measured_ml = self._integer_ml(
+                measured_transfer_ml,
+                "Gemessene Nachfüllmenge",
+            )
+            if normalized_measured_ml <= 0:
+                raise ValueError(
+                    "Gemessene Nachfüllmenge muss größer als 0 sein"
+                )
+        elif normalized_mode == "tank_levels_corrected":
+            normalized_main_ml = self._integer_ml(
+                main_tank_current_ml,
+                "Haupttankstand",
+            )
+            normalized_refill_ml = self._integer_ml(
+                refill_tank_current_ml,
+                "Vorratstankstand",
+            )
+        reconciliation_payload = (
+            self._canonical_reconciliation_payload(
+                mode=normalized_mode,
+                note=normalized_note,
+                measured_transfer_ml=normalized_measured_ml,
+                main_tank_current_ml=normalized_main_ml,
+                refill_tank_current_ml=normalized_refill_ml,
+            )
+        )
+
         now_utc = self._utc_now()
         now_at = now_utc.isoformat()
         with self.database.connection(immediate=True) as conn:
@@ -707,10 +804,18 @@ class RefillRunService:
                 not bool(run.get("needs_manual_review"))
                 and run.get("reconciliation_mode")
             ):
-                return self._public(
-                    run,
-                    idempotent_replay=True,
-                    now_utc=now_utc,
+                if (
+                    self._stored_reconciliation_payload(run)
+                    == reconciliation_payload
+                ):
+                    return self._public(
+                        run,
+                        idempotent_replay=True,
+                        now_utc=now_utc,
+                    )
+                raise ConflictError(
+                    "Der Nachfülllauf wurde bereits mit einem anderen "
+                    "Abgleich aufgelöst"
                 )
             if not bool(run.get("needs_manual_review")):
                 raise ValueError(
@@ -746,6 +851,7 @@ class RefillRunService:
                     reconciled_at=now_at,
                     reconciliation_mode=normalized_mode,
                     reconciliation_note=normalized_note,
+                    reconciliation_payload=reconciliation_payload,
                     completion_reason=f"reconciled_{normalized_mode}",
                     accounted_transfer_ml=(
                         None if existing_event else 0
@@ -759,14 +865,8 @@ class RefillRunService:
                 )
             elif normalized_mode == "tank_levels_corrected":
                 levels = self.tanks.balcony(conn=conn)
-                main_ml = self._integer_ml(
-                    main_tank_current_ml,
-                    "Haupttankstand",
-                )
-                refill_ml = self._integer_ml(
-                    refill_tank_current_ml,
-                    "Vorratstankstand",
-                )
+                main_ml = int(normalized_main_ml)
+                refill_ml = int(normalized_refill_ml)
                 if main_ml > int(levels["tank_capacity_ml"]):
                     raise ValueError(
                         "Haupttankstand übersteigt die Kapazität"
@@ -797,6 +897,7 @@ class RefillRunService:
                     reconciled_at=now_at,
                     reconciliation_mode=normalized_mode,
                     reconciliation_note=normalized_note,
+                    reconciliation_payload=reconciliation_payload,
                     completion_reason="reconciled_tank_levels",
                     tank_values=tank_values,
                 )
@@ -804,15 +905,8 @@ class RefillRunService:
                 physical_transfer_ml = (
                     int(run["planned_transfer_ml"])
                     if normalized_mode == "full_transfer"
-                    else self._integer_ml(
-                        measured_transfer_ml,
-                        "Gemessene Nachfüllmenge",
-                    )
+                    else int(normalized_measured_ml)
                 )
-                if physical_transfer_ml <= 0:
-                    raise ValueError(
-                        "Gemessene Nachfüllmenge muss größer als 0 sein"
-                    )
                 accounting = self._account_transfer(
                     conn,
                     run=run,
@@ -828,6 +922,7 @@ class RefillRunService:
                     reconciled_at=now_at,
                     reconciliation_mode=normalized_mode,
                     reconciliation_note=normalized_note,
+                    reconciliation_payload=reconciliation_payload,
                     completion_reason=f"reconciled_{normalized_mode}",
                     accounted_transfer_ml=accounting[
                         "main_accounted_ml"
@@ -847,10 +942,18 @@ class RefillRunService:
             if not changed:
                 repeated = self.runs.get(normalized_run_id, conn=conn)
                 if repeated and repeated.get("reconciliation_mode"):
-                    return self._public(
-                        repeated,
-                        idempotent_replay=True,
-                        now_utc=now_utc,
+                    if (
+                        self._stored_reconciliation_payload(repeated)
+                        == reconciliation_payload
+                    ):
+                        return self._public(
+                            repeated,
+                            idempotent_replay=True,
+                            now_utc=now_utc,
+                        )
+                    raise ConflictError(
+                        "Der Nachfülllauf wurde bereits mit einem anderen "
+                        "Abgleich aufgelöst"
                     )
                 raise ValueError(
                     "Nachfülllauf konnte nicht atomar abgeglichen werden"
@@ -964,7 +1067,7 @@ class RefillRunService:
         public_run = {
             key: value
             for key, value in dict(run).items()
-            if key != "active_slot"
+            if key not in {"active_slot", "reconciliation_payload"}
         }
         completed = run.get("status") == "completed"
         terminal = run.get("status") in TERMINAL_REFILL_STATUSES

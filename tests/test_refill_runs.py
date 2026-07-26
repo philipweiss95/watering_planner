@@ -9,6 +9,7 @@ from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 from watering_backend.app import Application, ApplicationPaths
+from watering_backend.errors import ConflictError
 
 
 ROOT = Path(__file__).parent.parent
@@ -733,6 +734,7 @@ class RefillRunLifecycleTests(unittest.TestCase):
         none_repeated = self.application.reconcile_refill_run(
             "reconcile-none",
             mode="no_transfer",
+            note="Pumpe blieb aus",
         )
         self.assertEqual(none_result["status"], "cancelled")
         self.assertEqual(
@@ -807,6 +809,122 @@ class RefillRunLifecycleTests(unittest.TestCase):
                 """
             ).fetchone()
         self.assertEqual(int(event_count["count"]), 2)
+
+    def test_reconciliation_replay_must_match_persisted_request(
+        self,
+    ) -> None:
+        self.clock.value = datetime(
+            2026,
+            6,
+            3,
+            10,
+            0,
+            tzinfo=ZoneInfo("Europe/Berlin"),
+        )
+        self._uncertain_run("reconcile-signature-measured")
+        first = self.application.reconcile_refill_run(
+            "reconcile-signature-measured",
+            mode="measured_transfer",
+            measured_transfer_ml=321,
+            note="vor Ort gemessen",
+        )
+        after_first = self.application.tanks.balcony()
+        repeated = self.application.reconcile_refill_run(
+            "reconcile-signature-measured",
+            mode="measured_transfer",
+            measured_transfer_ml="321",
+            note="vor Ort gemessen",
+        )
+        self.assertTrue(repeated["idempotent_replay"])
+        self.assertEqual(first["transferred_ml"], 321)
+        self.assertEqual(after_first, self.application.tanks.balcony())
+
+        with self.assertRaises(ConflictError):
+            self.application.reconcile_refill_run(
+                "reconcile-signature-measured",
+                mode="measured_transfer",
+                measured_transfer_ml=322,
+                note="vor Ort gemessen",
+            )
+        with self.assertRaises(ConflictError):
+            self.application.reconcile_refill_run(
+                "reconcile-signature-measured",
+                mode="tank_levels_corrected",
+                main_tank_current_ml=7000,
+                refill_tank_current_ml=11000,
+                note="vor Ort gemessen",
+            )
+        self.assertEqual(after_first, self.application.tanks.balcony())
+
+        self.clock.value += timedelta(hours=4)
+        self._uncertain_run("reconcile-signature-levels")
+        corrected = self.application.reconcile_refill_run(
+            "reconcile-signature-levels",
+            mode="tank_levels_corrected",
+            main_tank_current_ml=7250,
+            refill_tank_current_ml=11100,
+            note="Tankstände abgelesen",
+        )
+        corrected_levels = self.application.tanks.balcony()
+        repeated_levels = self.application.reconcile_refill_run(
+            "reconcile-signature-levels",
+            mode="tank_levels_corrected",
+            main_tank_current_ml="7250",
+            refill_tank_current_ml="11100",
+            note="Tankstände abgelesen",
+        )
+        self.assertTrue(repeated_levels["idempotent_replay"])
+        self.assertEqual(corrected["status"], repeated_levels["status"])
+        with self.assertRaises(ConflictError):
+            self.application.reconcile_refill_run(
+                "reconcile-signature-levels",
+                mode="tank_levels_corrected",
+                main_tank_current_ml=0,
+                refill_tank_current_ml=0,
+                note="Tankstände abgelesen",
+            )
+        self.assertEqual(
+            corrected_levels,
+            self.application.tanks.balcony(),
+        )
+
+    def test_empty_corrected_tank_levels_never_become_zero(
+        self,
+    ) -> None:
+        self.clock.value = datetime(
+            2026,
+            6,
+            3,
+            10,
+            0,
+            tzinfo=ZoneInfo("Europe/Berlin"),
+        )
+        self._uncertain_run("reconcile-empty-levels")
+        before = self.application.tanks.balcony()
+        for main_ml, refill_ml in (
+            (None, 12000),
+            ("", 12000),
+            ("7000", None),
+            ("7000", " "),
+        ):
+            with self.subTest(
+                main_ml=main_ml,
+                refill_ml=refill_ml,
+            ):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "darf nicht leer sein",
+                ):
+                    self.application.reconcile_refill_run(
+                        "reconcile-empty-levels",
+                        mode="tank_levels_corrected",
+                        main_tank_current_ml=main_ml,
+                        refill_tank_current_ml=refill_ml,
+                    )
+                self.assertEqual(
+                    before,
+                    self.application.tanks.balcony(),
+                )
 
     def test_expired_old_run_cannot_complete_after_replacement(
         self,

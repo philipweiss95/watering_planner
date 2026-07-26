@@ -90,6 +90,69 @@ class HomeAssistantExampleTests(unittest.TestCase):
         self.assertIn("run_type: automatic", automations)
         self.assertIn("mode: single", automations)
 
+    def test_missing_on_confirmation_keeps_guard_until_off_is_confirmed(
+        self,
+    ) -> None:
+        configuration = (
+            ROOT / "home-assistant" / "configuration.yaml"
+        ).read_text(encoding="utf-8")
+        failure_start = configuration.index(
+            "{{ not is_state('switch.smart_plug_mini_refill', 'on') }}"
+        )
+        failure_end = configuration.index(
+            "- alias: Persistierte Nachfuelldauer abwarten",
+            failure_start,
+        )
+        failure_path = configuration[failure_start:failure_end]
+
+        switch_off = failure_path.index("action: switch.turn_off")
+        off_wait = failure_path.index("wait_template", switch_off)
+        uncertain_report = failure_path.index(
+            "may_have_transferred: true",
+            off_wait,
+        )
+        confirmed_off = failure_path.index(
+            "{{ is_state('switch.smart_plug_mini_refill', 'off') }}",
+            uncertain_report,
+        )
+        guard_cancel = failure_path.index(
+            "action: timer.cancel",
+            confirmed_off,
+        )
+        run_id_clear = failure_path.index(
+            "action: input_text.set_value",
+            guard_cancel,
+        )
+
+        self.assertLess(switch_off, off_wait)
+        self.assertLess(off_wait, uncertain_report)
+        self.assertLess(uncertain_report, confirmed_off)
+        self.assertLess(confirmed_off, guard_cancel)
+        self.assertLess(guard_cancel, run_id_clear)
+        self.assertNotIn("may_have_transferred: false", failure_path)
+        self.assertIn(
+            "Sicherheitsabschaltung bleibt aktiv",
+            failure_path,
+        )
+
+        automations = (
+            ROOT / "home-assistant" / "automations.yaml"
+        ).read_text(encoding="utf-8")
+        guard_start = automations.index(
+            "id: bewaesserung_nachfuellpumpe_sicherheitsabschaltung"
+        )
+        guard_end = automations.index(
+            "- id: bewaesserung_tank_warnung",
+            guard_start,
+        )
+        guard_path = automations[guard_start:guard_end]
+        self.assertIn("wait_template", guard_path)
+        self.assertIn(
+            "{{ is_state('switch.smart_plug_mini_refill', 'off') }}",
+            guard_path,
+        )
+        self.assertIn('duration: "00:00:15"', guard_path)
+
 
 if __name__ == "__main__":
     unittest.main()

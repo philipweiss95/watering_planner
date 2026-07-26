@@ -106,19 +106,21 @@ docker compose start watering-planner
    `server.py`.
 2. Das bestehende `data`-Volume und `.env.synology` bleiben unverändert.
 3. `NOTIFICATIONS_ENABLED` für den ersten Start von 1.5.0 auf `false` lassen.
-4. Beim Start ergänzt `init_db()` automatisch bis Schema-Version 6:
+4. Beim Start ergänzt `init_db()` automatisch bis Schema-Version 7:
    `run_id`-Spalten, Unique-Indizes sowie `notification_state` und
    `notification_log`. Schema 3 ergänzt additive SMTP-Versuchsfelder und
    `refill_window_observations`. Schema 4 ergänzt die persistenten,
    zeitzonensicheren `refill_window_plans` und übernimmt vorhandene
    Beobachtungen idempotent. Schema 5 ergänzt `refill_runs` für persistente
-    Start-/Abschlussvorgänge. Schema 6 ergänzt ausschließlich Metadaten für
-    den manuellen Abgleich ungeklärter Nachfüllläufe. Vorhandene Pflanzen
+    Start-/Abschlussvorgänge. Schema 6 ergänzt Metadaten für den manuellen
+    Abgleich ungeklärter Nachfüllläufe. Schema 7 speichert die normalisierte
+    Abgleichanfrage, damit nur identische Wiederholungen idempotent bleiben.
+    Vorhandene Pflanzen
     einschließlich `size=tree`,
    Ereignisse und Tankstände bleiben erhalten; alle SQLite-Verbindungen
    erzwingen danach Fremdschlüssel.
 5. Nach dem Start `GET /api/health` und `GET /api/state` prüfen. Optional per
-    SQLite `PRAGMA user_version;` kontrollieren; erwartet wird `6`.
+    SQLite `PRAGMA user_version;` kontrollieren; erwartet wird `7`.
 
 Alte Aufrufer ohne `run_id` funktionieren übergangsweise weiter. Sie sind bei
 einem HTTP-Retry aber nicht idempotent. Deshalb müssen alle produktiven

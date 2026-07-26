@@ -30,6 +30,10 @@ import {
   mergeWeatherStatus,
   refreshIssueMessage,
 } from "../public/js/refresh.js";
+import {
+  reconciliationForm,
+  reconciliationPayload,
+} from "../public/js/refill-reconciliation.js";
 import { previewSchedule, validateRefillWindows } from "../public/js/settings.js";
 import { confirmDialog, escapeHTML } from "../public/js/ui.js";
 
@@ -633,6 +637,84 @@ test("diagnostics expose a safe manual refill reconciliation action", () => {
   );
   diagnosticList.children[4].children[3].click();
   assert.equal(selected.run_id, "review-refill-1");
+});
+
+test("refill reconciliation enables and requires only relevant fields", () => {
+  installFakeDOM();
+  const form = reconciliationForm(
+    { run_id: "review-1", status: "expired" },
+    {
+      balcony: {
+        tank_capacity_ml: 20000,
+        refill_tank_capacity_ml: 30000,
+      },
+    },
+  );
+  const mode = findByName(form, "mode");
+  const measured = findByName(form, "measured_transfer_ml");
+  const main = findByName(form, "main_tank_current_ml");
+  const refill = findByName(form, "refill_tank_current_ml");
+
+  assert.equal(measured.disabled, true);
+  assert.equal(main.disabled, true);
+  assert.equal(refill.disabled, true);
+
+  mode.value = "measured_transfer";
+  mode.listeners.change();
+  assert.equal(measured.disabled, false);
+  assert.equal(measured.required, true);
+  assert.equal(main.disabled, true);
+  assert.equal(main.required, false);
+  assert.equal(refill.disabled, true);
+
+  mode.value = "tank_levels_corrected";
+  mode.listeners.change();
+  assert.equal(measured.disabled, true);
+  assert.equal(measured.required, false);
+  assert.equal(main.disabled, false);
+  assert.equal(main.required, true);
+  assert.equal(refill.disabled, false);
+  assert.equal(refill.required, true);
+});
+
+test("refill reconciliation rejects blanks before numeric conversion", () => {
+  assert.throws(
+    () => reconciliationPayload(new Map([
+      ["mode", "measured_transfer"],
+      ["measured_transfer_ml", ""],
+    ])),
+    /darf nicht leer sein/,
+  );
+  assert.throws(
+    () => reconciliationPayload(new Map([
+      ["mode", "tank_levels_corrected"],
+      ["main_tank_current_ml", ""],
+      ["refill_tank_current_ml", "12000"],
+    ])),
+    /Haupttankstand darf nicht leer sein/,
+  );
+  assert.throws(
+    () => reconciliationPayload(new Map([
+      ["mode", "tank_levels_corrected"],
+      ["main_tank_current_ml", "7000"],
+      ["refill_tank_current_ml", "   "],
+    ])),
+    /Vorratstankstand darf nicht leer sein/,
+  );
+  assert.deepEqual(
+    reconciliationPayload(new Map([
+      ["mode", "measured_transfer"],
+      ["measured_transfer_ml", "321"],
+      ["main_tank_current_ml", ""],
+      ["refill_tank_current_ml", ""],
+      ["note", "gemessen"],
+    ])),
+    {
+      mode: "measured_transfer",
+      measured_transfer_ml: 321,
+      note: "gemessen",
+    },
+  );
 });
 
 test("weather status merges successful refresh and cache fallback metadata", () => {

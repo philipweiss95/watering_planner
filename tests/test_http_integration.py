@@ -7,6 +7,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 from unittest.mock import MagicMock
 
@@ -71,6 +72,27 @@ class HttpIntegrationTests(unittest.TestCase):
         )
         with urlopen(request, timeout=10) as response:
             return json.loads(response.read().decode("utf-8"))
+
+    def request_error(
+        self,
+        path: str,
+        payload: dict,
+    ) -> tuple[int, dict]:
+        data = json.dumps(payload).encode("utf-8")
+        request = Request(
+            self.base_url + path,
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with self.assertRaises(HTTPError) as raised:
+            urlopen(request, timeout=10)
+        return (
+            raised.exception.code,
+            json.loads(
+                raised.exception.read().decode("utf-8")
+            ),
+        )
 
     def test_health_state_simulation_and_idempotent_booking(self) -> None:
         self.assertTrue(self.request("/api/health")["ok"])
@@ -254,7 +276,10 @@ class HttpIntegrationTests(unittest.TestCase):
         )["refill_run"]
         repeated = self.request(
             f"/api/refill/runs/{run_id}/reconcile",
-            {"mode": "no_transfer"},
+            {
+                "mode": "no_transfer",
+                "note": "Pumpe vor Ort als aus geprüft",
+            },
         )["refill_run"]
 
         self.assertEqual(reconciled["status"], "cancelled")
@@ -264,6 +289,94 @@ class HttpIntegrationTests(unittest.TestCase):
         )
         self.assertFalse(reconciled["needs_manual_review"])
         self.assertTrue(repeated["idempotent_replay"])
+
+    def test_refill_reconciliation_rejects_blanks_and_conflicts(
+        self,
+    ) -> None:
+        run_id = "http-refill-reconcile-conflict"
+        self.request(
+            "/api/refill/start",
+            {
+                "run_type": "manual",
+                "run_id": run_id,
+                "source": "integration_test",
+            },
+        )
+        self.request(
+            "/api/refill/running",
+            {"run_id": run_id},
+        )
+        self.request(
+            "/api/refill/fail",
+            {
+                "run_id": run_id,
+                "error": "Rückmeldung fehlt",
+                "may_have_transferred": True,
+            },
+        )
+        path = f"/api/refill/runs/{run_id}/reconcile"
+        before = self.request("/api/state")["balcony"]
+
+        missing_status, _missing = self.request_error(
+            path,
+            {
+                "mode": "tank_levels_corrected",
+                "main_tank_current_ml": before["tank_current_ml"],
+            },
+        )
+        blank_status, _blank = self.request_error(
+            path,
+            {
+                "mode": "tank_levels_corrected",
+                "main_tank_current_ml": "",
+                "refill_tank_current_ml": (
+                    before["refill_tank_current_ml"]
+                ),
+            },
+        )
+        self.assertEqual(missing_status, 400)
+        self.assertEqual(blank_status, 400)
+        self.assertEqual(
+            before,
+            self.request("/api/state")["balcony"],
+        )
+
+        payload = {
+            "mode": "tank_levels_corrected",
+            "main_tank_current_ml": before["tank_current_ml"] - 100,
+            "refill_tank_current_ml": (
+                before["refill_tank_current_ml"] - 100
+            ),
+            "note": "vor Ort abgelesen",
+        }
+        first = self.request(path, payload)["refill_run"]
+        repeated = self.request(path, payload)["refill_run"]
+        after = self.request("/api/state")["balcony"]
+        self.assertFalse(first["idempotent_replay"])
+        self.assertTrue(repeated["idempotent_replay"])
+
+        changed_status, changed_error = self.request_error(
+            path,
+            {
+                **payload,
+                "main_tank_current_ml": 0,
+                "refill_tank_current_ml": 0,
+            },
+        )
+        mode_status, _mode_error = self.request_error(
+            path,
+            {
+                "mode": "cancelled_after_review",
+                "note": "vor Ort abgelesen",
+            },
+        )
+        self.assertEqual(changed_status, 409)
+        self.assertEqual(mode_status, 409)
+        self.assertIn("anderen Abgleich", changed_error["error"])
+        self.assertEqual(
+            after,
+            self.request("/api/state")["balcony"],
+        )
 
 
 if __name__ == "__main__":
