@@ -638,6 +638,13 @@ fieldset.settings-section > legend {
   margin: 0;
 }
 
+.diagnostic-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
 .diagnostic-row p {
   color: var(--text-muted);
   font-size: 0.8rem;
@@ -658,7 +665,119 @@ fieldset.settings-section > legend {
   font-size: 0.82rem;
 }
 
+.updater-panel {
+  display: grid;
+  gap: var(--space-4);
+  padding: var(--space-5);
+}
+
+.updater-heading {
+  margin-bottom: 0;
+}
+
+.updater-heading .eyebrow,
+.update-release-heading .eyebrow {
+  margin-bottom: var(--space-1);
+}
+
 .updater-status {
-  min-height: 64px;
+  display: grid;
+  gap: var(--space-3);
+}
+
+.update-summary {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 88px;
+  padding: var(--space-4);
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.update-summary.success {
+  background: linear-gradient(135deg, var(--success-soft), var(--surface));
+  border-color: #bad9c6;
+}
+
+.update-summary.warning {
+  background: linear-gradient(135deg, var(--warning-soft), var(--surface));
+  border-color: #ead49b;
+}
+
+.update-summary.danger {
+  background: linear-gradient(135deg, var(--danger-soft), var(--surface));
+  border-color: #ebc2c6;
+}
+
+.update-summary-copy {
+  min-width: 0;
+}
+
+.update-summary h3,
+.update-summary p {
+  margin: 0;
+}
+
+.update-summary p {
+  margin-top: var(--space-1);
   color: var(--text-muted);
+  font-size: 0.84rem;
+}
+
+.update-release {
+  padding: var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.update-release-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.update-release-heading h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.update-release-notes ul {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.update-release-notes li {
+  padding-left: var(--space-1);
+  color: var(--text-muted);
+  font-size: 0.88rem;
+}
+
+.update-release-notes li::marker {
+  color: var(--brand);
+}
+
+.update-actions,
+.update-release-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.update-actions {
+  justify-content: space-between;
+  padding-top: var(--space-1);
+  border-top: 1px solid var(--border);
+}
+
+.update-release-actions {
+  justify-content: flex-end;
 }

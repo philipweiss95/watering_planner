@@ -14,7 +14,7 @@
     <link rel="manifest" href="/manifest.webmanifest">
     <link rel="apple-touch-icon" sizes="180x180" href="/icons/app-icon-180.png">
     <link rel="icon" type="image/png" sizes="192x192" href="/icons/app-icon-192.png">
-    <link rel="stylesheet" href="/styles.css?v=1.5.1">
+    <link rel="stylesheet" href="/styles.css?v=1.5.2">
   </head>
   <body>
     <a class="skip-link" href="#mainContent">Zum Inhalt</a>
@@ -276,13 +276,25 @@
           <span class="view-hero-icon" data-icon="info" aria-hidden="true"></span>
           <div><p class="eyebrow">Anwendung</p><h1 id="infoTitle">Info</h1><p>Version und lokale Aktualisierung</p></div>
         </section>
-        <section class="content-section">
-          <div class="section-heading"><h2>Updater</h2><span class="status-badge" id="versionBadge">Version</span></div>
-          <div class="updater-status" id="updaterStatus"></div>
-          <div class="button-row">
-            <button class="secondary" id="updateSetupButton" type="button">Updater verbinden</button>
-            <button class="secondary" id="updateCheckButton" type="button">Nach Update suchen</button>
-            <button class="primary" id="updateInstallButton" type="button" disabled>Update installieren</button>
+        <section class="content-section updater-panel">
+          <div class="section-heading updater-heading">
+            <div><p class="eyebrow">Software</p><h2>Updater</h2></div>
+            <span class="status-badge" id="versionBadge">Version</span>
+          </div>
+          <div class="updater-status" id="updaterStatus" aria-live="polite"></div>
+          <section class="update-release" id="updateRelease" aria-labelledby="updateReleaseTitle" hidden>
+            <div class="update-release-heading">
+              <div><p class="eyebrow">Das ist neu</p><h3 id="updateReleaseTitle">Änderungen</h3></div>
+              <span class="status-badge success" id="updateReleaseVersion"></span>
+            </div>
+            <div class="update-release-notes" id="updateReleaseNotes"></div>
+          </section>
+          <div class="update-actions">
+            <button class="secondary update-setup-button" id="updateSetupButton" type="button">Updater verbinden</button>
+            <div class="update-release-actions">
+              <button class="secondary" id="updateCheckButton" type="button">Nach Update suchen</button>
+              <button class="primary" id="updateInstallButton" type="button" disabled>Update installieren</button>
+            </div>
           </div>
         </section>
       </section>
@@ -308,6 +320,6 @@
     </dialog>
     <div class="toast-region" id="toastRegion" role="status" aria-live="polite" aria-atomic="false"></div>
 
-    <script type="module" src="/app.js?v=1.5.1"></script>
+    <script type="module" src="/app.js?v=1.5.2"></script>
   </body>
 </html>

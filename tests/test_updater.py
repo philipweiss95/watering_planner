@@ -366,6 +366,8 @@ class UpdaterTests(unittest.TestCase):
         html = (Path(__file__).resolve().parents[1] / "public" / "index.html").read_text(encoding="utf-8")
 
         self.assertGreater(html.index("<h2>Updater</h2>"), html.index('class="view info-view"'))
+        self.assertIn('id="updateReleaseNotes"', html)
+        self.assertIn('class="update-actions"', html)
 
     def test_configuration_views_have_guided_headers(self):
         html = (Path(__file__).resolve().parents[1] / "public" / "index.html").read_text(encoding="utf-8")

@@ -149,16 +149,16 @@ export function renderDiagnostics(state, evaluation, diagnostics, updater, actio
   container.replaceChildren(...rows.map((row) => {
     const action = row.action && actions[row.action]
       ? element("button", { className: "secondary compact-command", type: "button", text: row.actionLabel })
-      : badge(statusText(row.status), row.status);
+      : null;
     if (row.action && actions[row.action]) {
       action.addEventListener(
         "click",
         () => actions[row.action](row.actionPayload),
       );
     }
-    return element("article", { className: "diagnostic-row" }, [
+    return element("article", { className: `diagnostic-row status-${row.status}` }, [
       element("span", { className: `status-dot ${row.status}`, attrs: { "aria-label": statusText(row.status), role: "img" } }),
-      element("div", {}, [element("h2", { text: row.label }), badge(statusText(row.status), row.status)]),
+      element("div", { className: "diagnostic-heading" }, [element("h2", { text: row.label }), badge(statusText(row.status), row.status)]),
       element("div", { className: "diagnostic-copy" }, [
         element("p", { text: row.message }),
         element("p", { text: row.lastContact ? `Letzter Kontakt: ${relativeAge(row.lastContact)}` : "Noch kein Kontakt" }),

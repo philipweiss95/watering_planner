@@ -4,6 +4,14 @@ Alle stabilen Änderungen am Watering Planner werden in dieser Datei dokumentier
 
 ## [Unreleased]
 
+## [1.5.2] - 2026-07-26
+
+- Die Info-Seite zeigt die vom Updater gelieferten Release Notes wieder als
+  lesbare Änderungsübersicht und stellt Versionsstatus sowie Update-Aktionen
+  klarer dar.
+- Systemdiagnosen und Benachrichtigungsprotokoll sind auf Smartphones als
+  kompakte, vollständig innerhalb des Bildschirms liegende Karten gestaltet.
+
 ## [1.5.1] - 2026-07-26
 
 - Manuelles Gießen und manuelles Nachfüllen sind auf dem Dashboard dauerhaft

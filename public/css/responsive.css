@@ -264,11 +264,94 @@
   }
 
   .diagnostic-row {
-    grid-template-columns: 12px minmax(0, 1fr) auto;
+    position: relative;
+    grid-template-columns: 12px minmax(0, 1fr);
+    align-items: start;
+    gap: var(--space-2) var(--space-3);
+    min-height: 0;
+    padding: var(--space-4);
+    overflow: hidden;
+    box-shadow: var(--shadow);
+  }
+
+  .diagnostic-row::before {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 3px;
+    content: "";
+    background: var(--border-strong);
+  }
+
+  .diagnostic-row.status-success::before {
+    background: var(--success);
+  }
+
+  .diagnostic-row.status-warning::before {
+    background: var(--warning);
+  }
+
+  .diagnostic-row.status-danger::before {
+    background: var(--danger);
+  }
+
+  .diagnostic-heading {
+    justify-content: space-between;
+  }
+
+  .diagnostic-heading h2 {
+    font-size: 0.98rem;
   }
 
   .diagnostic-copy {
-    grid-column: 2 / -1;
+    display: grid;
+    grid-column: 2;
+    gap: var(--space-1);
+  }
+
+  .diagnostic-row > button {
+    grid-column: 2;
+    width: 100%;
+    margin-top: var(--space-1);
+  }
+
+  .notification-item {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    padding: var(--space-4);
+  }
+
+  .notification-item > div {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    min-width: 0;
+  }
+
+  .notification-item > time {
+    grid-column: 2;
+    grid-row: 1;
+    color: var(--text-muted);
+    font-size: 0.76rem;
+  }
+
+  .updater-panel {
+    padding: var(--space-4);
+  }
+
+  .update-summary {
+    grid-template-columns: 12px minmax(0, 1fr);
+  }
+
+  .update-summary > .status-badge {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .update-actions {
+    align-items: stretch;
+  }
+
+  .update-release-actions {
+    flex: 1 1 auto;
   }
 
   .toast-region {
@@ -308,6 +391,17 @@
   }
 
   .manual-action-button {
+    width: 100%;
+  }
+
+  .update-actions,
+  .update-release-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+    width: 100%;
+  }
+
+  .update-actions button {
     width: 100%;
   }
 
