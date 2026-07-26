@@ -1,0 +1,8 @@
+{
+  "name": "watering-planner-frontend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:frontend": "node --test --experimental-test-isolation=none tests/frontend.test.mjs"
+  }
+}

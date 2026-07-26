@@ -149,25 +149,48 @@ Die fertige Vorlage liegt unter [`home-assistant/automations.yaml`](../home-assi
 Die Vorlagen trennen die Aufgaben:
 
 - `script.bewaesserung_pumpzyklus` in `configuration.yaml` schaltet die Meross-Steckdose `switch.smart_plug_mini` für 120 Sekunden ein, schaltet sie wieder aus und verbucht den Lauf.
-- `script.bewaesserung_nachfuellen` schaltet die zweite Meross-Steckdose `switch.smart_plug_mini_refill` fuer die vom Planner berechnete Dauer ein und verbucht danach den Nachfuelllauf.
+- `script.bewaesserung_nachfuellen` reserviert den Lauf zuerst beim Planner,
+  merkt die `run_id`, startet einen Sicherheitstimer, schaltet
+  `switch.smart_plug_mini_refill` ausschließlich für die freigegebene Dauer
+  ein und schließt danach exakt diese Reservierung ab.
 - `Bewaesserung - Tagesfenster` prüft alle 15 Minuten den Sensor und startet das Skript nur bei `run_now`.
 - `Bewaesserung - Manueller Sofortlauf` nimmt über einen Webhook mit zufälliger ID einen sofortigen manuellen Lauf entgegen und startet dasselbe Skript.
-- `Bewaesserung - Haupttank nachfuellen` prüft in den Fenstern `01:00` bis `02:00` und `06:00` bis `07:00` alle 15 Minuten den Planner. Jedes Fenster kann die zweite Pumpe höchstens einmal starten; zwischen Nachfüllvorgängen liegen mindestens drei Stunden. Voraussetzung sind ein vorhandener Nachfüllbedarf, Wasser im 30-l-Vorratstank und eine aktive Nachfüllautomatik. Pro Lauf wird wegen der verbundenen Behälter nur die Hälfte des aktuell fehlenden Haupttank-Inhalts gepumpt. Verpasste Fenster werden tagsüber nicht nachgeholt.
+- `Bewaesserung - Haupttank nachfuellen` prüft alle 15 Minuten den Planner. Der Planner entscheidet anhand der konfigurierten Nachfüllfenster, Abstände, Strategie, Tankstände und Pumpenleistung, ob die zweite Pumpe starten darf. Verpasste Fenster werden nicht nachgeholt.
 - `Bewaesserung - Manuelle Nachfuellung` nimmt über einen zweiten Webhook einen vom Dashboard angeforderten Nachfülllauf entgegen und startet dasselbe Nachfüllskript.
+- `Bewaesserung - Nachfuellpumpe Sicherheitsabschaltung` schaltet die zweite
+  Steckdose unabhängig vom Script aus, falls der Sicherheitstimer abläuft.
+  Bleibt der Schalterzustand unklar, behält sie die aktive `run_id` und
+  startet den Sicherheitstimer für einen weiteren Abschaltversuch neu.
+- `Bewaesserung - Nachfuellpumpe nach Neustart sichern` schaltet die Pumpe
+  beim Home-Assistant-Start aus und meldet eine gemerkte `run_id` als unklar.
+  Ohne bestätigtes `off` bleibt die Kennung erhalten und der Guard-Timer wird
+  erneut für 15 Sekunden gestartet.
+- Fehlt nach `switch.turn_on` die Einschaltbestätigung, sendet das Script
+  sofort `switch.turn_off`, wartet höchstens zehn Sekunden auf `off` und
+  meldet dem Planner einen möglichen Teiltransfer. Timer und `run_id` werden
+  erst nach bestätigtem Ausschalten gelöscht.
 
 Falls die Steckdosen in Home Assistant andere Entity-IDs erhalten haben, `switch.smart_plug_mini` und `switch.smart_plug_mini_refill` in der Vorlage `configuration.yaml` ersetzen.
 
 Die Sensoraktualisierung muss vor der Bedingung stehen. Der zuvor gespeicherte Sensorzustand stammt sonst möglicherweise noch aus der Zeit zwischen zwei Fenstern und ist dort absichtlich `False`.
 
-Der Planer verteilt die empfohlenen Pumpenläufe gleichmäßig zwischen `07:00` und `19:00`. Bei vier Zyklen sind die geplanten Zeitpunkte zum Beispiel `07:00`, `11:00`, `15:00`, `19:00`. Manuell verbuchte Läufe zählen dabei mit. Ein verpasster Zeitpunkt wird bei einer späteren Prüfung nachgeholt.
+Der Planer verteilt die empfohlenen Pumpenläufe gleichmäßig im konfigurierten Bewässerungszeitraum. Manuell verbuchte Läufe zählen dabei mit. Ein verpasster Zeitpunkt wird innerhalb der zulässigen Toleranz bei einer späteren Prüfung nachgeholt.
 
 Der Planer verhindert Überbewässerung, weil nach jedem Lauf `remaining_cycles_today` sinkt. Zusätzlich bleibt `run_now` nach einem verbuchten Lauf 30 Minuten lang gesperrt. Die Skripte und Automationen laufen im Modus `single`, damit ein zweiter Trigger während eines laufenden Pumpenzyklus nicht direkt einen weiteren Lauf startet. Home Assistant muss dadurch keine eigene Verteilungslogik kennen.
 
-Der Haupttank wird rechnerisch aus dem separaten 30-l-Vorratstank nachgefüllt. Die Laufzeit ergibt sich aus der Hälfte des aktuell fehlenden Haupttank-Inhalts und dem in den Planner-Einstellungen hinterlegten Durchsatz der Nachfüllpumpe in ml/min. Die Automatik ist auf jeweils einen Lauf in den Nachtfenstern `01:00` bis `02:00` und `06:00` bis `07:00` begrenzt. Eine feste Mindestpause von drei Stunden verhindert zu dicht aufeinanderfolgende Nachfüllungen. Außerhalb dieser Fenster gibt der Planner keinen automatischen Lauf frei; ein verpasstes Fenster wird nicht nachgeholt. Wenn der Vorratstank leer oder die Nachfüllautomatik im Webinterface deaktiviert ist, bleibt die Pumpe ebenfalls gesperrt. Der manuelle Nachfüllbutton benötigt zusätzlich `HOME_ASSISTANT_REFILL_WEBHOOK_URL` in der Server-Umgebung.
+Der Haupttank wird rechnerisch aus dem separaten Vorratstank nachgefüllt. Tankgrößen, Nachfüllfenster, Mindestpause und Strategie sind konfigurierbar. Die Laufzeit berücksichtigt Pumpendurchsatz, Fensterdauer, freie Haupttankkapazität und verfügbaren Vorrat. Außerhalb dieser Fenster gibt der Planner keinen automatischen Lauf frei; ein verpasstes Fenster wird nicht nachgeholt. Der manuelle Nachfüllbutton benötigt zusätzlich `HOME_ASSISTANT_REFILL_WEBHOOK_URL` in der Server-Umgebung.
+
+Home Assistant kann nach einem Neustart während des Pumpenlaufs nicht sicher
+ermitteln, wie viele Sekunden die Pumpe vorher bereits lief. Die Vorlage
+schaltet deshalb sofort aus und meldet den Lauf als unklar. Im Planner unter
+**System** anschließend Haupt- und Vorratstank prüfen und korrigieren. Die
+Steckdose sollte zusätzlich eine eigene maximale Einschaltzeit unterstützen;
+diese lokale Gerätesicherung bleibt wirksam, falls Home Assistant selbst
+nicht erreichbar ist.
 
 Die Anzeige, wann Haupttank und Vorratstank leer sind, nutzt bis zu 16 Tage Open-Meteo-Vorhersage. Nur wenn die rechnerische Reichweite darüber hinausgeht, extrapoliert der Planner mit dem Durchschnittsverbrauch dieser Prognosetage.
 
-Im Dashboard des Planers wird zusätzlich angezeigt:
+Im Bereich **System** des Planers wird zusätzlich angezeigt:
 
 - ob Home Assistant jetzt starten darf
 - nächstes Zeitfenster
@@ -175,8 +198,11 @@ Im Dashboard des Planers wird zusätzlich angezeigt:
 - ob die Automatik bis morgen pausiert ist
 - Protokoll der letzten Bewässerungsvorgänge mit Zeitpunkt, Menge, Temperatur und Regen
 
-Über die Buttons **Heute pausieren** und **Pause aufheben** kann die Automatik direkt im Planer gesperrt oder wieder freigegeben werden.
-Der Button **Zyklus jetzt starten** fordert unabhängig vom aktuellen Zeitfenster einen vollständigen Lauf an. Der Planer sperrt den Button, wenn Tank, Verschlauchung oder Webhook-Konfiguration keinen Lauf zulassen.
+Über die Aktion an **Bewässerungsautomatik** kann die Automatik direkt im
+Planer bis morgen pausiert oder wieder fortgesetzt werden. Ein manueller Lauf
+wird auf der Startseite angeboten, wenn ein Lauf fällig und vollständig
+versorgbar ist. Der Planer verweigert ihn, wenn Tank, Verschlauchung oder
+Webhook-Konfiguration keinen vollständigen Lauf zulassen.
 
 Für einen iPhone-Kurzbefehl genügt die Aktion **Inhalte von URL abrufen**:
 

@@ -15,6 +15,10 @@ RELEASE_NOTES_PATH = ROOT / "scripts" / "release_notes.py"
 RELEASE_NOTES_SPEC = importlib.util.spec_from_file_location("watering_release_notes", RELEASE_NOTES_PATH)
 release_notes = importlib.util.module_from_spec(RELEASE_NOTES_SPEC)
 RELEASE_NOTES_SPEC.loader.exec_module(release_notes)
+PACKAGE_RELEASE_PATH = ROOT / "scripts" / "package_release.py"
+PACKAGE_RELEASE_SPEC = importlib.util.spec_from_file_location("watering_package_release", PACKAGE_RELEASE_PATH)
+package_release = importlib.util.module_from_spec(PACKAGE_RELEASE_SPEC)
+PACKAGE_RELEASE_SPEC.loader.exec_module(package_release)
 
 
 class UpdaterTests(unittest.TestCase):
@@ -39,6 +43,78 @@ class UpdaterTests(unittest.TestCase):
         self.assertGreater(updater.version_key("1.1.0"), updater.version_key("1.0.9"))
         self.assertGreater(updater.version_key("1.0.0"), updater.version_key("1.0.0-rc.1"))
 
+    def test_modular_update_requires_published_bridge_version(self):
+        self.assertEqual(updater.validate_update_source_version("1.4.3"), "1.4.3")
+        self.assertEqual(updater.validate_update_source_version("1.5.0"), "1.5.0")
+        for value in ("", "1.4.2", "v1.3.3"):
+            with self.subTest(value=value), self.assertRaisesRegex(
+                ValueError,
+                "update_requires_v1_4_3_bridge",
+            ):
+                updater.validate_update_source_version(value)
+
+    def test_installed_project_version_is_authoritative(self):
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            (project / "VERSION").write_text("1.4.3\n", encoding="utf-8")
+
+            self.assertEqual(updater.installed_project_version(project), "1.4.3")
+
+            (project / "VERSION").write_text("not-a-version\n", encoding="utf-8")
+            with self.assertRaisesRegex(
+                ValueError,
+                "installed_project_version_invalid",
+            ):
+                updater.installed_project_version(project)
+
+    def test_install_from_142_is_rejected_before_release_download(self):
+        states = []
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            (project / "VERSION").write_text("1.4.2\n", encoding="utf-8")
+            with (
+                patch.object(updater, "PROJECT_DIR", project),
+                patch.object(updater, "latest_release") as latest_release,
+                patch.object(
+                    updater,
+                    "update_state",
+                    side_effect=lambda **state: states.append(state),
+                ),
+            ):
+                updater.install_update("9.9.9")
+
+        latest_release.assert_not_called()
+        self.assertEqual(states[-1]["status"], "error")
+        self.assertIn("update_requires_v1_4_3_bridge", states[-1]["message"])
+        self.assertFalse(updater.INSTALL_RUNNING.is_set())
+
+    def test_install_ignores_stale_reported_version_when_bridge_is_installed(self):
+        states = []
+        release = {
+            "version": "1.4.3",
+            "name": "v1.4.3",
+            "publishedAt": "2026-07-25T18:25:35Z",
+            "notes": "",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            (project / "VERSION").write_text("1.4.3\n", encoding="utf-8")
+            with (
+                patch.object(updater, "PROJECT_DIR", project),
+                patch.object(updater, "latest_release", return_value=release),
+                patch.object(
+                    updater,
+                    "update_state",
+                    side_effect=lambda **state: states.append(state),
+                ),
+            ):
+                updater.install_update("1.4.2")
+
+        self.assertEqual(states[0]["currentVersion"], "1.4.3")
+        self.assertEqual(states[0]["reportedVersion"], "1.4.2")
+        self.assertEqual(states[-1]["status"], "ok")
+        self.assertFalse(updater.INSTALL_RUNNING.is_set())
+
     def test_archive_validation_rejects_path_traversal(self):
         with tempfile.TemporaryDirectory() as directory:
             archive_path = Path(directory) / "release.zip"
@@ -48,6 +124,28 @@ class UpdaterTests(unittest.TestCase):
             with zipfile.ZipFile(archive_path) as archive:
                 with self.assertRaisesRegex(ValueError, "invalid_release_archive_layout"):
                     updater.safe_zip_members(archive, "watering-planner-1.0.0")
+
+    def test_release_package_contains_modular_backend_and_is_updater_compatible(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory) / "dist"
+            archive_path = output_dir / f"watering-planner-{package_release.VERSION}.zip"
+            with (
+                patch.object(package_release, "OUTPUT_DIR", output_dir),
+                patch.object(package_release, "ARCHIVE", archive_path),
+            ):
+                package_release.main()
+
+            with zipfile.ZipFile(archive_path) as archive:
+                names = {item.filename for item in archive.infolist()}
+                root = f"watering-planner-{package_release.VERSION}"
+                self.assertIn(f"{root}/watering_backend/__init__.py", names)
+                self.assertIn(f"{root}/package.json", names)
+                updater.safe_zip_members(archive, root)
+
+        dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+        self.assertIn("COPY watering_backend ./watering_backend", dockerfile)
+        self.assertIn("watering_backend", updater.MANAGED_PATHS)
+        self.assertIn("watering_backend", package_release.INCLUDES)
 
     def test_runtime_override_uses_real_host_mounts(self):
         with tempfile.TemporaryDirectory() as directory:

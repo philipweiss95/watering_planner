@@ -1,0 +1,91 @@
+name: Tests
+
+on:
+  push:
+    branches:
+      - main
+      - "codex/**"
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Compile backend
+        run: python -m compileall -q server.py watering_backend
+      - name: Run unit tests
+        env:
+          NOTIFICATION_WORKER_DISABLED: "true"
+        run: python -m unittest discover -s tests -v
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Run frontend tests
+        run: npm run test:frontend
+      - name: Prepare compose environment
+        run: |
+          cat > .env.synology <<'EOF'
+          NOTIFICATION_WORKER_DISABLED=true
+          NOTIFICATIONS_ENABLED=false
+          EOF
+      - name: Validate compose configuration
+        run: docker compose config
+      - name: Build container
+        run: docker compose build
+      - name: Prepare v1.4.3 runtime fixture
+        run: |
+          PYTHONPATH=tests python - <<'PY'
+          from pathlib import Path
+          from v143_fixture import create_v143_database
+
+          database = Path("data/watering.sqlite3")
+          database.unlink(missing_ok=True)
+          create_v143_database(database)
+          PY
+          cat > .env.synology <<'EOF'
+          NOTIFICATION_WORKER_DISABLED=true
+          NOTIFICATIONS_ENABLED=false
+          SMTP_PASSWORD=ci-runtime-secret-must-not-leak
+          EOF
+      - name: Start and verify migrated release containers
+        run: |
+          docker compose up -d --no-build --wait --wait-timeout 120
+          python scripts/verify_release_runtime.py \
+            --expected-version 1.5.0 \
+            --run-prefix "ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --forbidden-value ci-runtime-secret-must-not-leak
+      - name: Stop runtime containers
+        if: always()
+        run: |
+          touch .env.synology
+          docker compose down --remove-orphans
+      - name: Build and verify 1.5.0 update package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BRIDGE_DIR="$RUNNER_TEMP/v1.4.3-release"
+          mkdir -p "$BRIDGE_DIR"
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/v1.4.3" \
+            > "$BRIDGE_DIR/release.json"
+          gh release download v1.4.3 \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "watering-planner-1.4.3.zip*" \
+            --dir "$BRIDGE_DIR"
+          python scripts/package_release.py
+          python scripts/verify_release_package.py \
+            --expected-version 1.5.0 \
+            --bridge-tag v1.4.3 \
+            --bridge-tag-object f08acb6c5216c987cb6581513de499c9360d9f1a \
+            --bridge-commit e02ceb198264104fd8f2bc68eb8db7b24ac00dc8 \
+            --bridge-release-metadata "$BRIDGE_DIR/release.json" \
+            --bridge-release-archive "$BRIDGE_DIR/watering-planner-1.4.3.zip" \
+            --bridge-release-checksum "$BRIDGE_DIR/watering-planner-1.4.3.zip.sha256"

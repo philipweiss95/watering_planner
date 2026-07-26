@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -32,12 +33,58 @@ STATE_PATH = DATA_DIR / "status.json"
 SHARED_TOKEN_PATH = Path("/data/.updater-token")
 COMPOSE_FILE = PROJECT_DIR / "docker-compose.yml"
 ASSET_PREFIX = "watering-planner"
+MINIMUM_UPDATE_SOURCE_VERSION = "1.4.3"
 MANAGED_PATHS = (
-    "server.py", "public", "updater", "home-assistant", "docs", "scripts", ".github",
+    "server.py", "watering_backend", "public", "updater", "home-assistant", "docs", "scripts", ".github",
     "Dockerfile", "docker-compose.yml", ".dockerignore", ".gitignore", ".env.synology.example",
-    "README.md", "CHANGELOG.md", "VERSION",
+    "README.md", "CHANGELOG.md", "VERSION", "package.json",
+)
+REQUIRED_ARCHIVE_FILES = (
+    "server.py",
+    "watering_backend/__init__.py",
+    "watering_backend/app.py",
+    "watering_backend/database.py",
+    "watering_backend/schema.py",
+    "watering_backend/api/handler.py",
+    "watering_backend/repositories/settings.py",
+    "watering_backend/services/forecast.py",
+    "watering_backend/services/weather.py",
+    "public/index.html",
+    "public/app.js",
+    "public/styles.css",
+    "public/sw.js",
+    "public/js/api.js",
+    "public/css/tokens.css",
+    "updater/Dockerfile",
+    "updater/updater.py",
+    "home-assistant/automations.yaml",
+    "home-assistant/configuration.yaml",
+    "docs/migration.md",
+    "scripts/package_release.py",
+    "scripts/verify_release_package.py",
+    ".github/workflows/release.yml",
+    ".github/workflows/tests.yml",
+    "Dockerfile",
+    "docker-compose.yml",
+    ".dockerignore",
+    ".gitignore",
+    ".env.synology.example",
+    "README.md",
+    "CHANGELOG.md",
+    "VERSION",
+    "package.json",
 )
 INSTALL_RUNNING = threading.Event()
+INSTALL_CLAIM_LOCK = threading.Lock()
+
+
+def claim_install() -> bool:
+    """Atomically reserve this updater process for one installation."""
+    with INSTALL_CLAIM_LOCK:
+        if INSTALL_RUNNING.is_set():
+            return False
+        INSTALL_RUNNING.set()
+        return True
 
 
 def now_iso() -> str:
@@ -81,6 +128,30 @@ def version_key(value: str) -> tuple:
     base, _, prerelease = normalize_version(value).partition("-")
     parts = tuple(int(item) for item in base.split(".")) if base else (0, 0, 0)
     return (*parts, 1 if not prerelease else 0, prerelease)
+
+
+def validate_update_source_version(value: object) -> str:
+    """Require the published updater bridge before installing modular releases."""
+    version = normalize_version(value)
+    if not version or version_key(version) < version_key(MINIMUM_UPDATE_SOURCE_VERSION):
+        raise ValueError(
+            f"update_requires_v{MINIMUM_UPDATE_SOURCE_VERSION.replace('.', '_')}_bridge: "
+            f"Zuerst die Brueckenversion {MINIMUM_UPDATE_SOURCE_VERSION} installieren."
+        )
+    return version
+
+
+def installed_project_version(project_dir: Path | None = None) -> str:
+    """Read the authoritative installed version from the project bind mount."""
+    version_path = (project_dir or PROJECT_DIR) / "VERSION"
+    try:
+        raw_version = version_path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise ValueError("installed_project_version_missing") from exc
+    version = normalize_version(raw_version)
+    if not version:
+        raise ValueError("installed_project_version_invalid")
+    return version
 
 
 def github_request(url: str, token: str, accept: str = "application/vnd.github+json") -> bytes:
@@ -289,6 +360,83 @@ def wait_for_verified_updater(container_id: str, expected_image_id: str, timeout
     raise RuntimeError("updater_replacement_health_timeout")
 
 
+def latest_rollback_backup() -> Path:
+    state = read_json_file(STATE_PATH, {})
+    backup_dir = DATA_DIR / "backups"
+    backup_name = Path(str(state.get("backupName", ""))).name
+    if backup_name:
+        candidate = backup_dir / backup_name
+        if candidate.is_file():
+            return candidate
+    current_version = normalize_version(state.get("currentVersion"))
+    pattern = f"watering-planner-{current_version or 'unknown'}-*.tar.gz"
+    candidates = list(backup_dir.glob(pattern))
+    if not candidates:
+        raise RuntimeError("rollback_backup_not_found")
+    return max(candidates, key=lambda candidate: candidate.stat().st_mtime_ns)
+
+
+def rollback_failed_handoff(runtime_file: Path, project_name: str) -> str:
+    """Restore the bridge files and both images when the updater handoff fails."""
+    backup_path = latest_rollback_backup()
+    restore_managed_backup(backup_path)
+    run(
+        helper_compose_command(
+            project_name,
+            runtime_file,
+            ["build", "--no-cache", "watering-planner", "updater"],
+        ),
+        timeout=900,
+    )
+    run(
+        helper_compose_command(
+            project_name,
+            runtime_file,
+            [
+                "up",
+                "-d",
+                "--no-deps",
+                "--force-recreate",
+                "watering-planner",
+                "updater",
+            ],
+        ),
+        timeout=900,
+    )
+    planner_id = run(
+        helper_compose_command(
+            project_name,
+            runtime_file,
+            ["ps", "-q", "watering-planner"],
+        )
+    )
+    updater_id = run(
+        helper_compose_command(
+            project_name,
+            runtime_file,
+            ["ps", "-q", "updater"],
+        )
+    )
+    if not planner_id or not updater_id:
+        raise RuntimeError("rollback_container_not_created")
+    wait_for_container(planner_id)
+    restored_version = (PROJECT_DIR / "VERSION").read_text(encoding="utf-8").strip()
+    expected_image_id = run([
+        "docker",
+        "image",
+        "inspect",
+        "--format",
+        "{{.Id}}",
+        f"watering-planner-updater:{restored_version}",
+    ])
+    wait_for_verified_updater(updater_id, expected_image_id)
+    cleanup_other_updater_containers(project_name, updater_id)
+    remaining = updater_container_ids(project_name)
+    if len(remaining) != 1 or not same_container(remaining[0], updater_id):
+        raise RuntimeError("rollback_updater_reconciliation_failed")
+    return restored_version
+
+
 def perform_updater_handoff(
     runtime_file: Path,
     previous_container_id: str,
@@ -345,8 +493,28 @@ def perform_updater_handoff(
                     time.sleep(3)
         raise RuntimeError(f"updater_handoff_failed_after_retries: {last_error}")
     except Exception as exc:
-        update_state(status="error", phase="error", message=str(exc), finishedAt=now_iso())
-        raise
+        try:
+            restored_version = rollback_failed_handoff(runtime_file, project_name)
+        except Exception as rollback_error:
+            message = f"{exc}; rollback_failed: {rollback_error}"
+            update_state(
+                status="error",
+                phase="error",
+                message=message,
+                finishedAt=now_iso(),
+            )
+            raise RuntimeError(message) from exc
+        message = (
+            f"{exc}; Programmdateien und Container wurden auf "
+            f"{restored_version} zurueckgesetzt."
+        )
+        update_state(
+            status="error",
+            phase="rolled_back",
+            message=message,
+            finishedAt=now_iso(),
+        )
+        raise RuntimeError(message) from exc
     finally:
         runtime_file.unlink(missing_ok=True)
 
@@ -402,17 +570,101 @@ def reconcile_updater_on_startup(project_version: str | None = None) -> None:
         print(f"Updater startup reconciliation warning: {exc}")
 
 
+def remove_managed_paths(project_dir: Path | None = None) -> None:
+    root = project_dir or PROJECT_DIR
+    for entry in MANAGED_PATHS:
+        target = root / entry
+        if target.is_dir() and not target.is_symlink():
+            shutil.rmtree(target)
+        elif target.exists() or target.is_symlink():
+            target.unlink()
+
+
+def backup_managed_paths(
+    backup_path: Path,
+    project_dir: Path | None = None,
+) -> None:
+    root = project_dir or PROJECT_DIR
+    backup_path.parent.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(backup_path, "w:gz") as tar:
+        for entry in MANAGED_PATHS:
+            candidate = root / entry
+            if candidate.exists() or candidate.is_symlink():
+                tar.add(candidate, arcname=entry)
+
+
+def install_managed_paths(
+    source: Path,
+    project_dir: Path | None = None,
+) -> None:
+    root = project_dir or PROJECT_DIR
+    remove_managed_paths(root)
+    for entry in MANAGED_PATHS:
+        incoming = source / entry
+        target = root / entry
+        if not incoming.exists():
+            continue
+        if incoming.is_dir():
+            shutil.copytree(incoming, target)
+        else:
+            shutil.copy2(incoming, target)
+
+
+def restore_managed_backup(
+    backup_path: Path,
+    project_dir: Path | None = None,
+) -> None:
+    root = project_dir or PROJECT_DIR
+    remove_managed_paths(root)
+    with tarfile.open(backup_path, "r:gz") as tar:
+        tar.extractall(root, filter="data")
+
+
+def wait_for_container(container_id: str, timeout: int = 120) -> None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        status = run([
+            "docker",
+            "inspect",
+            "--format",
+            "{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}",
+            container_id,
+        ])
+        if status in {"healthy", "running"}:
+            return
+        if status in {"unhealthy", "exited", "dead"}:
+            raise RuntimeError(f"container_{status}")
+        time.sleep(2)
+    raise RuntimeError("container_health_timeout")
+
+
 def safe_zip_members(archive: zipfile.ZipFile, expected_root: str) -> list[zipfile.ZipInfo]:
     members = archive.infolist()
     prefix = f"{expected_root}/"
     if not members:
         raise ValueError("invalid_release_archive_layout")
+    seen = set()
     for member in members:
         path = PurePosixPath(member.filename)
-        if member.filename.startswith("/") or ".." in path.parts or not member.filename.startswith(prefix):
+        unix_mode = (member.external_attr >> 16) & 0xFFFF
+        if (
+            not member.filename
+            or "\x00" in member.filename
+            or "\\" in member.filename
+            or member.filename.startswith("/")
+            or path.is_absolute()
+            or ".." in path.parts
+            or not member.filename.startswith(prefix)
+            or stat.S_ISLNK(unix_mode)
+            or member.filename in seen
+        ):
             raise ValueError("invalid_release_archive_layout")
+        seen.add(member.filename)
+    bad_member = archive.testzip()
+    if bad_member is not None:
+        raise ValueError("invalid_release_archive_crc")
     names = {member.filename.rstrip("/") for member in members}
-    for required in ("server.py", "public/index.html", "updater/Dockerfile", "docker-compose.yml", "CHANGELOG.md", "VERSION"):
+    for required in REQUIRED_ARCHIVE_FILES:
         if f"{expected_root}/{required}" not in names:
             raise ValueError(f"release_archive_missing_{required}")
     return members
@@ -422,13 +674,26 @@ def download_asset(asset: dict, token: str, destination: Path) -> None:
     destination.write_bytes(github_request(asset["url"], token, "application/octet-stream"))
 
 
-def install_update(current_version: str) -> None:
+def install_update(reported_version: str = "") -> None:
     try:
         backup_path = None
         runtime_file = None
         handoff_scheduled = False
         try:
-            update_state(type="install", status="running", phase="release", step=1, totalSteps=8, currentVersion=current_version, message="Suche nach dem neuesten stabilen Release.")
+            current_version = validate_update_source_version(installed_project_version())
+            state_values = {
+                "type": "install",
+                "status": "running",
+                "phase": "release",
+                "step": 1,
+                "totalSteps": 8,
+                "currentVersion": current_version,
+                "message": "Suche nach dem neuesten stabilen Release.",
+            }
+            normalized_reported = normalize_version(reported_version)
+            if normalized_reported and normalized_reported != current_version:
+                state_values["reportedVersion"] = normalized_reported
+            update_state(**state_values)
             release = latest_release()
             update_state(
                 targetVersion=release["version"],
@@ -464,22 +729,11 @@ def install_update(current_version: str) -> None:
                 backups = DATA_DIR / "backups"
                 backups.mkdir(exist_ok=True)
                 backup_path = backups / f"watering-planner-{current_version or 'unknown'}-{int(time.time())}.tar.gz"
+                update_state(backupName=backup_path.name)
                 update_state(phase="backup", step=4, message="Sichere die bisherige Programmversion.")
-                with tarfile.open(backup_path, "w:gz") as tar:
-                    for entry in MANAGED_PATHS:
-                        candidate = PROJECT_DIR / entry
-                        if candidate.exists():
-                            tar.add(candidate, arcname=entry)
+                backup_managed_paths(backup_path)
                 update_state(phase="files", step=5, message="Übernehme neue Programmdateien; Daten und Einstellungen bleiben erhalten.")
-                for entry in MANAGED_PATHS:
-                    target = PROJECT_DIR / entry
-                    incoming = source / entry
-                    if target.is_dir():
-                        shutil.rmtree(target)
-                    elif target.exists():
-                        target.unlink()
-                    if incoming.exists():
-                        shutil.copytree(incoming, target) if incoming.is_dir() else shutil.copy2(incoming, target)
+                install_managed_paths(source)
                 runtime_file = DATA_DIR / f"runtime-{int(time.time())}.yml"
                 runtime_override(host_project_dir(), runtime_file)
                 update_state(phase="build", step=6, message="Baue das neue Container-Image.")
@@ -487,33 +741,22 @@ def install_update(current_version: str) -> None:
                 update_state(phase="restart", step=7, message="Starte den Planner neu und prüfe seinen Zustand.")
                 compose(["up", "-d", "--no-deps", "--force-recreate", "watering-planner"], runtime_file)
                 container_id = compose(["ps", "-q", "watering-planner"], runtime_file)
-                deadline = time.time() + 120
-                while time.time() < deadline:
-                    status = run(["docker", "inspect", "--format", "{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}", container_id])
-                    if status in {"healthy", "running"}:
-                        break
-                    if status in {"unhealthy", "exited", "dead"}:
-                        raise RuntimeError(f"watering_planner_container_{status}")
-                    time.sleep(2)
-                else:
-                    raise RuntimeError("watering_planner_health_timeout")
+                wait_for_container(container_id)
                 update_state(phase="handoff", step=8, message="Aktiviere den neuen Updater ohne den laufenden Installationsprozess zu unterbrechen.")
                 schedule_updater_handoff(runtime_file, release["version"])
                 handoff_scheduled = True
         except Exception as exc:
             if backup_path and backup_path.exists():
                 try:
-                    for entry in MANAGED_PATHS:
-                        target = PROJECT_DIR / entry
-                        if target.is_dir():
-                            shutil.rmtree(target)
-                        elif target.exists():
-                            target.unlink()
-                    with tarfile.open(backup_path, "r:gz") as tar:
-                        tar.extractall(PROJECT_DIR, filter="data")
+                    restore_managed_backup(backup_path)
                     if runtime_file and runtime_file.exists():
-                        compose(["build", "--no-cache", "watering-planner"], runtime_file)
+                        compose(
+                            ["build", "--no-cache", "watering-planner", "updater"],
+                            runtime_file,
+                        )
                         compose(["up", "-d", "--no-deps", "--force-recreate", "watering-planner"], runtime_file)
+                        container_id = compose(["ps", "-q", "watering-planner"], runtime_file)
+                        wait_for_container(container_id)
                 except Exception as rollback_error:
                     exc = RuntimeError(f"{exc}; rollback_failed: {rollback_error}")
             update_state(status="error", phase="error", message=str(exc), finishedAt=now_iso())
@@ -579,16 +822,25 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(HTTPStatus.UNAUTHORIZED, {"reason": "updater_auth_required"})
                 return
             payload = self.payload()
-            current = normalize_version(payload.get("currentVersion"))
+            reported_current = normalize_version(payload.get("currentVersion"))
             if self.path == "/api/check":
+                current = validate_update_source_version(installed_project_version())
                 release = latest_release()
                 self.send_json(HTTPStatus.OK, {"ok": True, "currentVersion": current, "updateAvailable": version_key(release["version"]) > version_key(current), "release": public_release(release)})
                 return
             if self.path == "/api/install":
-                if INSTALL_RUNNING.is_set():
+                validate_update_source_version(installed_project_version())
+                if not claim_install():
                     raise ValueError("update_already_running")
-                INSTALL_RUNNING.set()
-                threading.Thread(target=install_update, args=(current,), daemon=True).start()
+                try:
+                    threading.Thread(
+                        target=install_update,
+                        args=(reported_current,),
+                        daemon=True,
+                    ).start()
+                except Exception:
+                    INSTALL_RUNNING.clear()
+                    raise
                 self.send_json(HTTPStatus.ACCEPTED, {"ok": True, "accepted": True})
                 return
             self.send_json(HTTPStatus.NOT_FOUND, {"reason": "not_found"})

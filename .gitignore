@@ -5,3 +5,5 @@ data/*.sqlite3-*
 .env.synology
 dist/
 .portable-gh/
+.test-tmp/
+.runtime-preview/

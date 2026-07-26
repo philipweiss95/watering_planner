@@ -2,6 +2,67 @@
 
 Alle stabilen Änderungen am Watering Planner werden in dieser Datei dokumentiert.
 
+## [1.5.0] - 2026-07-25
+
+- Backend in klar getrennte Module für HTTP, Datenbank, Wetter, Pflanzenmodell,
+  Anschlussoptimierung, Planung, Tankprognose, Home Assistant und
+  Benachrichtigungen aufgeteilt.
+- Tageswetter, aktuelle Bedingungen und manuelle Simulationen fachlich
+  getrennt; veraltete Wetterdaten werden erkannt.
+- Chronologische 16-Tage-Tankprognose mit Bewässerungs- und Nachfüllereignissen
+  sowie eindeutigem erstem nicht versorgbaren Lauf ergänzt.
+- Bewässerungs- und Nachfüllbuchungen mit `run_id`, SQLite-Transaktionen und
+  Schutz vor doppelter Verbuchung abgesichert.
+- Globale Anschlussoptimierung, konfigurierbare Tanks und Zeitfenster sowie
+  persistente SMTP-Benachrichtigungen ergänzt.
+- Oberfläche modularisiert und für Dashboard, Prognose, Pflanzen, Schläuche,
+  Einstellungen, Diagnose und iPhone-PWA neu strukturiert.
+- Bestehende SQLite-Datenbanken werden beim ersten Start automatisch auf
+  Schema-Version 7 migriert.
+- Die bestehende Pflanzengröße `tree` (`Baum/Strauch`) bleibt beim Laden,
+  Bearbeiten, Migrieren und Speichern von Schlauchzuordnungen unverändert.
+- Diagramm und Tagesliste zeigen exakt die ersten 16 lokalen Kalendertage,
+  während Reichweitenberechnung und Warnungen intern bis zu 45 Tage nutzen.
+- Persistente, DST-sichere Nachfüllfensterpläne erkennen verpasste Läufe auch
+  nach Worker-Ausfällen oder Neustarts; spezifische Ursachen erzeugen keine
+  zusätzliche generische E-Mail-Warnung.
+- Wetterstatus und Cache-Fallback werden nach einem Abruf ohne erneuten
+  Open-Meteo-Netzaufruf sofort und konsistent im Frontend aktualisiert.
+- Updatepfad vom unveränderten Release 1.4.3 durch Paket-, Migrations-,
+  Rollback- und Fehlerfallprüfungen abgesichert.
+- Releaseprüfung um Paketinhalt, SHA-256-Prüfsumme, Versionskonsistenz und das
+  vollständige modulare Backend erweitert.
+- Automatische und manuelle Nachfüllungen reservieren Menge, Dauer und
+  Zeitfenster nun vor dem Pumpenstart persistent. Abschluss, Tankbilanz,
+  Ereignis und Fenstererfüllung erfolgen danach atomar mit derselben `run_id`.
+- Schlauchzuordnungen und die vollständige Einstellungsseite werden jeweils
+  erst nach Gesamtvalidierung in genau einer SQLite-Transaktion gespeichert.
+- Offene, abgelaufene und inkonsistent abgeschlossene Nachfüllläufe werden in
+  API und Systemdiagnose sichtbar; die Home-Assistant-Vorlage enthält eine
+  unabhängige Sicherheitsabschaltung.
+- Nur der erste atomare Claim eines reservierten Nachfülllaufs autorisiert den
+  Pumpenstart. Unklare Läufe können anschließend mit einem persistenten,
+  atomaren manuellen Abgleich sicher aufgelöst werden.
+- Fehlende Home-Assistant-Einschaltbestätigungen lösen sofort eine geprüfte
+  Sicherheitsabschaltung aus; Timer und Laufkennung bleiben bis zum bestätigten
+  Ausschalten erhalten.
+- Auch nach einem Home-Assistant-Neustart wird bei unklarem Pumpenzustand der
+  Guard-Timer erneut gestartet und die aktive Laufkennung beibehalten.
+- Leere Tankkorrekturen werden in Oberfläche und API abgelehnt. Wiederholte
+  Abgleiche sind nur bei identischem Modus und identischen Werten idempotent;
+  widersprüchliche Wiederholungen liefern einen Konflikt.
+
+## [1.4.3] - 2026-07-25
+
+- Bereits veröffentlichte Brückenversion für das Update von 1.4.x auf 1.5.0.
+- Updater auf die zukünftigen modularen Pfade einschließlich
+  `watering_backend/`, `package.json`, `public/`, `updater/`,
+  `home-assistant/`, `docs/` und `scripts/` vorbereitet.
+- Sicherung und Rollback so erweitert, dass neu hinzugekommene verwaltete
+  Pfade entfernt und zuvor vorhandene Programmdateien wiederhergestellt werden.
+- Persistente Daten unter `data/` und private Einstellungen in
+  `.env.synology` bleiben vom Dateiupdate unangetastet.
+
 ## [1.4.2] - 2026-07-24
 
 - Tankprognose auf den letzten vollständig versorgbaren Gießlauf umgestellt und dabei Wettervorhersage, aktuelle Zyklusplanung sowie den kalibrierten tatsächlichen Tankverbrauch je Lauf berücksichtigt.

@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-    <meta name="theme-color" content="#0b4f36">
+    <meta name="theme-color" content="#184f3c">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Gießplaner">
@@ -14,544 +14,263 @@
     <link rel="manifest" href="/manifest.webmanifest">
     <link rel="apple-touch-icon" sizes="180x180" href="/icons/app-icon-180.png">
     <link rel="icon" type="image/png" sizes="192x192" href="/icons/app-icon-192.png">
-    <link rel="stylesheet" href="/styles.css?v=1.4.2">
+    <link rel="stylesheet" href="/styles.css?v=1.5.0">
   </head>
   <body>
+    <a class="skip-link" href="#mainContent">Zum Inhalt</a>
     <header class="topbar">
       <div class="topbar-inner">
-        <div class="topbar-head">
-          <div>
-            <p class="eyebrow">Bewässerungssystem</p>
-            <h1>Meine Terrasse</h1>
-          </div>
-          <div class="tank" id="tankStatus">Tank</div>
-        </div>
-        <nav class="app-nav" aria-label="Bereiche">
-          <button class="nav-button active" data-view-target="dashboard" type="button" aria-current="page">
-            <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10.5V20h13v-9.5"/><path d="M9 20v-6h6v6"/></svg>
-            <span>Übersicht</span>
-          </button>
-          <button class="nav-button" data-view-target="plants" type="button">
-            <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 4C12 4 6 8.5 6 15a5 5 0 0 0 5 5c6.5 0 9-8 9-16Z"/><path d="M6 20c2-6 6-9 12-12"/></svg>
-            <span>Pflanzen</span>
-          </button>
-          <button class="nav-button" data-view-target="hoses" type="button">
-            <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 19a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M18 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M8.5 15.5h3.2a3 3 0 0 0 3-3v-1"/><path d="M15.5 8.5h-3.2a3 3 0 0 0-3 3v1"/></svg>
-            <span>Schläuche</span>
-          </button>
-          <button class="nav-button" data-view-target="settings" type="button">
-            <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"/><path d="M4 17h16"/><path d="M8 5v4"/><path d="M16 15v4"/></svg>
-            <span>Einstellungen</span>
-          </button>
-          <button class="nav-button" data-view-target="info" type="button">
-            <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 11v5"/><path d="M12 8h.01"/></svg>
-            <span>Info</span>
-          </button>
-        </nav>
+        <a class="brand" href="#dashboard" aria-label="Gießplaner Übersicht">
+          <span class="brand-mark" data-icon="droplets" aria-hidden="true"></span>
+          <span><strong>Gießplaner</strong><small id="headerSubtitle">Meine Terrasse</small></span>
+        </a>
+        <div class="header-status" id="headerStatus" aria-live="polite">Wird geladen</div>
       </div>
     </header>
 
-    <main>
-      <div class="view dashboard-view active" data-view="dashboard">
-        <section class="panel decision-panel wide-panel">
+    <main id="mainContent">
+      <section class="view dashboard-view active" data-view="dashboard" aria-labelledby="dashboardTitle">
+        <div class="view-heading">
+          <div><p class="eyebrow">Heute</p><h1 id="dashboardTitle">Übersicht</h1></div>
+          <button class="icon-button" id="refreshDashboardButton" type="button" aria-label="Dashboard aktualisieren" title="Aktualisieren">
+            <span data-icon="refresh-cw" aria-hidden="true"></span>
+          </button>
+        </div>
+
+        <article class="next-card status-neutral" id="nextActionCard" aria-live="polite">
+          <div class="next-card-icon" id="nextActionIcon" data-icon="clock" aria-hidden="true"></div>
+          <div class="next-card-copy">
+            <p class="eyebrow" id="nextActionKicker">Nächster Schritt</p>
+            <h2 id="nextActionTitle">Plan wird geladen</h2>
+            <p id="nextActionMeta">Wetter und Anlage werden geprüft.</p>
+          </div>
+          <div class="next-card-actions" id="nextActionButtons"></div>
+        </article>
+
+        <section class="content-section" aria-labelledby="timelineTitle">
           <div class="section-heading">
-            <div>
-              <p class="eyebrow">Heute</p>
-              <h2>Bewässerung im Blick</h2>
-              <p class="section-copy dashboard-intro">Was jetzt wichtig ist – auf einen Blick.</p>
-            </div>
-            <span class="status-pill" id="runStatus">Heute</span>
+            <div><h2 id="timelineTitle">Tagesplan</h2><p id="timelineSummary">Heutige Läufe</p></div>
           </div>
-          <div class="dashboard-command dashboard-overview">
-            <div class="today-panel">
-              <div class="result" id="result">
-                <strong>Wird geladen</strong>
-                <span>Wetter und Tageszyklen werden zusammengefasst.</span>
+          <ol class="day-timeline" id="dayTimeline" aria-label="Bewässerungszeitpunkte"></ol>
+        </section>
+
+        <section class="status-grid" id="dashboardStatusGrid" aria-label="Anlagenstatus"></section>
+      </section>
+
+      <section class="view forecast-view" data-view="forecast" aria-labelledby="forecastTitle">
+        <section class="view-hero">
+          <span class="view-hero-icon" data-icon="chart-line" aria-hidden="true"></span>
+          <div><p class="eyebrow">16 Tage</p><h1 id="forecastTitle">Prognose</h1><p>Tankstände und geplante Ereignisse</p></div>
+        </section>
+        <section class="content-section forecast-panel">
+          <div class="forecast-legend" id="forecastLegend" aria-label="Diagrammlegende"></div>
+          <div class="chart-scroll">
+            <svg id="forecastChart" class="forecast-chart" viewBox="0 0 900 360" role="img" aria-labelledby="forecastChartTitle forecastChartDescription">
+              <title id="forecastChartTitle">Tankprognose</title>
+              <desc id="forecastChartDescription">Verlauf von Haupt- und Vorratstank über 16 Tage.</desc>
+            </svg>
+          </div>
+          <p class="chart-note" id="forecastChartNote"></p>
+        </section>
+        <section class="content-section" aria-labelledby="forecastDaysTitle">
+          <div class="section-heading"><h2 id="forecastDaysTitle">Tagesliste</h2></div>
+          <div class="forecast-days" id="forecastDayList"></div>
+        </section>
+      </section>
+
+      <section class="view plants-view" data-view="plants" aria-labelledby="plantsTitle">
+        <section class="view-hero">
+          <span class="view-hero-icon" data-icon="sprout" aria-hidden="true"></span>
+          <div><p class="eyebrow">Versorgung</p><h1 id="plantsTitle">Pflanzen</h1><p>Bedarf, Tagesmenge und Anschluss</p></div>
+          <button class="primary compact-command" id="addPlantButton" type="button"><span data-icon="plus" aria-hidden="true"></span>Pflanze</button>
+        </section>
+        <div class="segmented-control" id="plantFilters" role="group" aria-label="Pflanzen filtern">
+          <button class="active" type="button" data-filter="all" aria-pressed="true">Alle</button>
+          <button type="button" data-filter="action" aria-pressed="false">Handlungsbedarf</button>
+          <button type="button" data-filter="under" aria-pressed="false">Unterversorgt</button>
+          <button type="button" data-filter="over" aria-pressed="false">Überversorgt</button>
+        </div>
+        <div class="plant-list" id="plantList"></div>
+      </section>
+
+      <section class="view hoses-view" data-view="hoses" aria-labelledby="hosesTitle">
+        <section class="view-hero">
+          <span class="view-hero-icon" data-icon="git-branch" aria-hidden="true"></span>
+          <div><p class="eyebrow">Verteilung</p><h1 id="hosesTitle">Schläuche</h1><p>Ausgänge und Pflanzen direkt zuordnen</p></div>
+          <button class="primary compact-command" id="addHoseButton" type="button"><span data-icon="plus" aria-hidden="true"></span>Schlauch</button>
+        </section>
+        <div class="inline-alerts" id="hoseWarnings" aria-live="polite"></div>
+        <form id="hoseForm" class="content-section">
+          <div class="hose-table" id="hoseTable" role="table" aria-label="Schlauchverwaltung"></div>
+          <div class="form-actions"><button class="primary" type="submit">Zuordnungen speichern</button></div>
+        </form>
+      </section>
+
+      <section class="view history-view" data-view="history" aria-labelledby="historyTitle">
+        <section class="view-hero">
+          <span class="view-hero-icon" data-icon="history" aria-hidden="true"></span>
+          <div><p class="eyebrow">Protokoll</p><h1 id="historyTitle">Verlauf</h1><p>Bewässerung, Nachfüllung und Tankstände</p></div>
+          <button class="icon-button" id="refreshHistoryButton" type="button" aria-label="Verlauf aktualisieren" title="Aktualisieren">
+            <span data-icon="refresh-cw" aria-hidden="true"></span>
+          </button>
+        </section>
+        <div class="history-list content-section" id="historyList"></div>
+      </section>
+
+      <section class="view settings-view" data-view="settings" aria-labelledby="settingsTitle">
+        <section class="view-hero">
+          <span class="view-hero-icon" data-icon="settings" aria-hidden="true"></span>
+          <div><p class="eyebrow">Konfiguration</p><h1 id="settingsTitle">Einstellungen</h1><p>Bewässerung, Tanks und Standort</p></div>
+        </section>
+
+        <form id="settingsForm" class="settings-stack">
+          <fieldset class="settings-section">
+            <legend><span data-icon="droplets" aria-hidden="true"></span>Bewässerung</legend>
+            <div class="field-grid">
+              <label>Gesamtmenge <span class="input-unit"><input name="watering_amount_percent" type="number" min="40" max="500" step="5"><span>%</span></span></label>
+            </div>
+          </fieldset>
+
+          <fieldset class="settings-section">
+            <legend><span data-icon="calendar-clock" aria-hidden="true"></span>Zeitplan</legend>
+            <div class="field-grid">
+              <label>Beginn <input name="watering_window_start" type="time" required></label>
+              <label>Ende <input name="watering_window_end" type="time" required></label>
+              <label>Maximale Läufe <input name="max_cycles_per_day" type="number" min="1" max="96" required></label>
+              <label>Mindestabstand <span class="input-unit"><input name="watering_min_interval_minutes" type="number" min="1" required><span>min</span></span></label>
+            </div>
+            <div class="schedule-preview" id="schedulePreview" aria-live="polite"></div>
+          </fieldset>
+
+          <fieldset class="settings-section">
+            <legend><span data-icon="container" aria-hidden="true"></span>Tanks und Nachfüllung</legend>
+            <div class="field-grid">
+              <label>Haupttank <span class="input-unit"><input name="tank_capacity_liters" type="number" min="0.1" step="0.1" required><span>l</span></span></label>
+              <label>Vorratstank <span class="input-unit"><input name="refill_tank_capacity_liters" type="number" min="0.1" step="0.1" required><span>l</span></span></label>
+              <label class="toggle-label"><span>Automatisch nachfüllen</span><input name="refill_automation_enabled" type="checkbox"><span class="switch" aria-hidden="true"></span></label>
+              <label>Nachfüllabstand <span class="input-unit"><input name="refill_min_interval_minutes" type="number" min="0"><span>min</span></span></label>
+              <label>Strategie
+                <select name="refill_strategy"><option value="fraction">Anteil der Lücke</option><option value="target">Feste Zielmenge</option></select>
+              </label>
+              <label data-refill-value="fraction">Anteil <span class="input-unit"><input name="refill_fraction_percent" type="number" min="1" max="100"><span>%</span></span></label>
+              <label data-refill-value="target">Zielmenge <span class="input-unit"><input name="refill_target_liters" type="number" min="0" step="0.1"><span>l</span></span></label>
+            </div>
+            <div class="subsection-heading"><h2>Nachfüllfenster</h2><button class="secondary compact-command" id="addRefillWindowButton" type="button"><span data-icon="plus" aria-hidden="true"></span>Fenster</button></div>
+            <div class="window-editor" id="refillWindowEditor"></div>
+          </fieldset>
+
+          <details class="settings-section">
+            <summary><span data-icon="map-pin" aria-hidden="true"></span><span>Standort und Beschattung</span><span data-icon="chevron-down" aria-hidden="true"></span></summary>
+            <p class="field-note">Die Position beeinflusst Sonne und Schatten.</p>
+            <div class="field-grid">
+              <label>Ausrichtung <span class="input-unit"><input name="orientation_deg" type="number" min="0" max="359"><span>°</span></span></label>
+              <label>Breite <span class="input-unit"><input name="width_m" type="number" min="0.1" step="0.1"><span>m</span></span></label>
+              <label>Tiefe <span class="input-unit"><input name="depth_m" type="number" min="0.1" step="0.1"><span>m</span></span></label>
+              <label>Breitengrad <input name="latitude" type="number" step="0.000001"></label>
+              <label>Längengrad <input name="longitude" type="number" step="0.000001"></label>
+              <input name="timezone_name" type="hidden">
+            </div>
+            <div class="setup-actions"><button class="secondary" id="locateButton" type="button"><span data-icon="locate" aria-hidden="true"></span>Standort übernehmen</button></div>
+            <div class="balcony-plan" id="balconyPlan" aria-label="Balkonplan zum Verschieben der Pflanzen"></div>
+            <div class="wall-editor" id="wallEditor"></div>
+          </details>
+
+          <details class="settings-section">
+            <summary><span data-icon="gauge" aria-hidden="true"></span><span>Pumpen und Kalibrierung</span><span data-icon="chevron-down" aria-hidden="true"></span></summary>
+            <div class="field-grid">
+              <label>Nachfüllpumpe <span class="input-unit"><input name="refill_pump_ml_per_min" type="number" min="0"><span>ml/min</span></span></label>
+              <label>Verbrauchsfaktor <input name="main_pump_calibration_factor" type="number" min="0.1" max="10" step="0.001"></label>
+            </div>
+            <div class="calibration-grid">
+              <article><h2>Haupttank</h2><label for="mainCalibrationLevel">Füllstand</label><span class="input-unit"><input id="mainCalibrationLevel" type="number" min="0" max="100" step="1"><span>%</span></span><button class="secondary" id="calibrateMainButton" type="button">Kalibrieren</button></article>
+              <article><h2>Vorratstank</h2><label for="refillCalibrationLevel">Füllstand</label><span class="input-unit"><input id="refillCalibrationLevel" type="number" min="0" max="100" step="1"><span>%</span></span><button class="secondary" id="calibrateRefillButton" type="button">Kalibrieren</button></article>
+            </div>
+            <div class="outlet-editor" id="outletEditor"></div>
+          </details>
+
+          <details class="settings-section">
+            <summary><span data-icon="bell" aria-hidden="true"></span><span>Benachrichtigungen</span><span data-icon="chevron-down" aria-hidden="true"></span></summary>
+            <div class="field-grid">
+              <label>Reichweitenwarnung <span class="input-unit"><input name="supply_warning_days" type="number" min="1"><span>Tage</span></span></label>
+              <label>Ruhezeit <span class="input-unit"><input name="notification_cooldown_minutes" type="number" min="0"><span>min</span></span></label>
+              <label>Wiederholung bei Fehler <span class="input-unit"><input name="notification_retry_minutes" type="number" min="1"><span>min</span></span></label>
+              <label class="toggle-label"><span>Entwarnung senden</span><input name="notification_resolved_enabled" type="checkbox"><span class="switch" aria-hidden="true"></span></label>
+              <label>Wetterwarnung ab <span class="input-unit"><input name="weather_stale_after_minutes" type="number" min="1"><span>min</span></span></label>
+            </div>
+          </details>
+
+          <details class="settings-section">
+            <summary><span data-icon="wrench" aria-hidden="true"></span><span>Erweiterte Technik</span><span data-icon="chevron-down" aria-hidden="true"></span></summary>
+            <div class="field-grid">
+              <label>Toleranz bei verpasstem Lauf <span class="input-unit"><input name="missed_watering_tolerance_minutes" type="number" min="1"><span>min</span></span></label>
+              <label>Diagnoseintervall <span class="input-unit"><input name="notification_worker_interval_seconds" type="number" min="10" max="3600"><span>s</span></span></label>
+              <label>Wettercache <span class="input-unit"><input name="weather_cache_minutes" type="number" min="1"><span>min</span></span></label>
+            </div>
+            <details class="nested-details"><summary>Wetterwerte simulieren</summary>
+              <div id="weatherSimulationForm" class="field-grid">
+                <label>Temperatur <input name="temperature_c" type="number" step="0.1" value="26"></label>
+                <label>Regen <input name="rain_mm" type="number" step="0.1" value="0"></label>
+                <label>Wind <input name="wind_kmh" type="number" step="1" value="8"></label>
+                <label>Sonne <input name="sunshine_hours" type="number" step="0.1" value="7"></label>
+                <button class="secondary" id="weatherSimulationButton" type="button">Simulation anzeigen</button>
               </div>
-              <div class="dashboard-context" id="dashboardContext"></div>
-              <div class="tank-quick-actions" id="tankQuickActions"></div>
-            </div>
-          </div>
-
-          <div class="dashboard-section-heading">
-            <div>
-              <p class="eyebrow">Status</p>
-              <h3>Vorrat und Bedingungen</h3>
-            </div>
-            <span>Automatisch aktualisiert</span>
-          </div>
-          <div class="dashboard-cards" id="dashboardCards">
-            <article class="metric-card primary-metric">
-              <span class="metric-icon">...</span>
-              <div>
-                <p class="metric-label">Laden</p>
-                <strong>--</strong>
-              </div>
-            </article>
-          </div>
-        </section>
-
-        <section class="panel watering-log-panel wide-panel">
-          <div class="section-heading">
-            <div>
-              <p class="eyebrow">Protokoll</p>
-              <h2>Bewässerungsvorgänge</h2>
-            </div>
-            <button class="secondary small-button" id="refreshLogButton" type="button">Aktualisieren</button>
-          </div>
-          <div class="watering-log" id="wateringLog"></div>
-        </section>
-      </div>
-
-      <div class="view settings-view" data-view="settings">
-        <section class="panel config-intro-panel view-hero wide-panel">
-          <span class="view-hero-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M4 17h16"/><path d="M8 5v4"/><path d="M16 15v4"/></svg>
-          </span>
-          <div class="view-hero-copy">
-            <p class="eyebrow">Konfiguration</p>
-            <h2>Einstellungen</h2>
-            <p class="section-copy">Gießmenge, Anlage und Technik.</p>
-          </div>
-          <nav class="section-nav" aria-label="Einstellungsbereiche">
-            <a class="active" href="#settings-water">Gießmenge</a>
-            <a href="#settings-balcony">Balkon</a>
-            <a href="#settings-tanks">Tanks</a>
-            <a href="#settings-calibration">Pumpen</a>
-            <a href="#settings-shade">Beschattung</a>
-            <a href="#settings-hardware">Ausgänge</a>
-          </nav>
-        </section>
-
-        <div class="config-summary wide-panel" id="configSummary"></div>
-
-        <details class="panel calculation-panel wide-panel">
-          <summary class="calculation-summary">
-            <div>
-              <p class="eyebrow">Berechnung</p>
-              <h2>Tagesplan nachvollziehen</h2>
-            </div>
-            <span class="summary-action">Öffnen</span>
-          </summary>
-          <div class="calculation-content">
-            <p class="section-copy">Wetter, Pflanzen und Schläuche ergeben den Tagesbedarf und die Pumpzyklen.</p>
-            <div class="calculation-flow" id="calculationFlow">
-              <article class="calc-step">
-                <span class="step-number">1</span>
-                <div>
-                  <strong>Wetter wird geladen</strong>
-                  <p>Temperatur, Regen, Wind und Sonne werden vorbereitet.</p>
-                </div>
-              </article>
-            </div>
-            <details class="weather-test">
-              <summary>Wetterwerte manuell testen</summary>
-              <p class="field-help">Überschreibt das automatische Wetter nur für den Test.</p>
-              <form id="evaluateForm" class="weather-form">
-                <label class="check-label weather-auto">
-                  <input type="checkbox" name="auto_weather" checked>
-                  Wetter automatisch
-                </label>
-                <div class="weather-inputs">
-                  <label>
-                    Temperatur
-                    <input type="number" step="0.1" name="temperature_c" value="26">
-                  </label>
-                  <label>
-                    Regen in mm
-                    <input type="number" step="0.1" name="rain_mm" value="0.5">
-                  </label>
-                  <label>
-                    Wind in km/h
-                    <input type="number" step="1" name="wind_kmh" value="8">
-                  </label>
-                  <label>
-                    Sonne in h
-                    <input type="number" step="0.1" name="sunshine_hours" value="7">
-                  </label>
-                </div>
-                <input type="hidden" name="slot" value="morning">
-                <button type="submit" class="primary">Test aktualisieren</button>
-              </form>
             </details>
-          </div>
-        </details>
+          </details>
 
-        <section class="panel config-setup-panel wide-panel">
-          <div class="section-heading">
-            <div>
-              <p class="eyebrow">Einstellungen</p>
-              <h2>Anlage einrichten</h2>
-            </div>
-          </div>
-          <form id="balconyForm" class="settings-form">
-            <fieldset class="settings-group watering-settings" id="settings-water">
-              <div class="settings-group-heading">
-                <div>
-                  <p class="eyebrow">Wasserbedarf</p>
-                  <h3>Gießmenge</h3>
-                </div>
-                <strong class="setting-value" id="wateringAmountLabel">100 %</strong>
-              </div>
-              <p class="field-help">Regelt den Wasserbedarf aller Pflanzen gemeinsam.</p>
-              <label class="factor-field">
-                Gesamtmenge
-                <span class="input-with-unit">
-                  <input type="number" name="watering_amount_percent" min="40" max="500" step="5" value="100">
-                  <span>%</span>
-                </span>
-              </label>
-              <div class="watering-preview" id="wateringAmountPreview"></div>
-            </fieldset>
+          <div class="sticky-save"><span id="settingsSaveStatus" aria-live="polite">Keine Änderungen</span><button class="primary" type="submit">Einstellungen speichern</button></div>
+        </form>
+      </section>
 
-            <fieldset class="settings-group" id="settings-balcony">
-              <div class="settings-group-heading">
-                <div>
-                  <p class="eyebrow">Balkon</p>
-                  <h3>Fläche und Ausrichtung</h3>
-                </div>
-              </div>
-              <p class="field-help">Ausrichtung und Maße beeinflussen Sonne und Schatten.</p>
-              <div class="settings-grid">
-                <label>
-                  Ausrichtung
-                  <span class="input-with-unit">
-                    <input type="number" name="orientation_deg" min="0" max="359" step="1">
-                    <span>°</span>
-                  </span>
-                  <span class="field-help">0 Nord · 90 Ost · 180 Süd · 270 West</span>
-                </label>
-                <label>
-                  Breite
-                  <span class="input-with-unit">
-                    <input type="number" name="width_m" min="0.4" step="0.1">
-                    <span>m</span>
-                  </span>
-                </label>
-                <label>
-                  Tiefe
-                  <span class="input-with-unit">
-                    <input type="number" name="depth_m" min="0.4" step="0.1">
-                    <span>m</span>
-                  </span>
-                </label>
-              </div>
-              <details class="advanced-settings">
-                <summary>Wetterstandort</summary>
-                <p class="field-help">Wird für Wetter und Sonnenstand benötigt.</p>
-                <button id="locateButton" class="secondary small-button" type="button">Aktuellen Standort verwenden</button>
-                <div class="settings-grid">
-                  <label>
-                    Breitengrad
-                    <input type="number" name="latitude" step="0.000001">
-                  </label>
-                  <label>
-                    Längengrad
-                    <input type="number" name="longitude" step="0.000001">
-                  </label>
-                </div>
-              </details>
-              <input type="hidden" name="timezone_name" value="Europe/Berlin">
-            </fieldset>
-
-            <fieldset class="settings-group" id="settings-tanks">
-              <div class="settings-group-heading">
-                <div>
-                  <p class="eyebrow">Wasservorrat</p>
-                  <h3>Tanks</h3>
-                </div>
-              </div>
-              <p class="field-help">Der Vorratstank füllt den Haupttank automatisch nach.</p>
-              <div class="settings-grid tank-settings-grid">
-                <label>
-                  Größe Haupttank
-                  <span class="input-with-unit">
-                    <input type="number" name="tank_capacity_liters" min="0" step="0.1">
-                    <span>l</span>
-                  </span>
-                </label>
-                <label class="toggle-field">
-                  <span>Automatisch nachfüllen</span>
-                  <input type="checkbox" name="refill_automation_enabled" checked>
-                  <span class="toggle-switch" aria-hidden="true"></span>
-                </label>
-              </div>
-              <p class="field-help">Nachtfenster: 01–02 Uhr und 06–07 Uhr, mit mindestens drei Stunden Abstand.</p>
-              <details class="advanced-settings pump-details">
-                <summary>Technische Pumpenwerte</summary>
-                <p class="field-help">Diese Werte werden bei einer Kalibrierung automatisch angepasst. Eine manuelle Änderung ist nur bei einer neuen Hardware-Konfiguration nötig.</p>
-                <div class="settings-grid">
-                  <label>
-                    Nachfüllpumpe in ml pro Minute
-                    <input type="number" name="refill_pump_ml_per_min" min="0" step="1">
-                  </label>
-                  <label>
-                    Verbrauchsfaktor der Wasserpumpe
-                    <input type="number" name="main_pump_calibration_factor" min="0.1" max="10" step="0.001">
-                  </label>
-                </div>
-              </details>
-            </fieldset>
-
-            <fieldset class="settings-group calibration-settings" id="settings-calibration">
-              <div class="settings-group-heading">
-                <div>
-                  <p class="eyebrow">Messung</p>
-                  <h3>Pumpen kalibrieren</h3>
-                </div>
-              </div>
-              <p class="field-help">Tank voll markieren, einige Läufe abwarten und den abgelesenen Füllstand eintragen.</p>
-              <div class="settings-grid calibration-grid">
-                <article class="calibration-card">
-                  <div>
-                    <span class="metric-label">Haupttank</span>
-                    <strong>Wasserpumpe</strong>
-                  </div>
-                  <label for="mainCalibrationLevel">Abgelesener Füllstand</label>
-                  <div class="input-with-unit">
-                    <input id="mainCalibrationLevel" type="number" min="0" max="100" step="1" inputmode="decimal" placeholder="z. B. 65">
-                    <span>%</span>
-                  </div>
-                  <button id="calibrateMainButton" class="secondary small-button" type="button">Wasserpumpe kalibrieren</button>
-                </article>
-                <article class="calibration-card">
-                  <div>
-                    <span class="metric-label">Vorratstank</span>
-                    <strong>Nachfüllpumpe</strong>
-                  </div>
-                  <label for="refillCalibrationLevel">Abgelesener Füllstand</label>
-                  <div class="input-with-unit">
-                    <input id="refillCalibrationLevel" type="number" min="0" max="100" step="1" inputmode="decimal" placeholder="z. B. 80">
-                    <span>%</span>
-                  </div>
-                  <button id="calibrateRefillButton" class="secondary small-button" type="button">Nachfüllpumpe kalibrieren</button>
-                </article>
-              </div>
-              <p class="field-help calibration-result" id="calibrationResult" aria-live="polite"></p>
-            </fieldset>
-
-            <details class="settings-group secondary-settings" id="settings-shade">
-              <summary class="settings-group-heading">
-                <div>
-                  <p class="eyebrow">Beschattung</p>
-                  <h3>Wände und Brüstung</h3>
-                </div>
-              </summary>
-              <p class="field-help">Höhe je Seite in Metern; offene Seiten bleiben bei 0.</p>
-              <div class="wall-editor" id="wallEditor"></div>
-            </details>
-
-            <details class="settings-group secondary-settings" id="settings-hardware">
-              <summary class="settings-group-heading">
-                <div>
-                  <p class="eyebrow">Pumpe</p>
-                  <h3>Ausgänge und Wassermenge</h3>
-                </div>
-              </summary>
-              <p class="field-help">Nur ändern, wenn die tatsächliche Ausgabemenge abweicht.</p>
-              <div class="outlet-editor" id="outletEditor"></div>
-            </details>
-
-            <div class="settings-save-bar">
-              <p class="settings-save-status" id="settingsSaveStatus" aria-live="polite">Alle Änderungen gespeichert</p>
-              <button id="settingsSaveButton" type="submit" class="primary" disabled>Speichern</button>
-            </div>
-          </form>
+      <section class="view system-view" data-view="system" aria-labelledby="systemTitle">
+        <section class="view-hero">
+          <span class="view-hero-icon" data-icon="activity" aria-hidden="true"></span>
+          <div><p class="eyebrow">Technik</p><h1 id="systemTitle">System</h1><p>Dienste und Automatik auf einen Blick</p></div>
+          <button class="icon-button" id="refreshSystemButton" type="button" aria-label="Systemstatus aktualisieren" title="Aktualisieren"><span data-icon="refresh-cw" aria-hidden="true"></span></button>
         </section>
-      </div>
+        <div class="diagnostic-list" id="diagnosticList"></div>
+        <section class="content-section">
+          <div class="section-heading"><h2>Benachrichtigungsprotokoll</h2></div>
+          <div class="notification-log" id="notificationLog"></div>
+        </section>
+      </section>
 
-      <div class="view hoses-view" data-view="hoses">
-        <section class="panel view-hero hoses-hero wide-panel">
-          <span class="view-hero-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24"><path d="M6 19a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M18 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M8.5 15.5h3.2a3 3 0 0 0 3-3v-1"/><path d="M15.5 8.5h-3.2a3 3 0 0 0-3 3v1"/></svg>
-          </span>
-          <div class="view-hero-copy">
-            <p class="eyebrow">Wasserverteilung</p>
-            <h2>Schläuche</h2>
-            <p class="section-copy">Schläuche erfassen, Ausgang wählen und Pflanzen zuordnen.</p>
-          </div>
-          <div class="hero-tip"><strong>Workflow</strong><span>Anlegen · Ausgang wählen · speichern</span></div>
+      <section class="view info-view" data-view="info" aria-labelledby="infoTitle">
+        <section class="view-hero">
+          <span class="view-hero-icon" data-icon="info" aria-hidden="true"></span>
+          <div><p class="eyebrow">Anwendung</p><h1 id="infoTitle">Info</h1><p>Version und lokale Aktualisierung</p></div>
         </section>
-        <section class="panel wide-panel hose-setup-panel">
-          <div class="section-heading">
-            <div>
-              <p class="eyebrow">Hardware</p>
-              <h2>Schläuche verwalten</h2>
-            </div>
-          </div>
-          <p class="section-copy">Nutze dieselbe Nummer wie am echten Schlauch.</p>
-          <form id="hoseForm">
-            <div class="hose-editor" id="hoseEditor"></div>
-            <div class="hose-actions">
-              <button class="secondary small-button" id="addHoseButton" type="button">Schlauch hinzufügen</button>
-              <button class="primary small-button" type="submit">Schläuche speichern</button>
-            </div>
-          </form>
-        </section>
-        <section class="panel config-routing-panel">
-          <div class="section-heading">
-            <div>
-              <p class="eyebrow">Anschlüsse</p>
-              <h2>Verteilung prüfen</h2>
-            </div>
-          </div>
-          <p class="section-copy">Zeigt, ob die Verteilung zur geplanten Gießmenge passt.</p>
-          <div class="routing" id="routing"></div>
-        </section>
-      </div>
-
-      <div class="view plants-view" data-view="plants">
-        <section class="panel view-hero plants-hero wide-panel">
-          <span class="view-hero-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24"><path d="M20 4C12 4 6 8.5 6 15a5 5 0 0 0 5 5c6.5 0 9-8 9-16Z"/><path d="M6 20c2-6 6-9 12-12"/></svg>
-          </span>
-          <div class="view-hero-copy">
-            <p class="eyebrow">Dein Bestand</p>
-            <h2>Pflanzen</h2>
-            <p class="section-copy">Bestand, Standorte und Wasserversorgung kompakt verwalten.</p>
-          </div>
-          <div class="hero-tip"><strong>Entscheidend</strong><span>Pflanzenart · Topf · Schläuche</span></div>
-        </section>
-        <section class="panel plan-panel config-plan-panel">
-          <div class="section-heading">
-            <div>
-              <p class="eyebrow">Standorte</p>
-              <h2>Plan</h2>
-            </div>
-          </div>
-          <p class="section-copy">Ziehe Pflanzen an ihre ungefähre Position.</p>
-          <div class="balcony-plan" id="balconyPlan"></div>
-        </section>
-
-        <section class="panel wide-panel config-plants-panel">
-          <div class="section-heading">
-            <div>
-              <p class="eyebrow">Bestand</p>
-              <h2>Pflanzenbestand</h2>
-            </div>
-          </div>
-          <p class="section-copy">Bedarf und angeschlossene Schläuche je Pflanze.</p>
-          <div class="plants" id="plantList"></div>
-        </section>
-
-        <details class="panel config-add-panel compact-create-panel">
-          <summary>
-            <div>
-              <p class="eyebrow">Neu</p>
-              <h2>Neue Pflanze</h2>
-            </div>
-            <span class="summary-action">Öffnen</span>
-          </summary>
-          <div class="compact-create-content">
-            <p class="section-copy">Lege einen Topf an und wähle seine angeschlossenen Schläuche.</p>
-            <form id="plantForm" class="grid plant-create-form" data-water-connection-form>
-              <label>
-                Pflanzenart
-                <select name="catalog_id" id="catalogSelect"></select>
-              </label>
-              <label>
-                Eigener Name (optional)
-                <input name="custom_name" placeholder="z.B. Tomate links">
-              </label>
-              <label>
-                Wuchsgröße
-                <select name="size">
-                  <option value="small">Klein</option>
-                  <option value="medium" selected>Mittel</option>
-                  <option value="large">Groß</option>
-                  <option value="tree">Baum/Strauch</option>
-                </select>
-              </label>
-              <label>
-                Topfvolumen in Litern
-                <input type="number" name="pot_liters" min="1" step="1" value="12">
-              </label>
-              <label>
-                Topf-Eigenschaften
-                <select name="pot_type">
-                  <option value="reservoir">Mit Wasserdepot</option>
-                  <option value="overflow" selected>Mit Überlaufschutz</option>
-                  <option value="reservoir_overflow">Depot und Überlaufschutz</option>
-                  <option value="closed">Geschlossener Topf</option>
-                </select>
-              </label>
-              <label>
-                Angeschlossene Schläuche
-                <select name="hose_numbers" id="plantHoseSelect" multiple size="5"></select>
-                <span class="field-help">Mehrere Einträge lassen sich gemeinsam auswählen.</span>
-              </label>
-              <div class="derived-water-preview" data-derived-water-preview></div>
-              <button type="submit" class="primary">Pflanze hinzufügen</button>
-            </form>
-          </div>
-        </details>
-      </div>
-
-      <div class="view info-view" data-view="info">
-        <section class="panel view-hero info-hero wide-panel">
-          <span class="view-hero-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 11v5"/><path d="M12 8h.01"/></svg>
-          </span>
-          <div class="view-hero-copy">
-            <p class="eyebrow">System</p>
-            <h2>Info und Updates</h2>
-            <p class="section-copy">Version, Updates und Automations-Shortcuts.</p>
-          </div>
-          <strong class="hero-version" id="appVersion">v1.4.2</strong>
-        </section>
-
-        <section class="panel update-settings">
-          <div class="section-heading">
-            <div>
-              <p class="eyebrow">Software</p>
-              <h2>Updater</h2>
-            </div>
-            <div class="update-badges">
-              <span class="status-pill" id="updateTokenStatus">Token wird geprüft</span>
-            </div>
-          </div>
-          <p class="section-copy" id="updateNotice">Der interne Update-Dienst wird geprüft.</p>
-          <div class="settings-grid" id="updateSetup">
-            <label>
-              GitHub-Repository
-              <input id="updateRepository" type="text" value="philipweiss95/watering_planner" autocomplete="off">
-            </label>
-            <label>
-              GitHub-Token
-              <input id="updateGithubToken" type="password" autocomplete="new-password" placeholder="github_pat_…">
-              <span class="field-help">Der Token wird dauerhaft im geschützten Datenvolume gespeichert und niemals an den Browser zurückgegeben.</span>
-            </label>
-          </div>
-          <div class="update-actions">
-            <button id="updateSetupButton" class="secondary" type="button">Updater einrichten</button>
-            <button id="updateCheckButton" class="secondary" type="button">Nach Updates suchen</button>
-            <button id="updateInstallButton" class="primary" type="button" disabled>Update installieren</button>
-          </div>
-          <p class="field-help" id="updateResult" aria-live="polite"></p>
-          <section class="update-changelog" id="updateChangelog" hidden>
-            <h3 id="updateChangelogTitle">Changelog</h3>
-            <pre class="update-release-notes" id="updateReleaseNotes"></pre>
-          </section>
-        </section>
-
-        <section class="panel shortcuts-panel">
-          <div class="section-heading">
-            <div>
-              <p class="eyebrow">Info</p>
-              <h2>Shortcuts</h2>
-            </div>
-          </div>
-          <div class="shortcut-grid">
-            <div class="shortcut-box" id="shortcutBox"></div>
-            <div class="shortcut-box">
-              <p class="meta">Tastatur</p>
-              <code>1 Übersicht · 2 Pflanzen · 3 Schläuche · 4 Einstellungen · 5 Info · R Aktualisieren</code>
-            </div>
+        <section class="content-section">
+          <div class="section-heading"><h2>Updater</h2><span class="status-badge" id="versionBadge">Version</span></div>
+          <div class="updater-status" id="updaterStatus"></div>
+          <div class="button-row">
+            <button class="secondary" id="updateSetupButton" type="button">Updater verbinden</button>
+            <button class="secondary" id="updateCheckButton" type="button">Nach Update suchen</button>
+            <button class="primary" id="updateInstallButton" type="button" disabled>Update installieren</button>
           </div>
         </section>
-      </div>
+      </section>
     </main>
 
-    <script src="/app.js?v=1.4.2"></script>
+    <nav class="app-nav" aria-label="Hauptnavigation">
+      <button class="nav-button active" data-view-target="dashboard" type="button" aria-current="page"><span data-icon="layout-dashboard" aria-hidden="true"></span><span>Heute</span></button>
+      <button class="nav-button" data-view-target="forecast" type="button"><span data-icon="chart-line" aria-hidden="true"></span><span>Prognose</span></button>
+      <button class="nav-button" data-view-target="plants" type="button"><span data-icon="sprout" aria-hidden="true"></span><span>Pflanzen</span></button>
+      <button class="nav-button" data-view-target="hoses" type="button"><span data-icon="git-branch" aria-hidden="true"></span><span>Schläuche</span></button>
+      <button class="nav-button" data-view-target="history" type="button"><span data-icon="history" aria-hidden="true"></span><span>Verlauf</span></button>
+      <button class="nav-button" data-view-target="settings" type="button"><span data-icon="settings" aria-hidden="true"></span><span>Setup</span></button>
+      <button class="nav-button" data-view-target="system" type="button"><span data-icon="activity" aria-hidden="true"></span><span>System</span></button>
+      <button class="nav-button" data-view-target="info" type="button"><span data-icon="info" aria-hidden="true"></span><span>Info</span></button>
+    </nav>
+
+    <dialog class="app-dialog" id="appDialog" aria-labelledby="dialogTitle">
+      <div class="dialog-shell">
+        <div class="dialog-header"><h2 id="dialogTitle">Bestätigen</h2><button class="icon-button" value="cancel" aria-label="Dialog schließen"><span data-icon="x" aria-hidden="true"></span></button></div>
+        <div class="dialog-content" id="dialogContent"></div>
+        <div class="dialog-actions" id="dialogActions"></div>
+      </div>
+    </dialog>
+    <div class="toast-region" id="toastRegion" role="status" aria-live="polite" aria-atomic="false"></div>
+
+    <script type="module" src="/app.js?v=1.5.0"></script>
   </body>
 </html>
