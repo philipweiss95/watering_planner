@@ -43,6 +43,7 @@ import {
   smtpConfigurationPayload,
   validateRefillWindows,
 } from "../public/js/settings.js";
+import { parseReleaseNotes } from "../public/js/updater.js";
 import { confirmDialog, escapeHTML } from "../public/js/ui.js";
 
 class FakeNode {
@@ -119,6 +120,21 @@ test("navigation accepts known views and rejects arbitrary hashes", () => {
   assert.equal(normalizeView("#forecast"), "forecast");
   assert.equal(normalizeView("system"), "system");
   assert.equal(normalizeView("<script>"), "dashboard");
+});
+
+test("updater turns the release changelog into readable entries", () => {
+  assert.deepEqual(
+    parseReleaseNotes(`## Änderungen in 1.5.1
+
+- Manuelles Gießen bleibt sichtbar und zeigt
+  seinen aktuellen Sperrgrund.
+- Mobile Formulare bleiben innerhalb der Bildschirmbreite.
+`),
+    [
+      "Manuelles Gießen bleibt sichtbar und zeigt seinen aktuellen Sperrgrund.",
+      "Mobile Formulare bleiben innerhalb der Bildschirmbreite.",
+    ],
+  );
 });
 
 test("dashboard prioritizes concrete action states", () => {
