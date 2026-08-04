@@ -8,7 +8,7 @@ muss weder neu erstellt noch erneut veröffentlicht werden.
 Der Git-Tag `v1.4.3` zeigt über das Tag-Objekt `f08acb6c` auf Commit
 `e02ceb198`. Der veröffentlichte Verlauf von `main` enthält inzwischen
 Version 1.5.0 und den Bridge-Commit als echten Git-Vorfahren. Auch 1.5.1,
-1.5.2, 1.5.3, 1.5.4 und 1.5.5 bauen direkt auf diesem Verlauf auf. Das
+1.5.2, 1.5.3, 1.5.4, 1.5.5 und 1.5.6 bauen direkt auf diesem Verlauf auf. Das
 Release-Verifikationsskript prüft Tag-Objekt, Ziel-Commit und Abstammung vor
 jedem 1.5.x-Paket erneut; `v1.4.3` wird dabei nicht verändert.
 
@@ -17,12 +17,12 @@ deren Inhalt mit diesem Commit übereinstimmt. Seine verifizierte SHA-256-Summe
 lautet
 `78a38685d19c0952541bf96f9286b8eb11c5df0c2edc8de3a9bd285ed9f5ce7a`.
 
-## Patch-Update von 1.5.4 auf 1.5.5
+## Patch-Update von 1.5.5 auf 1.5.6
 
 1. `data/watering.sqlite3` und `.env.synology` sichern.
-2. Unter **Info > Updates** Version 1.5.5 suchen und den angezeigten Changelog
+2. Unter **Info > Updates** Version 1.5.6 suchen und den angezeigten Changelog
    prüfen.
-3. Version 1.5.5 installieren und den erfolgreichen Containerwechsel
+3. Version 1.5.6 installieren und den erfolgreichen Containerwechsel
    abwarten.
 4. Die PWA vollständig schließen und neu öffnen.
 5. Auf der Startseite beide Tankfüllstände sowie den eindeutigen
@@ -196,7 +196,8 @@ Home-Assistant-Buchungen auf eine stabile `run_id` umgestellt werden.
 5. In Home Assistant YAML prüfen und die betroffenen Skripte/Automationen neu
    laden; bei Änderungen an `configuration.yaml` vollständig neu starten.
 6. Im Planner unter **System** zuerst den sicheren Home-Assistant-Test
-   ausführen. Dieser testet nur `/api/` und löst keinen Pumpen-Webhook aus.
+   ausführen. Dieser prüft die konfigurierte Webhook-Adresse per `GET` und
+   löst keinen Pumpen-Webhook aus.
 6. Einen echten Lauf erst danach beaufsichtigt testen und im Verlauf prüfen,
    dass genau ein Ereignis mit `run_id` entstanden ist.
 
@@ -307,8 +308,8 @@ Host-spezifischen Rechte, Pfade und Container-Namen der Synology nicht
 vollständig beweisen. Deshalb nach der Installation manuell prüfen:
 
 1. Genau ein Container `watering-planner-updater` läuft.
-2. Planner und Updater zeigen Version 1.5.5 beziehungsweise verwenden die
-   Images mit Tag 1.5.5.
+2. Planner und Updater zeigen Version 1.5.6 beziehungsweise verwenden die
+   Images mit Tag 1.5.6.
 3. Beide Healthchecks sind grün.
 4. `data/` und `.env.synology` sind weiterhin unverändert eingebunden.
 

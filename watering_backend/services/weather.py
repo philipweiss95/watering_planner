@@ -210,7 +210,10 @@ def evaluate_weather(
     result["weather"] = weather
     result["weather"]["planning_values_used"] = dict(planning_weather)
     result["depletion"] = depletion_forecaster(result, weather)
-    result["manual_refill"] = manual_refill_evaluator(result)
+    # The evaluator already adds the complete manual-refill status, including
+    # its `available` flag and blocker reason.  Replacing it here with the
+    # planning-only result drops those fields and makes /api/manual-refill
+    # fail with KeyError('available').
     return result
 
 

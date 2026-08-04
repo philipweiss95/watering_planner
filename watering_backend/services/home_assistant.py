@@ -134,9 +134,12 @@ class HomeAssistantService:
                 "reachable": False,
                 "error": "Home Assistant ist nicht konfiguriert.",
             }
-        parsed = urlparse(webhook)
-        probe_url = f"{parsed.scheme}://{parsed.netloc}/api/"
-        request = Request(probe_url, method="GET")
+        # Probe the configured webhook itself.  Querying Home Assistant's
+        # authenticated /api/ endpoint without a bearer token registers as an
+        # invalid login and can ban the planner's IP address.  A GET cannot
+        # trigger our POST-only webhook automation; Home Assistant normally
+        # answers 405, which still proves that it is reachable.
+        request = Request(webhook, method="GET")
         try:
             with self.opener(request, timeout=5) as response:
                 response.read(1)

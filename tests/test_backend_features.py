@@ -757,7 +757,7 @@ class BackendFeatureTests(unittest.TestCase):
         ):
             self.assertIsNone(server.start_notification_worker())
 
-    def test_home_assistant_probe_never_calls_webhook_path(self):
+    def test_home_assistant_probe_uses_webhook_without_posting(self):
         response = MagicMock()
         response.read.return_value = b"{"
         response.__enter__.return_value = response
@@ -768,7 +768,11 @@ class BackendFeatureTests(unittest.TestCase):
         ), patch("server.urlopen", return_value=response) as opener:
             result = server.test_home_assistant_connection()
         request = opener.call_args.args[0]
-        self.assertEqual(request.full_url, "http://ha.local:8123/api/")
+        self.assertEqual(
+            request.full_url,
+            "http://ha.local:8123/api/webhook/private-id",
+        )
+        self.assertEqual(request.method, "GET")
         self.assertNotIn("private-id", json.dumps(result))
         self.assertTrue(result["reachable"])
 

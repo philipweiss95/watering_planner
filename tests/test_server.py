@@ -667,6 +667,7 @@ class WateringPlannerTests(unittest.TestCase):
 
         self.assertEqual(result["weather"]["source"], "manual")
         self.assertEqual(result["inputs"]["weather_source"], "manual")
+        self.assertIn("available", result["manual_refill"])
 
     def test_open_meteo_daily_forecast_tolerates_null_values(self):
         forecast = server.daily_forecast_items(

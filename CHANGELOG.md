@@ -4,6 +4,14 @@ Alle stabilen Änderungen am Watering Planner werden in dieser Datei dokumentier
 
 ## [Unreleased]
 
+## [1.5.6] - 2026-08-04
+
+- Der manuelle Nachfüllstart behält seinen vollständigen Freigabestatus und
+  bricht nicht mehr mit dem Fehler `available` ab.
+- Der Home-Assistant-Verbindungstest prüft den eingerichteten Webhook sicher
+  per `GET`, statt eine unauthentifizierte Anfrage an `/api/` zu senden, die
+  als fehlgeschlagene Anmeldung gewertet werden kann.
+
 ## [1.5.5] - 2026-07-26
 
 - Die Startseite zeigt für Haupt- und Vorratstank jeweils einen eigenen
