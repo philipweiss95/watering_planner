@@ -4,6 +4,12 @@ Alle stabilen Änderungen am Watering Planner werden in dieser Datei dokumentier
 
 ## [Unreleased]
 
+## [1.5.7] - 2026-08-04
+
+- Die automatische Nachfüllung kann bei hohem Vorratstankstand warten, bis die
+  regulär berechnete Nachfüllmenge eine konfigurierbare Mindestmenge erreicht.
+  Manuelle Nachfüllungen bleiben von dieser Bedingung ausgenommen.
+
 ## [1.5.6] - 2026-08-04
 
 - Der manuelle Nachfüllstart behält seinen vollständigen Freigabestatus und

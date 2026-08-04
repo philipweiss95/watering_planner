@@ -126,6 +126,28 @@ class RefillRunService:
             if config["refill_strategy"] == "target"
             else math.ceil(main_room * float(config["refill_fraction"]))
         )
+        if run_type == "automatic":
+            refill_capacity = max(
+                int(balcony["refill_tank_capacity_ml"]),
+                1,
+            )
+            high_reserve_threshold_percent = int(
+                config["refill_high_reserve_threshold_percent"]
+            )
+            high_reserve_minimum_transfer_ml = int(
+                config["refill_high_reserve_minimum_transfer_ml"]
+            )
+            if (
+                high_reserve_threshold_percent > 0
+                and high_reserve_minimum_transfer_ml > 0
+                and refill_current * 100
+                > refill_capacity * high_reserve_threshold_percent
+                and target_ml < high_reserve_minimum_transfer_ml
+            ):
+                raise ValueError(
+                    "Automatische Nachfüllung wartet auf die konfigurierte "
+                    "Mindestmenge bei hohem Vorratstankstand"
+                )
         if main_room <= 0:
             raise ValueError("Haupttank ist bereits voll")
         if refill_current <= 0:

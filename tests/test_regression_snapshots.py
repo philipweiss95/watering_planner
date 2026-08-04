@@ -147,6 +147,8 @@ STATE_SNAPSHOT = {
         "refill_strategy": "fraction",
         "refill_fraction": 0.5,
         "refill_target_ml": 0,
+        "refill_high_reserve_threshold_percent": 0,
+        "refill_high_reserve_minimum_transfer_ml": 0,
         "weather_stale_after_minutes": 180,
         "weather_cache_minutes": 20,
         "missed_watering_tolerance_minutes": 30,

@@ -25,6 +25,8 @@ DEFAULT_PLANNER_CONFIG: dict[str, Any] = {
     "refill_strategy": "fraction",
     "refill_fraction": 0.5,
     "refill_target_ml": 0,
+    "refill_high_reserve_threshold_percent": 0,
+    "refill_high_reserve_minimum_transfer_ml": 0,
     "weather_stale_after_minutes": 180,
     "weather_cache_minutes": 20,
     "missed_watering_tolerance_minutes": 30,
@@ -125,6 +127,18 @@ def validate_planner_config(value: object) -> dict[str, Any]:
     result["refill_target_ml"] = _bounded_int(result["refill_target_ml"], "refill_target_ml", 0, 1_000_000)
     if result["refill_strategy"] == "target" and result["refill_target_ml"] <= 0:
         raise ValueError("Bei refill_strategy=target muss refill_target_ml groesser als 0 sein")
+    result["refill_high_reserve_threshold_percent"] = _bounded_int(
+        result["refill_high_reserve_threshold_percent"],
+        "refill_high_reserve_threshold_percent",
+        0,
+        100,
+    )
+    result["refill_high_reserve_minimum_transfer_ml"] = _bounded_int(
+        result["refill_high_reserve_minimum_transfer_ml"],
+        "refill_high_reserve_minimum_transfer_ml",
+        0,
+        1_000_000,
+    )
     result["weather_stale_after_minutes"] = _bounded_int(
         result["weather_stale_after_minutes"],
         "weather_stale_after_minutes",

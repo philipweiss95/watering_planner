@@ -14,7 +14,7 @@
     <link rel="manifest" href="/manifest.webmanifest">
     <link rel="apple-touch-icon" sizes="180x180" href="/icons/app-icon-180.png">
     <link rel="icon" type="image/png" sizes="192x192" href="/icons/app-icon-192.png">
-    <link rel="stylesheet" href="/styles.css?v=1.5.6">
+    <link rel="stylesheet" href="/styles.css?v=1.5.7">
   </head>
   <body>
     <a class="skip-link" href="#mainContent">Zum Inhalt</a>
@@ -161,6 +161,8 @@
               </label>
               <label data-refill-value="fraction">Anteil <span class="input-unit"><input name="refill_fraction_percent" type="number" min="1" max="100"><span>%</span></span></label>
               <label data-refill-value="target">Zielmenge <span class="input-unit"><input name="refill_target_liters" type="number" min="0" step="0.1"><span>l</span></span></label>
+              <label>Ab Vorratstankfüllstand <span class="input-unit"><input name="refill_high_reserve_threshold_percent" type="number" min="0" max="100" step="1"><span>%</span></span></label>
+              <label>Automatisch erst ab <span class="input-unit"><input name="refill_high_reserve_minimum_transfer_liters" type="number" min="0" step="0.1"><span>l</span></span></label>
             </div>
             <div class="subsection-heading"><h2>Nachfüllfenster</h2><button class="secondary compact-command" id="addRefillWindowButton" type="button"><span data-icon="plus" aria-hidden="true"></span>Fenster</button></div>
             <div class="window-editor" id="refillWindowEditor"></div>
@@ -320,6 +322,6 @@
     </dialog>
     <div class="toast-region" id="toastRegion" role="status" aria-live="polite" aria-atomic="false"></div>
 
-    <script type="module" src="/app.js?v=1.5.6"></script>
+    <script type="module" src="/app.js?v=1.5.7"></script>
   </body>
 </html>

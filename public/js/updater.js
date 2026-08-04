@@ -269,7 +269,7 @@ async function pollUpdateStatus() {
 }
 
 export function renderUpdater(state, updater) {
-  const installedVersion = state?.version || "1.5.6";
+  const installedVersion = state?.version || "1.5.7";
   document.getElementById("versionBadge").textContent = `v${installedVersion}`;
   const status = document.getElementById("updaterStatus");
   const operation = updater?.lastOperation;

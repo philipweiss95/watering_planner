@@ -96,7 +96,7 @@ async function performRefresh(options = {}) {
       ...options,
       onState: (state, refreshState) => {
         document.documentElement.dataset.appVersion =
-          `v${state.version || "1.5.6"}`;
+          `v${state.version || "1.5.7"}`;
         setStore({
           state,
           loading: false,

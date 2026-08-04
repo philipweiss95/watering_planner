@@ -348,6 +348,28 @@ class WateringPlannerTests(unittest.TestCase):
         self.assertEqual(status["planned_transfer_ml"], 1000)
         self.assertEqual(status["duration_seconds"], 60)
 
+    def test_high_reserve_level_delays_only_automatic_small_refills(self):
+        with server.connect() as conn:
+            conn.execute(
+                "UPDATE balcony_settings SET tank_current_ml = tank_capacity_ml - 2000 WHERE id = 1"
+            )
+        config = server.planner_config()
+        config["refill_high_reserve_threshold_percent"] = 80
+        config["refill_high_reserve_minimum_transfer_ml"] = 1500
+        server.save_planner_config(config)
+
+        with patch(
+            "server.local_now",
+            return_value=datetime(2026, 6, 3, 6, 15, tzinfo=ZoneInfo("Europe/Berlin")),
+        ):
+            status = server.refill_status(server.get_state()["balcony"])
+            manual = server.manual_refill_plan(server.evaluate(temperature_c=22, rain_mm=0))
+
+        self.assertFalse(status["run_now"])
+        self.assertTrue(status["minimum_transfer_blocked"])
+        self.assertEqual(status["planned_transfer_ml"], 1000)
+        self.assertEqual(manual["planned_transfer_ml"], 1000)
+
     def test_refill_status_does_not_catch_up_after_both_night_windows(self):
         daytime = datetime(2026, 6, 3, 7, 15, tzinfo=ZoneInfo("Europe/Berlin"))
         with server.connect() as conn:

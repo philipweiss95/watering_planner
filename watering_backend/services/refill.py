@@ -159,6 +159,19 @@ class RefillService:
                 requested_ml * float(config["refill_fraction"])
             )
         )
+        high_reserve_threshold_percent = int(
+            config["refill_high_reserve_threshold_percent"]
+        )
+        high_reserve_minimum_transfer_ml = int(
+            config["refill_high_reserve_minimum_transfer_ml"]
+        )
+        minimum_transfer_blocked = bool(
+            high_reserve_threshold_percent > 0
+            and high_reserve_minimum_transfer_ml > 0
+            and refill_current * 100
+            > refill_capacity * high_reserve_threshold_percent
+            and target_transfer_ml < high_reserve_minimum_transfer_ml
+        )
         transferable_ml = min(
             target_transfer_ml,
             main_missing_ml,
@@ -289,6 +302,7 @@ class RefillService:
             and schedule_due
             and need_exists
             and not cooldown_active
+            and not minimum_transfer_blocked
         )
         catch_up = False
 
@@ -355,6 +369,8 @@ class RefillService:
                     if end_utc <= start_utc
                     else "window_too_short"
                     if expected_transfer_ml <= 0
+                    else "minimum_transfer_not_reached"
+                    if minimum_transfer_blocked
                     else ""
                 )
                 executable = bool(
@@ -364,6 +380,7 @@ class RefillService:
                     and pump_ml_per_min > 0
                     and expected_transfer_ml > 0
                     and end_utc > start_utc
+                    and not minimum_transfer_blocked
                 )
                 self.events.upsert_refill_window_plan(
                     window_key=key,
@@ -521,6 +538,18 @@ class RefillService:
                 "",
             )
             summary = "Haupttank ist voll."
+        elif minimum_transfer_blocked:
+            status, severity, blocked, blocked_reason = (
+                "minimum_transfer_pending",
+                "info",
+                False,
+                "",
+            )
+            summary = (
+                "Automatische Nachfüllung wartet auf mindestens "
+                f"{format_liters_for_text(high_reserve_minimum_transfer_ml)} "
+                "Nachfüllbedarf bei hohem Vorratstankstand."
+            )
         elif cooldown_active:
             status, severity, blocked, blocked_reason = (
                 "cooldown",
@@ -613,6 +642,9 @@ class RefillService:
             "transfer_fraction": float(config["refill_fraction"]),
             "refill_strategy": config["refill_strategy"],
             "refill_target_ml": int(config["refill_target_ml"]),
+            "high_reserve_threshold_percent": high_reserve_threshold_percent,
+            "high_reserve_minimum_transfer_ml": high_reserve_minimum_transfer_ml,
+            "minimum_transfer_blocked": minimum_transfer_blocked,
             "planned_transfer_ml": (
                 authorized_transfer_ml
                 if schedule_due
